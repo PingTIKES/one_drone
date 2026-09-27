@@ -1,0 +1,14 @@
+flight_bridge:
+  ros__parameters:
+    px4_ns: px4_1
+    target_system: 2
+    takeoff_altitude: 2.0
+    max_horizontal_speed: 0.5
+    max_yaw_rate: 0.6
+    command_timeout: 0.3
+    pose_timeout: 0.5
+    vio_timeout: 0.5
+    depth_heartbeat_timeout: 0.3
+    depth_grace: 0.8
+    takeoff_tolerance: 0.2
+    takeoff_stable_time: 1.0

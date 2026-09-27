@@ -11,7 +11,8 @@
   <exec_depend>ov_msckf</exec_depend>
   <exec_depend>uav_localization</exec_depend>
   <exec_depend>uav_perception</exec_depend>
-  <exec_depend>uav_rviz_plugins</exec_depend>
+  <exec_depend>modify_map_to_odom</exec_depend>
+  <exec_depend>rviz_tf_shift</exec_depend>
   <exec_depend>one_drone_navigation</exec_depend>
   <exec_depend>one_drone_control</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>

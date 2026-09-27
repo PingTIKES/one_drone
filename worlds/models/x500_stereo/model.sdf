@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Single x500 with a rigid forward-facing D435i. The camera link keeps
+     its model prefix to avoid a base_link name collision when merged. -->
+<sdf version='1.9'>
+  <model name='x500_stereo'>
+    <include merge='true'>
+      <uri>model://x500</uri>
+    </include>
+    <include merge='true'>
+      <uri>model://d435i</uri>
+      <!-- 模型系原点比 base_link 低 0.24m：z=0.18 = base_link 系下 -0.06 -->
+      <pose>0.17 0 0.18 0 0 0</pose>
+    </include>
+    <joint name="D435iJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>d435i/base_link</child>
+      <pose relative_to="base_link">0.17 0 -0.06 0 0 0</pose>
+    </joint>
+  </model>
+</sdf>

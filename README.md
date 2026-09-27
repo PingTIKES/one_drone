@@ -4,6 +4,23 @@
 
 > 状态：已在一台 PX4 1.14.3 SITL 无人机上验证前视双目/IMU → OpenVINS → Nav2 → PX4 Offboard → 到点。**真机尚未试飞验证**，必须完成实测标定、逐项检查与无桨台架测试，再在有隔离和人工接管条件的场地试飞。
 
+## 当前启动入口
+
+包名已随目录重组更新。启动算法请使用 `flight_bringup`；旧命令中的 `one_drone_bringup` 已删除，继续使用会报 `Package 'one_drone_bringup' not found`。
+
+首次获取此版本或切换自旧目录结构后，先按下文安装依赖并在仓库根目录运行 `colcon build --symlink-install`。已有环境且已构建时，直接运行：
+
+```bash
+cd ~/one_drone
+source /opt/ros/humble/setup.bash
+source ~/catkin_ws_ov/install/setup.bash
+source ~/one_drone/install/setup.bash
+source /tmp/one_drone_gz_env.sh
+PYTHONNOUSERSITE=1 ros2 launch flight_bringup navigation.launch.py sim:=true rviz:=true
+```
+
+完整仿真和真机流程见下文。
+
 ## 数据和控制路径
 
 ```text
@@ -33,6 +50,27 @@ Qt 共享内存在同一台电脑上传递面板调整；面板同时发布 `/ma
 ## 目录、功能包与接口
 
 `src` 第一层按职责分为 `bringup/`、`perception/`、`localization/`、`navigation/`、`control/` 和 `rviz/`。每个目录内再放 ROS 2 功能包。Python 包的实现直接位于该包的 `src/`，没有同名的第二层源码目录；C++ 包也使用 `src/` 保存实现。`bringup/flight_bringup/launch/navigation.launch.py` 是完整导航入口，Nav2 参数、行为树和先验地图位于 `navigation/nav2_config`。
+
+```text
+src/
+├── bringup/flight_bringup/           # navigation.launch.py
+├── perception/
+│   ├── camera_stream/                # 真机相机与 IMU 话题转发
+│   ├── stereo_depth/                 # 双目深度
+│   └── obstacle_cloud/               # 深度转障碍点云
+├── localization/
+│   ├── vio_bridge/                   # OpenVINS 到里程计及 PX4
+│   └── map_alignment/                # 地图对齐就绪门控
+├── navigation/
+│   ├── nav2_config/                  # nav2_params.yaml、行为树、PGM
+│   ├── obstacle_filter/              # 飞行高度障碍切片
+│   └── goal_manager/                 # 目标门控
+├── control/flight_bridge/            # 平滑速度转 PX4 Offboard 指令
+└── rviz/
+    ├── modify_map_to_odom/           # map→odom TF
+    ├── rviz_tf_shift/                # 手动地图对齐面板
+    └── rviz_config/                  # RViz 显示配置
+```
 
 | 包 | 职责 | 主要输入 | 主要输出／可调配置 |
 | --- | --- | --- | --- |

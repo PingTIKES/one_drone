@@ -15,7 +15,8 @@
                                          └──> 高度切片 /navigation_obstacles
 
 先验 PGM /map ──> Nav2 静态层 + 障碍层 + 膨胀层
-RViz 2D Pose Estimate ──> map_odom ──> 静态 TF map→odom
+RViz MapOdomModify ──> Qt 共享内存 ──> modify_map_to_odom ──> TF map→odom
+                    └──> map_odom 就绪门控
 RViz 2D Goal Pose ──> goal_manager ──> Nav2 A* planner + DWB controller
                                                 └──> velocity_smoother
                                                        └──> /cmd_vel_smoothed
@@ -23,7 +24,9 @@ RViz 2D Goal Pose ──> goal_manager ──> Nav2 A* planner + DWB controller
                                                                     └──> PX4 NED 速度设定值
 ```
 
-`map→odom` 表示手动地图对齐，仅在操作者重定位时更新；`odom→base_link` **只由 OpenVINS 发布**。在 RViz 中查看 `/map`、`/odom`、TF 和 `/plan`。2D Pose Estimate 指定无人机此刻在地图中的真实位置和朝向，系统按当前 VIO 位姿求 `T_map_odom = T_map_base × inverse(T_odom_base)`。右侧 `MapOdom` 面板也能直接输入 `map→odom` 的 x/y/yaw。重定位会取消正在执行的目标，需要重新打点。VIO 原点重置后也必须重新定位。
+`modify_map_to_odom` 使用哨兵工程的 Qt 共享内存机制持续发布 `map→odom` TF；其数值在操作者重定位前保持不变。`odom→base_link` **只由 OpenVINS 发布**。RViz 的 `MapOdomModify` 面板使用哨兵工程的圆形方向控件：W/S 调整 map→odom 的 X，A/D 调整 Y，Q/E 调整 yaw；也可输入 X/Y/Rotation 后按「强制发布」，Rotation 单位为弧度。这里输入的是 **TF 的平移和旋转，不是飞机在地图中的位姿**。在 RViz 同时观察先验地图、`base_link` 和 `/odom`，调到机体落在地图上真实位置、朝向一致，再起飞。默认 X/Y/Rotation 均为 0，可在 `src/modify_map_to_odom/config/config.yaml` 修改初值。手动调整会取消执行中的目标，需要重新打点；VIO 原点重置后必须重新确认定位。
+
+Qt 共享内存在同一台电脑上传递面板调整；面板同时发布 `/map_odom/set`，TF 节点订阅该话题，所以 RViz 与真机伴随计算机分开运行时也能调整。跨机使用时须保证两个 ROS 2 节点处于同一 DDS 域，并用 `ros2 run tf2_ros tf2_echo map odom` 检查调整确实到达飞行端。
 
 规划是 2D 的，默认巡航高度 2 m。PGM 是 1.5–2.5 m 高度层的先验障碍图；运行时的 `/navigation_obstacles` 是深度点云经过机体同高切片、稀疏化后的点云。局部/全局代价地图使用先验静态层、点云障碍层和膨胀层。Nav2 DWB 允许 x/y 平移，目标朝向容差宽，不要求机头先沿路径方向。相机看不到的动态障碍物不会凭空出现；静态场地障碍由 PGM 表达。
 
@@ -33,10 +36,11 @@ RViz 2D Goal Pose ──> goal_manager ──> Nav2 A* planner + DWB controller
 | --- | --- | --- | --- |
 | `uav_localization` | 校验 VIO、跳变恢复、TF/里程计和 PX4 外部视觉 | `/uav1/odomimu`、双目时间戳 | `/odom`、`odom→base_link`、`/vio_health`、PX4 `vehicle_visual_odometry`；`src/uav_localization/config/params.yaml` |
 | `uav_perception` | 相机话题转接、软件双目、深度反投影和机架遮挡过滤 | 左右灰度图、IMU、深度图 | `/uav1/d435i/depth/image_raw`、`/uav1/obstacles`；`src/uav_perception/config/params.yaml` |
-| `one_drone_navigation` | 手动地图对齐、巡航高度障碍切片、目标门控 | `/initialpose`、`/goal_pose`、点云、VIO 状态 | `map→odom`、`/navigation_obstacles`、Nav2 目标；`src/one_drone_navigation/config/params.yaml` |
+| `one_drone_navigation` | 定位就绪门控、巡航高度障碍切片、目标门控 | `/map_odom/applied`、`/goal_pose`、点云、VIO 状态 | `/localization_ready`、`/navigation_obstacles`、Nav2 目标；`src/one_drone_navigation/config/params.yaml` |
 | `one_drone_bringup` | PGM 地图、Nav2 planner/controller/costmaps/smoother、RViz | 地图和以上话题 | `/map`、`/plan`、`/cmd_vel_smoothed`；`src/one_drone_bringup/config/nav2.yaml` |
 | `one_drone_control` | 起飞/悬停/降落服务、机体系 FLU 到 PX4 本地 NED 速度转换 | `/cmd_vel_smoothed`、PX4 本地位置和状态 | PX4 Offboard 设定值、`/flight_state`；`src/one_drone_control/config/params.yaml` |
-| `uav_rviz_plugins` | RViz 手动 map→odom 面板 | 操作者输入 | `/map_odom/set` |
+| `modify_map_to_odom` | 哨兵式 map→odom TF 发布节点 | 共享内存 `one_drone_direction`、`/map_odom/set`、初值配置 | `/tf` 中的 `map→odom`、`/map_odom/applied`；`src/modify_map_to_odom/config/config.yaml` |
+| `rviz_tf_shift` | 哨兵式 RViz 方向控件与数值输入 | 操作者输入 | 共享内存、`/map_odom/set` |
 
 配置文件由 launch 加载。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。修改配置后重新 `colcon build --symlink-install` 并重启 launch。核心运行参数无需编辑 Python 源码。
 
@@ -70,7 +74,7 @@ RViz 2D Goal Pose ──> goal_manager ──> Nav2 A* planner + DWB controller
    PYTHONNOUSERSITE=1 ros2 launch one_drone_bringup navigation.launch.py sim:=true rviz:=true
    ```
 
-4. 等待 `/vio_health` 为 `VALID`、`/odom` 和深度点云连续发布。在 RViz **Fixed Frame = map**，点 `2D Pose Estimate`，在先验地图上选当前起飞点（默认 Gazebo 出生位置约 x=1.3、y=9.4），拖箭头指定真实机头方向。这一步是人工全局重定位，不等同于 VIO 初始化。检查 `map→odom→base_link` TF 连通且机体在地图上的位置正确。
+4. 等待 `/vio_health` 为 `VALID`、`/odom` 和深度点云连续发布。在 RViz **Fixed Frame = map**，用 `MapOdomModify` 面板调 X/Y/Rotation，直到 `base_link` 在先验地图上的位置、朝向与 Gazebo 中的飞机一致（默认 Gazebo 出生位置约 x=1.3、y=9.4）。最后按一次「强制发布」确认定位，检查 `/localization_ready` 为 `true` 及 `map→odom→base_link` TF 连通。这一步是人工全局重定位，不等同于 VIO 初始化。
 
 5. 发出起飞命令。无人机应先进入 `PRESTREAM`、`ARMING`、`TAKEOFF`，到约 2 m 后成为 `CRUISE`。在 RViz 点击 **2D Goal Pose** 打一个空旷目标点，导航目标经 Nav2 规划、控制和速度平滑后交给 PX4。观察 `/navigation_state`、`/flight_state`、`/plan`、`/cmd_vel_smoothed`。
 
@@ -106,7 +110,7 @@ RViz 2D Goal Pose ──> goal_manager ──> Nav2 A* planner + DWB controller
 
 4. **相机驱动和话题检查。** 启动 `realsense2_camera` 的红外双目、深度、陀螺仪、加速度计和组合 IMU 流。用 `ros2 topic list`、`ros2 topic hz`、`ros2 topic echo --once .../camera_info` 核实左右目同步且与标定一致、IMU 频率和深度量纲。将下面的五个启动参数改为当前驱动的真实话题；相机断开或帧率过低时先修 USB 带宽与驱动。
 
-5. **无桨台架验证，再低风险试飞。** 用对应场地的 PGM/YAML 先验地图（`map_file`）；内置地图仅适合仓库所附的 RMUC 仿真场。启动后检查 TF、/odom、/vio_health、/navigation_obstacles 和代价地图。在 RViz 用 2D Pose Estimate 对齐到场地地图，移动飞机/转机头，确认 RViz 方向与真机一致。确认 PX4 接受外部视觉且本地位置稳定，再上桨按场地规程做小范围悬停与近距离目标测试。全过程保留遥控人工接管。
+5. **无桨台架验证，再低风险试飞。** 用对应场地的 PGM/YAML 先验地图（`map_file`）；内置地图仅适合仓库所附的 RMUC 仿真场。启动后检查 TF、/odom、/vio_health、/navigation_obstacles 和代价地图。在 RViz 用 `MapOdomModify` 面板调整 map→odom，使机体落在地图的实测位置并朝向正确，再按「强制发布」确认 `/localization_ready`；移动飞机/转机头，确认 RViz 方向与真机一致。确认 PX4 接受外部视觉且本地位置稳定，再上桨按场地规程做小范围悬停与近距离目标测试。全过程保留遥控人工接管。
 
    ```bash
    cd ~/one_drone

@@ -136,9 +136,13 @@ def setup(context):
                           '--qx', str(float(camera_q[1])), '--qy', str(float(camera_q[2])),
                           '--qz', str(float(camera_q[3])), '--qw', str(float(camera_q[0])),
                           '--frame-id', 'base_link', '--child-frame-id', 'camera_optical']))
-    nodes += [Node(package='one_drone_navigation', executable='map_odom',
+    nodes += [Node(package='modify_map_to_odom', executable='modify_map_to_odom_node',
+                   name='modify_map_to_odom', output='screen',
+                   parameters=[str(Path(get_package_share_directory('modify_map_to_odom')) /
+                                   'config/config.yaml'), common]),
+              Node(package='one_drone_navigation', executable='map_odom',
                    name='map_odom', output='screen',
-                   parameters=[common, node_config('one_drone_navigation', 'map_odom')]),
+                   parameters=[common]),
               Node(package='one_drone_navigation', executable='height_slice',
                    name='height_slice', output='screen',
                    parameters=[common, node_config('one_drone_navigation', 'height_slice')]),

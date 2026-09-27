@@ -102,7 +102,7 @@ src/
 
    默认路径为 `~/PX4-Autopilot-1.14.3` 和 `~/catkin_ws_ov`，可用 `PX4_DIR`、`OV_WS` 环境变量修改。`setup_env.sh` 用 `bash` 执行，**不要 `source`**。如果此前已有同名 PX4 目录但不是脚本要求的固定提交，先另选空目录作为 `PX4_DIR`。若安装时出现 `packagekitd` 占用 `/var/lib/apt/lists/lock`，等待系统软件更新完成后重新运行 `bash setup_env.sh sim`；不要删除锁文件。仓库只存储压缩后的 3 m 墙体模型；`scripts/prepare_field_model.sh` 会校验并解压它，仿真世界含六个有色识别柱。地图 PGM 与此世界配套。
 
-2. 终端 A：启动一台 Gazebo/PX4 1.14.3 和 Micro XRCE Agent。默认打开 Gazebo 图形窗口；无图形环境使用 `HEADLESS=1`。
+2. 终端 A：启动一台 Gazebo/PX4 1.14.3 和 Micro XRCE Agent。默认打开 Gazebo 图形窗口；无图形环境使用 `HEADLESS=1`。等终端输出 `[sim] Ready.` 后再执行第 3 步；Gazebo 窗口出现不代表相机和 IMU 已经开始发布。
 
    ```bash
    cd ~/one_drone
@@ -120,7 +120,7 @@ src/
    PYTHONNOUSERSITE=1 ros2 launch flight_bringup navigation.launch.py sim:=true rviz:=true
    ```
 
-4. 等待 `/vio_health` 为 `VALID`、`/odom` 和深度点云连续发布。在 RViz **Fixed Frame = map**，用 `MapOdomModify` 面板调 X/Y/Rotation，直到 `base_link` 在先验地图上的位置、朝向与 Gazebo 中的飞机一致（默认 Gazebo 出生位置约 x=1.3、y=9.4）。最后按一次「强制发布」确认定位，检查 `/localization_ready` 为 `true` 及 `map→odom→base_link` TF 连通。这一步是人工全局重定位，不等同于 VIO 初始化。
+4. 等待 `/vio_health` 为 `VALID`、`/odom` 和深度点云连续发布。启动时 OpenVINS 可能短暂打印 `[ZUPT]: There are no IMU data to check for zero velocity with!!`；只有随后变为 `VALID` 且里程计持续发布，才能继续。若提示持续出现或 VIO 始终无效，按下文“运行检查”的 IMU/双目频率与时间戳步骤排查，**不要起飞**。在 RViz **Fixed Frame = map**，用 `MapOdomModify` 面板调 X/Y/Rotation，直到 `base_link` 在先验地图上的位置、朝向与 Gazebo 中的飞机一致（默认 Gazebo 出生位置约 x=1.3、y=9.4）。最后按一次「强制发布」确认定位，检查 `/localization_ready` 为 `true` 及 `map→odom→base_link` TF 连通。这一步是人工全局重定位，不等同于 VIO 初始化。
 
 5. 发出起飞命令。无人机应先进入 `PRESTREAM`、`ARMING`、`TAKEOFF`，到约 2 m 后成为 `CRUISE`。在 RViz 点击 **2D Goal Pose** 打一个空旷目标点，导航目标经 Nav2 规划、控制和速度平滑后交给 PX4。观察 `/navigation_state`、`/flight_state`、`/plan`、`/cmd_vel_smoothed`。
 
@@ -194,7 +194,7 @@ ros2 run tf2_ros tf2_echo map base_link
 
 `HOLD` 时不会自动恢复导航；检查 VIO/深度/PX4 本地位置与地图对齐。如果 OpenVINS 的轨迹跳到几百米，停止试飞并录制左右目、IMU、`/uav1/odomimu`、`/vio_health` 和 PX4 本地位置/状态。地图中的黑色区域来自先验 PGM 或已观测障碍层，排查时分别看 RViz 的 `PriorMap`、`LocalCostmap` 和 `DepthObstacles`。OpenVINS 的坐标原点任意，不能把仿真的 PX4 坐标直接当成地图坐标。
 
-启动阶段的 `[init]: not enough feats to compute disp: 0,46 < 15` 表示初始化窗口前半段缺少可持续跟踪的特征；短暂出现后若 `/vio_health` 变为 `VALID`、`/uav1/odomimu` 连续发布，则初始化已完成。`No IMU measurements to propagate with` 表示相机时间区间内没有足够的 IMU 样本；若持续出现，先核对 `/uav1/cam0/image_raw`、`/uav1/cam1/image_raw`、`/uav1/imu0` 的频率和消息时间戳，再检查是否残留多个 Gazebo 进程。仿真退出后应由启动脚本回收 Gazebo、PX4 和 Agent；不要同时开启多套同名仿真。
+启动阶段的 `[init]: not enough feats to compute disp: 0,46 < 15` 表示初始化窗口前半段缺少可持续跟踪的特征；短暂出现后若 `/vio_health` 变为 `VALID`、`/uav1/odomimu` 连续发布，则初始化已完成。`[ZUPT]: There are no IMU data to check for zero velocity with!!` 是一次零速更新所需的**相机时间区间内**少于两条 IMU 样本，OpenVINS 会跳过这次零速更新；它本身不能证明整个 IMU 话题没有发布。`No IMU measurements to propagate with` 也是特定时间区间的样本不足。若持续出现或 `/vio_health` 不能变成 `VALID`，在算法运行时检查 `ros2 topic hz /uav1/imu0`（预期约 200 Hz）、`ros2 topic hz /uav1/cam0/image_raw` 和 `/uav1/cam1/image_raw`（各约 30 Hz），再用 `ros2 topic echo --once /uav1/imu0 --field header.stamp` 和相机的 `header.stamp` 核对是否处于同一仿真时间；同时确认终端 B 已 source 终端 A 生成的 `/tmp/one_drone_gz_env.sh`，且没有多套 Gazebo/PX4 残留。频率正常仍持续报错时，录制 `/clock`、双目和 IMU 供逐帧核对时间戳；不要靠关闭 ZUPT 掩盖时间同步问题。仿真退出后应由启动脚本回收 Gazebo、PX4 和 Agent；不要同时开启多套同名仿真。
 
 ## 版本与边界
 

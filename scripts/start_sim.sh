@@ -29,7 +29,7 @@ else
     WORLD_SDF="$PX4_DIR/Tools/simulation/gz/worlds/$WORLD.sdf"
     [[ -f "$WORLD_SRC" ]] || { echo "World missing: $WORLD_SRC" >&2; exit 1; }
     if [[ "$WORLD" == rmuc_2025_3m_vio_columns ]]; then
-        "$ROOT_DIR/scripts/prepare_field_model.sh"
+        bash "$ROOT_DIR/scripts/prepare_field_model.sh"
     fi
     cp -f "$WORLD_SRC" "$WORLD_SDF"
 fi

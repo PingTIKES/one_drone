@@ -1,0 +1,11 @@
+map_odom:
+  ros__parameters:
+    pose_max_age: 0.35
+height_slice:
+  ros__parameters:
+    half_height: 0.30
+    max_age: 0.45
+    voxel: 0.08
+goal_manager:
+  ros__parameters:
+    depth_grace: 0.8

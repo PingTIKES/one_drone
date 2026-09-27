@@ -97,6 +97,6 @@ done
 
 MicroXRCEAgent udp4 -p 8888 > /tmp/microxrce_agent.log 2>&1 & PIDS+=("$!")
 echo "[sim] Ready. Source /tmp/one_drone_gz_env.sh in the algorithm terminal."
-echo "[sim] Launch: PYTHONNOUSERSITE=1 ros2 launch one_drone_bringup navigation.launch.py sim:=true rviz:=true"
+echo "[sim] Launch: PYTHONNOUSERSITE=1 ros2 launch flight_bringup navigation.launch.py sim:=true rviz:=true"
 echo "[sim] Ctrl+C stops Gazebo, PX4 and the agent."
 wait

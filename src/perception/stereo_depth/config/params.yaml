@@ -1,0 +1,7 @@
+software_stereo:
+  ros__parameters:
+    config: null
+    t_body_imu: null
+    sync_slop: null
+    rate: 5.0
+    texture_std_min: 1.0

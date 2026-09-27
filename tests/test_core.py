@@ -2,7 +2,7 @@
 import math
 import unittest
 
-from one_drone_control.velocity_math import body_flu_to_ned, limit_horizontal
+from flight_bridge.velocity_math import body_flu_to_ned, limit_horizontal
 
 
 class CoreGeometryTest(unittest.TestCase):

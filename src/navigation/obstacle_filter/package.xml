@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>obstacle_filter</name>
+  <version>0.1.0</version>
+  <description>obstacle filter for single drone navigation</description>
+  <maintainer email="team@example.com">PingTIKES</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>python3-numpy</depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>sensor_msgs_py</depend>
+  <depend>std_msgs</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

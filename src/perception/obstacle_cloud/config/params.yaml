@@ -1,0 +1,17 @@
+stereo_depth_node:
+  ros__parameters:
+    uav_id: null
+    fx: null
+    fy: null
+    cx: null
+    cy: null
+    cam_xyz: null
+    cam_rotation: null
+    depth_scale: null
+    require_camera_info: null
+    preserve_stamp: null
+    frame_decimation: null
+    self_mask_model: null
+    step: 2
+    min_range: 0.3
+    max_range: 8.0

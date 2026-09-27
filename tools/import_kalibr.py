@@ -10,8 +10,8 @@ import numpy as np
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0,str(ROOT/'src/uav_localization'))
-from uav_localization.calibration import read_yaml, transform, validate_config, write_opencv_yaml
+sys.path.insert(0,str(ROOT/'src/localization/vio_bridge/src'))
+from calibration import read_yaml, transform, validate_config, write_opencv_yaml
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
     imu = imu.get('imu0',imu)
     body = read_yaml(a.body)
     t_body_imu = transform(body['T_body_imu'])
-    template = ROOT/'src/uav_localization/config/openvins_sim'
+    template = ROOT/'src/localization/vio_bridge/config/openvins_sim'
     cfg = read_yaml(template/'estimator_config.yaml')
     cfg.update(num_opencv_threads=2,record_timing_information=True,
                record_timing_filepath=f'/tmp/uav{a.uav_id}_ov_timing.txt')

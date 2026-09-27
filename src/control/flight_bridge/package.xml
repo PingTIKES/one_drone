@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>flight_bridge</name>
+  <version>0.1.0</version>
+  <description>flight bridge for single drone navigation</description>
+  <maintainer email="team@example.com">PingTIKES</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>geometry_msgs</depend>
+  <depend>px4_msgs</depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

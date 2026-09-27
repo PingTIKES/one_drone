@@ -194,6 +194,8 @@ ros2 run tf2_ros tf2_echo map base_link
 
 `HOLD` 时不会自动恢复导航；检查 VIO/深度/PX4 本地位置与地图对齐。如果 OpenVINS 的轨迹跳到几百米，停止试飞并录制左右目、IMU、`/uav1/odomimu`、`/vio_health` 和 PX4 本地位置/状态。地图中的黑色区域来自先验 PGM 或已观测障碍层，排查时分别看 RViz 的 `PriorMap`、`LocalCostmap` 和 `DepthObstacles`。OpenVINS 的坐标原点任意，不能把仿真的 PX4 坐标直接当成地图坐标。
 
+启动阶段的 `[init]: not enough feats to compute disp: 0,46 < 15` 表示初始化窗口前半段缺少可持续跟踪的特征；短暂出现后若 `/vio_health` 变为 `VALID`、`/uav1/odomimu` 连续发布，则初始化已完成。`No IMU measurements to propagate with` 表示相机时间区间内没有足够的 IMU 样本；若持续出现，先核对 `/uav1/cam0/image_raw`、`/uav1/cam1/image_raw`、`/uav1/imu0` 的频率和消息时间戳，再检查是否残留多个 Gazebo 进程。仿真退出后应由启动脚本回收 Gazebo、PX4 和 Agent；不要同时开启多套同名仿真。
+
 ## 版本与边界
 
 `setup_env.sh` 固定 MicoAir PX4 1.14.3 提交、`px4_msgs` release/1.14 提交和 OpenVINS 提交，以减少消息协议及行为差异。Gazebo 物理与图像模型不是实物传感器的完整复制；仿真跑通只证明该链路在当前模型上工作。当前固定高度 2D 规划不会规划升降绕障，不会处理地图外未知场地、移动障碍预判或 VIO 完全失效后的自主返航。多机、视觉目标识别和任务决策留待后续独立开发。

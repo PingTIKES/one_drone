@@ -64,7 +64,24 @@ PIDS=()
 finish() {
     trap - EXIT INT TERM
     trap '' INT TERM
+    # Gazebo may ignore SIGTERM during shutdown. Give PX4 and Gazebo time to
+    # exit cleanly, then reap remaining children so repeated runs do not leave
+    # simulation servers consuming CPU in old GZ_PARTITION namespaces.
     kill "${PIDS[@]}" 2>/dev/null || true
+    for _ in $(seq 1 15); do
+        local still_running=0
+        for pid in "${PIDS[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                still_running=1
+            fi
+        done
+        [[ "$still_running" == 0 ]] && break
+        sleep 0.2
+    done
+    for pid in "${PIDS[@]}"; do
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+    wait "${PIDS[@]}" 2>/dev/null || true
 }
 trap finish EXIT INT TERM
 

@@ -1,0 +1,33 @@
+# null: keep launch-time values derived from the vehicle and camera/IMU calibration.
+openvins:
+  ros__parameters:
+    config_path: null
+    publish_global_to_imu_tf: false
+    publish_calibration_tf: false
+vio_bridge:
+  ros__parameters:
+    uav_id: null
+    px4_ns: null
+    t_body_imu: null
+    max_age: 0.25
+    max_position_variance: 1.0
+    max_orientation_variance: 0.25
+    max_velocity_variance: 1.0
+    max_speed: 4.0
+    max_jump: 0.4
+    # Quarantine a discontinuity; resume real measurements only after a stable
+    # sequence inside the prediction envelope. Persistent failure stays latched.
+    recovery_stable_time: 0.5
+    recovery_timeout: 2.0
+    recovery_max_correction: 0.75
+    recovery_max_angle_deg: 20.0
+    recovery_sample_gap: 0.1
+    recovery_residual: 0.03
+    # A data gap is checked separately from recovery time: the first new VIO
+    # sample may arrive >2 s after the last accepted one.
+    recovery_max_source_gap: 3.0
+    recovery_gap_max_correction: 2.5
+    recovery_gap_max_angle_deg: 90.0
+    expected_world: global
+    expected_imu: imu
+    match_tol: 0.1

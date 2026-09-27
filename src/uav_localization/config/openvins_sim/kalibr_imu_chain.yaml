@@ -1,0 +1,47 @@
+%YAML:1.0
+
+# ============================================================================
+# IMU 配置（仿真）：x500 base_link 内置 IMU，250Hz
+# 噪声参数由 worlds 中 x500_base 模型 SDF 的离散噪声换算（density = stddev/sqrt(250)）
+# 并放大 ~2 倍留出滤波余量：
+#   gyro:  SDF stddev 1.8665e-4 -> 密度 1.18e-5 -> 取 2.0e-5
+#   accel: SDF stddev 1.86e-3   -> 密度 1.18e-4 -> 取 2.4e-4
+#   bias walk 直接取 SDF dynamic_bias_stddev
+# ============================================================================
+
+imu0:
+  T_i_b:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  accelerometer_noise_density: 2.4e-4     # [ m / s^2 / sqrt(Hz) ]   ( accel "white noise" )
+  accelerometer_random_walk: 6.0e-3       # [ m / s^3 / sqrt(Hz) ].  ( accel bias diffusion )
+  gyroscope_noise_density: 2.0e-5         # [ rad / s / sqrt(Hz) ]   ( gyro "white noise" )
+  gyroscope_random_walk: 3.9e-5           # [ rad / s^2 / sqrt(Hz) ] ( gyro bias diffusion )
+  rostopic: /uav1/imu0
+  time_offset: 0.0
+  update_rate: 250.0
+  # three different modes supported:
+  # "calibrated" (same as "kalibr"), "kalibr", "rpng"
+  model: "calibrated"
+  Tw:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  R_IMUtoGYRO:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  Ta:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  R_IMUtoACC:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  Tg:
+    - [ 0.0, 0.0, 0.0 ]
+    - [ 0.0, 0.0, 0.0 ]
+    - [ 0.0, 0.0, 0.0 ]

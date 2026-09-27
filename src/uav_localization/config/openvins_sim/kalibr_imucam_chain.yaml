@@ -1,0 +1,42 @@
+%YAML:1.0
+
+# ============================================================================
+# 相机配置（仿真）：x500_stereo 前置 RealSense D435i 双目红外，
+# 与 worlds/models/d435i 严格对应
+#
+# 几何关系：
+#   IMU 系 = x500 base_link（x 前 / y 左 / z 上）
+#   相机光学系 = z 前 / x 右 / y 下；SDF 传感器安装姿态为零
+#   p_I = R_CtoI * p_C + p_CinI
+#   R_CtoI = [[0,0,1],[-1,0,0],[0,-1,0]]
+#   挂点 base_link 系 (0.17, 0, -0.06)；cam0 右 y=-0.025，cam1 左 y=+0.025
+#
+# 内参：640x480，hfov=1.5184rad(87°) -> fx=fy=320/tan(43.5°)=337.22
+# ============================================================================
+
+cam0:
+  T_imu_cam: #rotation from camera to IMU R_CtoI, position of camera in IMU p_CinI
+    - [0.0, 0.0, 1.0, 0.17]
+    - [-1.0, 0.0, 0.0, -0.025]
+    - [0.0, -1.0, 0.0, -0.06]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: [1]
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radtan
+  intrinsics: [337.22, 337.22, 320.0, 240.0] #fu, fv, cu, cv
+  resolution: [640, 480]
+  rostopic: /uav1/cam0/image_raw
+cam1:
+  T_imu_cam: #rotation from camera to IMU R_CtoI, position of camera in IMU p_CinI
+    - [0.0, 0.0, 1.0, 0.17]
+    - [-1.0, 0.0, 0.0, 0.025]
+    - [0.0, -1.0, 0.0, -0.06]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: [0]
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radtan
+  intrinsics: [337.22, 337.22, 320.0, 240.0] #fu, fv, cu, cv
+  resolution: [640, 480]
+  rostopic: /uav1/cam1/image_raw

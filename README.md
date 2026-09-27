@@ -94,12 +94,13 @@ src/
 1. 准备机器。安装 Ubuntu 22.04/ROS 2 Humble，确保 Gazebo Garden、图形驱动与磁盘空间充足。运行环境安装脚本，它会检出并校验固定版本的 MicoAir PX4 1.14.3、OpenVINS 与对应 `px4_msgs`，给 SITL 加入仿真时钟适配，构建算法工作区：
 
    ```bash
+   # 仅首次安装时执行；如果 ~/one_drone 已存在，跳过 git clone。
    git clone https://github.com/PingTIKES/one_drone.git ~/one_drone
    cd ~/one_drone
    bash setup_env.sh sim
    ```
 
-   默认路径为 `~/PX4-Autopilot-1.14.3` 和 `~/catkin_ws_ov`，可用 `PX4_DIR`、`OV_WS` 环境变量修改。`setup_env.sh` 用 `bash` 执行，**不要 `source`**。如果此前已有同名 PX4 目录但不是脚本要求的固定提交，先另选空目录作为 `PX4_DIR`。仓库只存储压缩后的 3 m 墙体模型；`scripts/prepare_field_model.sh` 会校验并解压它，仿真世界含六个有色识别柱。地图 PGM 与此世界配套。
+   默认路径为 `~/PX4-Autopilot-1.14.3` 和 `~/catkin_ws_ov`，可用 `PX4_DIR`、`OV_WS` 环境变量修改。`setup_env.sh` 用 `bash` 执行，**不要 `source`**。如果此前已有同名 PX4 目录但不是脚本要求的固定提交，先另选空目录作为 `PX4_DIR`。若安装时出现 `packagekitd` 占用 `/var/lib/apt/lists/lock`，等待系统软件更新完成后重新运行 `bash setup_env.sh sim`；不要删除锁文件。仓库只存储压缩后的 3 m 墙体模型；`scripts/prepare_field_model.sh` 会校验并解压它，仿真世界含六个有色识别柱。地图 PGM 与此世界配套。
 
 2. 终端 A：启动一台 Gazebo/PX4 1.14.3 和 Micro XRCE Agent。默认打开 Gazebo 图形窗口；无图形环境使用 `HEADLESS=1`。
 

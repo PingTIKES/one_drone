@@ -1,0 +1,7 @@
+<library path="uav_rviz_plugins">
+  <class name="uav_rviz_plugins/MapOdomPanel"
+         type="uav_rviz_plugins::MapOdomPanel"
+         base_class_type="rviz_common::Panel">
+    <description>Manual map to odom alignment</description>
+  </class>
+</library>

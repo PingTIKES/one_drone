@@ -1,9 +1,8 @@
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
-  - Class: uav_rviz_plugins/MapOdomPanel
-    Name: MapOdom
-    Namespace: /
+  - Class: tf_shift_panel/Rviz2Panel
+    Name: MapOdomModify
 Visualization Manager:
   Class: ""
   Global Options:
@@ -85,8 +84,6 @@ Visualization Manager:
   Tools:
     - Class: rviz_default_plugins/Interact
     - Class: rviz_default_plugins/MoveCamera
-    - Class: rviz_default_plugins/SetInitialPose
-      Topic: /initialpose
     - Class: rviz_default_plugins/SetGoal
       Topic: /goal_pose
   Views:

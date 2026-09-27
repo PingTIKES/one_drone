@@ -1,6 +1,3 @@
-map_odom:
-  ros__parameters:
-    pose_max_age: 0.35
 height_slice:
   ros__parameters:
     half_height: 0.30

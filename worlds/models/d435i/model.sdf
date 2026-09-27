@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Forward-facing D435i model: infrared stereo for VIO, depth for
+     obstacle perception, and RGB reserved for later vision work. -->
+<sdf version='1.9'>
+  <model name='d435i'>
+    <link name='d435i/base_link'>
+      <inertial>
+        <mass>0.072</mass>
+        <inertia>
+          <ixx>3.0e-5</ixx>
+          <iyy>3.0e-5</iyy>
+          <izz>3.0e-5</izz>
+          <ixy>0.0</ixy>
+          <ixz>0.0</ixz>
+          <iyz>0.0</iyz>
+        </inertia>
+      </inertial>
+      <visual name='housing'>
+        <!-- D435i 外壳约 90 x 25 x 25 mm -->
+        <geometry>
+          <box><size>0.025 0.09 0.025</size></box>
+        </geometry>
+        <material>
+          <ambient>0.05 0.05 0.05 1</ambient>
+          <diffuse>0.1 0.1 0.1 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- 右目红外（cam0）：VIO 右目 -->
+      <sensor name='cam0' type='camera'>
+        <pose>0 -0.025 0 0 0 0</pose>
+        <topic>/vio_cam0/image</topic>
+        <camera>
+          <horizontal_fov>1.5184</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>L_INT8</format>
+          </image>
+          <clip>
+            <near>0.05</near>
+            <far>100</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+
+      <!-- 左目红外（cam1）：VIO 左目 -->
+      <sensor name='cam1' type='camera'>
+        <pose>0 0.025 0 0 0 0</pose>
+        <topic>/vio_cam1/image</topic>
+        <camera>
+          <horizontal_fov>1.5184</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>L_INT8</format>
+          </image>
+          <clip>
+            <near>0.05</near>
+            <far>100</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+
+      <!-- RGB 彩色：仿真仅供 RViz 监视（640x480@10，hfov 69.4°） -->
+      <sensor name='color' type='camera'>
+        <pose>0 -0.015 0 0 0 0</pose>
+        <topic>/d435i/color/image_raw</topic>
+        <!-- 仿真降级 640x480@10（原 1280x720@30 约 79MB/s/路，RViz 订阅即卡死）：
+             RGB 暂留给后续视觉任务；
+             实机 realsense 的 RGB 规格在 rs_launch 里另配，与本文件无关 -->
+        <camera>
+          <horizontal_fov>1.2110</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>RGB_INT8</format>
+          </image>
+          <clip>
+            <near>0.05</near>
+            <far>100</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>10</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+
+      <!-- 深度：避障建图用（默认 32FC1 浮点深度，单位米；
+           15Hz 对齐真机 USB2.0 受限档位；与左红外同位） -->
+      <sensor name='depth' type='depth_camera'>
+        <pose>0 0.025 0 0 0 0</pose>
+        <topic>/d435i/depth/image_raw</topic>
+        <camera>
+          <horizontal_fov>1.5184</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>10.0</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>15</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+
+      <!-- 相机内置 IMU（BMI055，200Hz）：备用，OpenVINS 默认仍用机体 IMU -->
+      <sensor name='imu' type='imu'>
+        <topic>/d435i/imu</topic>
+        <always_on>1</always_on>
+        <update_rate>200</update_rate>
+        <imu>
+          <angular_velocity>
+            <x><noise type='gaussian'><mean>0</mean><stddev>0.0017</stddev></noise></x>
+            <y><noise type='gaussian'><mean>0</mean><stddev>0.0017</stddev></noise></y>
+            <z><noise type='gaussian'><mean>0</mean><stddev>0.0017</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type='gaussian'><mean>0</mean><stddev>0.02</stddev></noise></x>
+            <y><noise type='gaussian'><mean>0</mean><stddev>0.02</stddev></noise></y>
+            <z><noise type='gaussian'><mean>0</mean><stddev>0.02</stddev></noise></z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+    </link>
+  </model>
+</sdf>

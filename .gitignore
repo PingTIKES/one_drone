@@ -1,0 +1,12 @@
+build/
+install/
+log/
+third_party/
+src/px4_msgs
+**/__pycache__/
+*.py[cod]
+worlds/models/.gen/
+worlds/models/rmuc_2025/meshes/rmuc_2025.stl
+flight_bags/
+*.ulg
+.env

@@ -28,6 +28,8 @@ def generate_launch_description():
     bt_navigator = Node(
         package='nav2_bt_navigator', executable='bt_navigator',
         name='bt_navigator', output='screen',
+        # All operator goals must pass GoalManager's map and sensor gates.
+        remappings=[('goal_pose', 'nav2_internal_goal_pose')],
         parameters=[configured_params,
                     {'default_nav_to_pose_bt_xml': str(bringup / 'behavior_trees/navigate.xml'),
                      'default_nav_through_poses_bt_xml': str(bringup / 'behavior_trees/unused_through_poses.xml')}])

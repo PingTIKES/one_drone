@@ -85,7 +85,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/Interact
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/SetGoal
-      Topic: /goal_pose
+      Topic: /navigation_goal
   Views:
     Current:
       Class: rviz_default_plugins/Orbit

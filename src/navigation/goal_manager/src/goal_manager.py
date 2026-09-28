@@ -22,16 +22,17 @@ class GoalManager(Node):
         self.request_epoch = 0
         self.alignment = None
         self.action = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self.pub = self.create_publisher(String, 'navigation_state', 10)
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.create_subscription(PoseStamped, '/goal_pose', self.on_goal, 10)
+        self.pub = self.create_publisher(String, 'navigation_state', latched)
+        self.create_subscription(PoseStamped, '/navigation_goal', self.on_goal, 10)
         self.create_subscription(Bool, 'localization_ready', self.on_ready, latched)
         self.create_subscription(Pose2D, 'map_odom/current', self.on_alignment, latched)
         self.create_subscription(Bool, 'obstacle_fresh', self.on_obstacle, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
         self.create_subscription(String, 'flight_state', self.on_flight, 10)
         self.create_timer(.1, self.tick)
+        self.state('WAITING_FOR_GOAL')
 
     def state(self, text):
         self.pub.publish(String(data=text))
@@ -46,6 +47,19 @@ class GoalManager(Node):
         p = msg.pose.position
         if msg.header.frame_id != 'map' or not all(math.isfinite(v) for v in (p.x, p.y)):
             self.state('REJECTED_FRAME_OR_POSITION')
+            return
+        if not self.ready:
+            self.state('RELOCALIZATION_REQUIRED')
+            return
+        if not self.vio_valid:
+            self.state('VIO_NOT_READY')
+            return
+        if self.flight_state != 'CRUISE':
+            self.state('FLIGHT_NOT_CRUISE')
+            return
+        depth_age = self.get_clock().now().nanoseconds * 1e-9 - self.last_obstacle_good
+        if not 0 <= depth_age <= float(self.get_parameter('depth_grace').value):
+            self.state('DEPTH_NOT_READY')
             return
         self.cancel()
         self.pending = msg

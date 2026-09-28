@@ -95,7 +95,7 @@ src/
 | `localization/vio_bridge` | 校验 VIO、跳变恢复、里程计、PX4 外部视觉 | `/uav1/odomimu`、双目时间戳 | `/odom`、`odom→base_link`、`/vio_health`、PX4 `vehicle_visual_odometry` |
 | `localization/map_alignment` | 手动定位就绪和 VIO 重置门控 | `/map_odom/applied`、VIO 诊断 | `/localization_ready`、`/map_odom/current` |
 | `navigation/obstacle_filter` | 巡航高度障碍切片 | `/uav1/obstacles`、里程计 | `/navigation_obstacles` |
-| `navigation/goal_manager` | 目标和定位、感知状态门控 | `/goal_pose`、定位与避障状态 | Nav2 `NavigateToPose` 目标 |
+| `navigation/goal_manager` | 目标和定位、感知状态门控 | `/navigation_goal`、定位与避障状态 | Nav2 `NavigateToPose` 目标、`/navigation_state` |
 | `bringup` | 启动感知、定位、地图服务、飞控接口、RViz；集中管理上场配置 | YAML 参数、PGM 地图、传感器话题 | `/map`、`/odom`、`/navigation_obstacles`、启动清单 |
 | `navigation/nav` | 单独启动官方 Nav2 planner、controller、BT navigator、velocity smoother | `/map`、TF、`/odom`、`/navigation_obstacles`、目标 | `/plan`、`/cmd_vel`、`/cmd_vel_smoothed` |
 | `control/flight_bridge` | 起飞/悬停/降落、机体系 FLU 到 PX4 本地 NED 速度转换 | `/cmd_vel_smoothed`、PX4 本地状态 | PX4 Offboard 设定值、`/flight_state` |
@@ -158,7 +158,7 @@ src/
    ros2 service call /land std_srvs/srv/Trigger '{}'
    ```
 
-   也可用 `ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped` 发点，`header.frame_id` 必须为 `map`。目标方位不会强迫飞机先转向。若目标在禁飞格、地图外或障碍内部，Nav2 会拒绝或报告无法找到路径。
+   RViz 的 2D Goal Pose 发布到 `/navigation_goal`，只能经过 `goal_manager` 进入 Nav2。也可用 `ros2 topic pub --once /navigation_goal geometry_msgs/msg/PoseStamped` 发点，`header.frame_id` 必须为 `map`。`/navigation_state` 使用 transient local QoS，查看最近一次门控结果可运行 `ros2 topic echo --once /navigation_state --qos-durability transient_local`。目标方位不会强迫飞机先转向。若目标在禁飞格、地图外或障碍内部，Nav2 会拒绝或报告无法找到路径。
 
 ## 真机：标定、连接和运行
 

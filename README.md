@@ -101,7 +101,7 @@ src/
 | `rviz/modify_map_to_odom` | 哨兵式 map→odom TF 发布节点 | 配置文件、共享内存、`/map_odom/set` | `/tf` 中的 `map→odom` |
 | `rviz/rviz_tf_shift` | 保留的手动地图调整面板，无需操作 | 操作者输入、导航话题 | `/map_odom/set` |
 
-配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；默认 Nav2 参数集中在 `src/bringup/params/nav2_params.yaml`；可选纯 odom 参数在 `src/bringup/params/nav2_odom_params.yaml`。赛场地图的 YAML 和图像放进 `src/bringup/map/`，在 `src/bringup/params/global_config.yaml` 的 `map:` 一行选用；临时切换可在启动 `bringup` 时传 `map_file:=/绝对路径/地图.yaml` 覆盖该设置。`startup.launch.py` 按哨兵工程的结构，通过 `ComposableNodeContainer` 和 `LoadComposableNodes` 加载 `MapServer` 与 `lifecycle_manager_localization`。地图 YAML 的 `image:` 字段选择实际 PGM/PNG，因此切换地图时选择 YAML 文件。默认 `navigation_mode:=map` 会读取地图；纯 odom 模式不读取。默认 RViz 配置是 `src/bringup/rviz/navigation.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启相关 launch；新增配置文件或修改安装规则时重新构建。核心运行参数无需编辑 Python 源码。
+配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；默认 Nav2 参数集中在 `src/bringup/params/nav2_params.yaml`；可选纯 odom 参数在 `src/bringup/params/nav2_odom_params.yaml`。赛场地图的 YAML 和图像放进 `src/bringup/map/`，在 `src/bringup/params/global_config.yaml` 的 `map:` 一行选用；临时切换可在启动 `bringup` 时传 `map_file:=/绝对路径/地图.yaml` 覆盖该设置。`startup.launch.py` 按哨兵工程的结构，通过 `ComposableNodeContainer` 和 `LoadComposableNodes` 加载 `MapServer` 与 `lifecycle_manager_localization`。地图 YAML 的 `image:` 字段选择实际 PGM/PNG，因此切换地图时选择 YAML 文件。默认 `navigation_mode:=map` 会读取地图；纯 odom 模式不读取。默认 RViz 配置是 `src/bringup/rviz/navigation.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启相关 launch；新增地图或其他资源后，在仓库根目录执行一次 `colcon build --symlink-install` 即可自动重新配置并安装。核心运行参数无需编辑 Python 源码。
 
 ## 仿真：从零运行
 

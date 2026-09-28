@@ -2,7 +2,7 @@
 
 基于 **Ubuntu 22.04、ROS 2 Humble、OpenVINS、Nav2、PX4 v1.14.3** 的单机自主导航实验工程。当前任务只包含定位、局部避障、路径规划和飞行控制；先验地图是可选模式。仿真和真机使用同一套算法节点；Gazebo 只提供场景、相机、IMU 与飞行动力学，算法不读取 Gazebo 真值位姿。仓库不包含集群和目标识别任务。
 
-> 状态：已在一台 PX4 1.14.3 SITL 无人机上验证前视双目/IMU → OpenVINS → Nav2 → PX4 Offboard → 到点。**真机尚未试飞验证**，必须完成实测标定、逐项检查与无桨台架测试，再在有隔离和人工接管条件的场地试飞。
+> 状态：此前已在一台 PX4 1.14.3 SITL 无人机上验证前视双目/IMU → OpenVINS → Nav2 → PX4 Offboard → 到点。本次默认 odom 模式已验证 Nav2 激活和路径生成，尚未完成整机飞行复测。**真机尚未试飞验证**，必须完成实测标定、逐项检查与无桨台架测试，再在有隔离和人工接管条件的场地试飞。
 
 ## 当前启动入口
 
@@ -164,7 +164,7 @@ src/
 
 ### 可选：先验 PGM 地图模式
 
-需要用先验地图规划时，终端 B 改用 `ros2 launch bringup startup.launch.py sim:=true rviz:=true navigation_mode:=map map_file:=/absolute/path/to/field.yaml`，终端 C 改用 `ros2 launch nav bringup_launch.py use_sim_time:=true navigation_mode:=map`；真机把 `sim:=false`、相机和飞控参数照真机流程填写。**两个入口必须使用同一种模式**。此时 RViz Fixed Frame 为 `map`，PGM 地图服务会启动，全局和局部代价地图都使用先验静态层。在 RViz 的 `MapOdomModify` 面板根据实测位置调整 `map→odom`，按「强制发布」，确认 `/localization_ready=true` 后再打点；目标的 `header.frame_id` 是 `map`。默认 odom 模式无需这些步骤。内置 PGM 只适合仓库所附 RMUC 仿真场，真机必须换成实测场地地图。
+需要用先验地图规划时，终端 B 改用 `PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true navigation_mode:=map map_file:=/absolute/path/to/field.yaml`，终端 C 改用 `PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true navigation_mode:=map`；真机把 `sim:=false`、相机和飞控参数照真机流程填写。**两个入口必须使用同一种模式**。此时 RViz Fixed Frame 为 `map`，PGM 地图服务会启动，全局和局部代价地图都使用先验静态层。在 RViz 的 `MapOdomModify` 面板根据实测位置调整 `map→odom`，按「强制发布」，确认 `/localization_ready=true` 后再打点；目标的 `header.frame_id` 是 `map`。默认 odom 模式无需这些步骤。内置 PGM 只适合仓库所附 RMUC 仿真场，真机必须换成实测场地地图。
 
 ## 真机：标定、连接和运行
 

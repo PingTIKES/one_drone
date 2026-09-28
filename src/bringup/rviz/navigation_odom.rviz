@@ -1,0 +1,95 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: odom
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+    - Class: rviz_default_plugins/Map
+      Name: PriorMap
+      Enabled: false
+      Alpha: 0.65
+      Topic:
+        Value: /map
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Depth: 1
+    - Class: rviz_default_plugins/Map
+      Name: LocalCostmap
+      Enabled: false
+      Alpha: 0.6
+      Topic:
+        Value: /local_costmap/costmap
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Depth: 1
+    - Class: rviz_default_plugins/PointCloud2
+      Name: DepthObstacles
+      Enabled: false
+      Topic:
+        Value: /navigation_obstacles
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        Depth: 5
+      Style: Points
+      Size (Pixels): 2
+    - Class: rviz_default_plugins/Odometry
+      Name: OpenVINSOdom
+      Enabled: true
+      Keep: 1
+      Shape:
+        Value: Arrow
+        Color: 255; 120; 20
+        Alpha: 1
+      Topic:
+        Value: /odom
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        Depth: 10
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 1.5
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Frames:
+        All Enabled: true
+    - Class: rviz_default_plugins/Path
+      Name: GlobalPlan
+      Enabled: true
+      Topic:
+        Value: /plan
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Depth: 1
+      Color: 30; 220; 80
+    - Class: rviz_default_plugins/Image
+      Name: Infrared
+      Enabled: false
+      Topic:
+        Value: /uav1/cam0/image_raw
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        Depth: 1
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/SetGoal
+      Topic: /navigation_goal
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 35
+      Pitch: 1.1
+      Yaw: 0.8
+Window Geometry:
+  Width: 1300
+  Height: 850

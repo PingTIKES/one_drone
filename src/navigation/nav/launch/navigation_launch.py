@@ -28,7 +28,7 @@ def generate_launch_description():
     bt_navigator = Node(
         package='nav2_bt_navigator', executable='bt_navigator',
         name='bt_navigator', output='screen',
-        # All operator goals must pass GoalManager's map and sensor gates.
+        # All operator goals must pass GoalManager's frame and sensor gates.
         remappings=[('goal_pose', 'nav2_internal_goal_pose')],
         parameters=[configured_params,
                     {'default_nav_to_pose_bt_xml': str(bringup / 'behavior_trees/navigate.xml'),
@@ -46,7 +46,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('params_file',
-                              default_value=str(bringup / 'params/nav2_params.yaml')),
+                              default_value=str(bringup / 'params/nav2_odom_params.yaml')),
         DeclareLaunchArgument('autostart', default_value='true'),
         planner_server,
         controller_server,

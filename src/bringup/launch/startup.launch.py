@@ -29,7 +29,8 @@ def generate_launch_description():
                  ('calibration_dir', ''), ('target_system', ''), ('px4_ns', ''),
                  ('map_file', ''), ('cam0_topic', ''), ('cam1_topic', ''),
                  ('imu_topic', ''), ('depth_topic', ''),
-                 ('depth_info_topic', ''), ('depth_scale', '0.001')]
+                 ('depth_info_topic', ''), ('depth_scale', '0.001'),
+                 ('navigation_mode', 'odom')]
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value=value)
           for name, value in arguments],
@@ -40,6 +41,10 @@ def generate_launch_description():
 def setup(context):
     arg = lambda key: LaunchConfiguration(key).perform(context)
     sim = arg('sim').lower() == 'true'
+    navigation_mode = arg('navigation_mode')
+    if navigation_mode not in ('map', 'odom'):
+        raise ValueError('navigation_mode must be map or odom')
+    use_prior_map = navigation_mode == 'map'
     mode = arg('depth_source')
     if mode not in ('software', 'hardware'):
         raise ValueError('depth_source must be software or hardware')
@@ -163,11 +168,14 @@ def setup(context):
     modify_map_to_odom = Node(
         package='modify_map_to_odom', executable='modify_map_to_odom_node',
         name='modify_map_to_odom', output='screen',
+        condition=IfCondition('true' if use_prior_map else 'false'),
         parameters=[str(Path(get_package_share_directory('modify_map_to_odom')) /
                         'config/config.yaml'), common])
     map_odom = Node(
         package='map_alignment', executable='map_odom',
-        name='map_odom', output='screen', parameters=[common])
+        name='map_odom', output='screen',
+        condition=IfCondition('true' if use_prior_map else 'false'),
+        parameters=[common])
     height_slice = Node(
         package='obstacle_filter', executable='height_slice',
         name='height_slice', output='screen',
@@ -175,25 +183,32 @@ def setup(context):
     goal_manager = Node(
         package='goal_manager', executable='goal_manager',
         name='goal_manager', output='screen',
-        parameters=[common, node_config('goal_manager', 'goal_manager')])
+        parameters=[common, node_config('goal_manager', 'goal_manager'),
+                    {'goal_frame': navigation_mode,
+                     'require_map_alignment': use_prior_map}])
     flight_bridge = Node(
         package='flight_bridge', executable='flight_bridge',
         name='flight_bridge', output='screen',
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
-                    {'target_system': target_system, 'px4_ns': px4_ns}])
+                    {'target_system': target_system, 'px4_ns': px4_ns,
+                     'require_map_alignment': use_prior_map}])
     map_file = arg('map_file') or str(bringup / 'map/rmuc_2025_prior.yaml')
     map_server = Node(
         package='nav2_map_server', executable='map_server',
         name='map_server', output='screen',
+        condition=IfCondition('true' if use_prior_map else 'false'),
         parameters=[common, {'yaml_filename': map_file}])
     lifecycle_manager_map = Node(
         package='nav2_lifecycle_manager', executable='lifecycle_manager',
         name='lifecycle_manager_map', output='screen',
+        condition=IfCondition('true' if use_prior_map else 'false'),
         parameters=[common, {'autostart': True, 'node_names': ['map_server']}])
     one_drone_rviz = Node(
         package='rviz2', executable='rviz2', name='one_drone_rviz',
         output='screen', condition=IfCondition(arg('rviz').lower()),
-        parameters=[common], arguments=['-d', str(bringup / 'rviz/navigation.rviz')])
+        parameters=[common],
+        arguments=['-d', str(bringup / ('rviz/navigation.rviz' if use_prior_map
+                                         else 'rviz/navigation_odom.rviz'))])
 
     # Startup inventory. Nav2 planner/controller/smoother start in nav/bringup_launch.py.
     return LaunchDescription([

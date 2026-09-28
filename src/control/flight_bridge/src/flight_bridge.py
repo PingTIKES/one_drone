@@ -30,6 +30,7 @@ class FlightBridge(Node):
                         max_horizontal_speed=.5, max_yaw_rate=.6,
                         command_timeout=.3, pose_timeout=.5, vio_timeout=.5,
                         depth_heartbeat_timeout=.3, depth_grace=.8,
+                        require_map_alignment=True,
                         takeoff_tolerance=.2, takeoff_stable_time=1.)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
@@ -122,6 +123,8 @@ class FlightBridge(Node):
             self.last_obstacle_good = self.obstacle_at
 
     def on_localized(self, msg):
+        if not self.p('require_map_alignment'):
+            return
         was_localized = self.localized
         self.localized = bool(msg.data)
         if was_localized and not self.localized and self.state == 'CRUISE':
@@ -267,7 +270,8 @@ class FlightBridge(Node):
             else:
                 self.takeoff_reached_since = None
         elif self.state == 'CRUISE':
-            if (not self.localized or not self.depth_valid()) and self.pose_valid():
+            if ((self.p('require_map_alignment') and not self.localized) or
+                    not self.depth_valid()) and self.pose_valid():
                 # Map alignment and depth are required to follow a map-frame
                 # path, not to maintain altitude at the current PX4 position.
                 if self.velocity_active:

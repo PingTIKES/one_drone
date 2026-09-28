@@ -14,7 +14,12 @@ class GoalManager(Node):
     def __init__(self):
         super().__init__('goal_manager')
         self.declare_parameter('depth_grace', 0.8)
-        self.ready = self.obstacle_fresh = self.vio_valid = False
+        self.declare_parameter('goal_frame', 'map')
+        self.declare_parameter('require_map_alignment', True)
+        self.goal_frame = str(self.get_parameter('goal_frame').value)
+        self.require_map_alignment = bool(self.get_parameter('require_map_alignment').value)
+        self.ready = not self.require_map_alignment
+        self.obstacle_fresh = self.vio_valid = False
         self.last_obstacle_good = -math.inf
         self.flight_state = 'IDLE'
         self.pending = self.goal_handle = None
@@ -45,7 +50,7 @@ class GoalManager(Node):
 
     def on_goal(self, msg):
         p = msg.pose.position
-        if msg.header.frame_id != 'map' or not all(math.isfinite(v) for v in (p.x, p.y)):
+        if msg.header.frame_id != self.goal_frame or not all(math.isfinite(v) for v in (p.x, p.y)):
             self.state('REJECTED_FRAME_OR_POSITION')
             return
         if not self.ready:
@@ -66,6 +71,8 @@ class GoalManager(Node):
         self.state('GOAL_QUEUED')
 
     def on_ready(self, msg):
+        if not self.require_map_alignment:
+            return
         self.ready = bool(msg.data)
         if not self.ready:
             self.pending = None
@@ -73,6 +80,8 @@ class GoalManager(Node):
             self.state('RELOCALIZATION_REQUIRED')
 
     def on_alignment(self, msg):
+        if not self.require_map_alignment:
+            return
         new = (msg.x, msg.y, msg.theta)
         if self.alignment is not None and any(abs(a-b) > 1e-6 for a,b in zip(new,self.alignment)):
             had_goal = self.pending is not None or self.goal_handle is not None or self.sending

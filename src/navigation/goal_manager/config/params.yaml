@@ -2,4 +2,4 @@ goal_manager:
   ros__parameters:
     depth_grace: 0.8
     goal_frame: null
-    require_map_alignment: null
+    require_map_alignment: false

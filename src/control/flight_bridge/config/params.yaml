@@ -10,6 +10,6 @@ flight_bridge:
     vio_timeout: 0.5
     depth_heartbeat_timeout: 0.3
     depth_grace: 0.8
-    require_map_alignment: null
+    require_map_alignment: false
     takeoff_tolerance: 0.2
     takeoff_stable_time: 1.0

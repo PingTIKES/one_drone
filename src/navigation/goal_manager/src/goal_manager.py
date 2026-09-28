@@ -15,7 +15,7 @@ class GoalManager(Node):
         super().__init__('goal_manager')
         self.declare_parameter('depth_grace', 0.8)
         self.declare_parameter('goal_frame', 'map')
-        self.declare_parameter('require_map_alignment', True)
+        self.declare_parameter('require_map_alignment', False)
         self.goal_frame = str(self.get_parameter('goal_frame').value)
         self.require_map_alignment = bool(self.get_parameter('require_map_alignment').value)
         self.ready = not self.require_map_alignment

@@ -30,7 +30,7 @@ class FlightBridge(Node):
                         max_horizontal_speed=.5, max_yaw_rate=.6,
                         command_timeout=.3, pose_timeout=.5, vio_timeout=.5,
                         depth_heartbeat_timeout=.3, depth_grace=.8,
-                        require_map_alignment=True,
+                        require_map_alignment=False,
                         takeoff_tolerance=.2, takeoff_stable_time=1.)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
@@ -63,8 +63,7 @@ class FlightBridge(Node):
         self.create_subscription(Twist, 'cmd_vel_smoothed', self.on_velocity, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
         self.create_subscription(Bool, 'obstacle_fresh', self.on_obstacle, 10)
-        # Map alignment publishes only when confirmed or invalidated. Keep its
-        # last value when this node joins after the publisher starts.
+        # Optional legacy readiness input. The default launch disables this gate.
         self.create_subscription(Bool, 'localization_ready', self.on_localized, latched)
         self.create_service(Trigger, 'takeoff', self.takeoff)
         self.create_service(Trigger, 'resume_navigation', self.resume)

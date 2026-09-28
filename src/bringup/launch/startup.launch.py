@@ -197,11 +197,6 @@ def setup(context):
         condition=IfCondition('true' if use_prior_map else 'false'),
         parameters=[str(Path(get_package_share_directory('modify_map_to_odom')) /
                         'config/config.yaml'), common])
-    map_odom = Node(
-        package='map_alignment', executable='map_odom',
-        name='map_odom', output='screen',
-        condition=IfCondition('true' if use_prior_map else 'false'),
-        parameters=[common])
     height_slice = Node(
         package='obstacle_filter', executable='height_slice',
         name='height_slice', output='screen',
@@ -211,13 +206,13 @@ def setup(context):
         name='goal_manager', output='screen',
         parameters=[common, node_config('goal_manager', 'goal_manager'),
                     {'goal_frame': navigation_mode,
-                     'require_map_alignment': use_prior_map}])
+                     'require_map_alignment': False}])
     flight_bridge = Node(
         package='flight_bridge', executable='flight_bridge',
         name='flight_bridge', output='screen',
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
                     {'target_system': target_system, 'px4_ns': px4_ns,
-                     'require_map_alignment': use_prior_map}])
+                     'require_map_alignment': False}])
     map_file = selected_map_file(bringup, arg('map_file')) if use_prior_map else ''
     map_server = Node(
         package='nav2_map_server', executable='map_server',
@@ -246,7 +241,6 @@ def setup(context):
         stereo_depth_node,           # depth -> obstacle cloud
         camera_optical_tf,           # base_link -> camera_optical
         modify_map_to_odom,          # manual relocalization interface
-        map_odom,                    # map -> odom TF
         height_slice,                # depth cloud at flight height
         goal_manager,                # RViz goal -> Nav2 action
         flight_bridge,               # cmd_vel_smoothed -> PX4 Offboard

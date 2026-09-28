@@ -31,7 +31,8 @@ def generate_launch_description():
         # All operator goals must pass GoalManager's map and sensor gates.
         remappings=[('goal_pose', 'nav2_internal_goal_pose')],
         parameters=[configured_params,
-                    {'default_nav_to_pose_bt_xml': str(bringup / 'behavior_trees/navigate.xml')}])
+                    {'default_nav_to_pose_bt_xml': str(bringup / 'behavior_trees/navigate.xml'),
+                     'default_nav_through_poses_bt_xml': str(bringup / 'behavior_trees/navigate_through_poses.xml')}])
     velocity_smoother = Node(
         package='nav2_velocity_smoother', executable='velocity_smoother',
         name='velocity_smoother', output='screen', parameters=[configured_params])

@@ -4,6 +4,15 @@ import numpy as np
 from vio_bridge.vio_geometry import rotation
 
 
+def unexplained_rotation(previous_quat, quat, dt, previous_omega, omega):
+    """Return attitude change not explained by measured angular velocity."""
+    angle = 2 * math.acos(float(np.clip(abs(np.dot(previous_quat, quat)), 0., 1.)))
+    if not math.isfinite(dt) or dt <= 0:
+        return angle
+    expected = 0.5 * (np.linalg.norm(previous_omega) + np.linalg.norm(omega)) * dt
+    return max(0.0, angle - expected)
+
+
 class VioRecovery:
     def __init__(self, stable_time=.5, timeout=2., max_correction=.75,
                  max_angle_deg=20., sample_gap=.1, residual=.03,
@@ -27,9 +36,10 @@ class VioRecovery:
     def active(self):
         return self.started is not None
 
-    def begin(self, now, stamp, position, quat, velocity, source_gap=False):
+    def begin(self, now, stamp, position, quat, velocity, omega, source_gap=False):
         self.started = now
-        self.anchor = (stamp, position.copy(), quat.copy(), rotation(quat) @ velocity)
+        self.anchor = (stamp, position.copy(), quat.copy(), rotation(quat) @ velocity,
+                       omega.copy())
         self.previous = self.stable_since = None
         self.source_gap = source_gap
         self.first_candidate_stamp = None
@@ -37,21 +47,21 @@ class VioRecovery:
     def expired(self, now):
         return self.active and now - self.started > self.timeout
 
-    def accept(self, now, stamp, pos, quat, velocity):
+    def accept(self, now, stamp, pos, quat, velocity, omega):
         """Only admit bounded corrections followed by a stable fresh sequence."""
         if self.expired(now):
             return False
-        at, ap, aq, av = self.anchor
+        at, ap, aq, av, aw = self.anchor
         source_interval = stamp-at
         if self.first_candidate_stamp is None and source_interval > self.max_source_gap:
             return False
-        angle = 2 * math.acos(float(np.clip(abs(np.dot(aq, quat)), 0., 1.)))
+        angle_residual = unexplained_rotation(aq, quat, source_interval, aw, omega)
         world_velocity = rotation(quat) @ velocity
         correction_limit = self.gap_max_correction if self.source_gap else self.max_correction
         angle_limit = self.gap_max_angle if self.source_gap else self.max_angle
         bounded = (source_interval > 0 and
                    np.linalg.norm(pos - (ap + av * source_interval)) <= correction_limit and
-                   angle <= angle_limit)
+                   angle_residual <= angle_limit)
         continuous = False
         if bounded and self.previous is not None:
             pt, pp, pv = self.previous

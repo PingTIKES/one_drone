@@ -4,7 +4,7 @@ flight_bridge:
     target_system: 2
     takeoff_altitude: 2.0
     max_horizontal_speed: 1.5
-    max_yaw_rate: 0.8
+    max_yaw_rate: 0.5
     allow_reverse: false
     max_lateral_speed: 0.0
     reaction_time: 0.5

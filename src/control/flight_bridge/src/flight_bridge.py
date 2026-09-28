@@ -29,7 +29,7 @@ class FlightBridge(Node):
     def __init__(self):
         super().__init__('flight_bridge')
         defaults = dict(px4_ns='px4_1', target_system=2, takeoff_altitude=2.,
-                        max_horizontal_speed=1.5, max_yaw_rate=.8,
+                        max_horizontal_speed=1.5, max_yaw_rate=.5,
                         allow_reverse=False, max_lateral_speed=0.,
                         reaction_time=.5, assumed_braking_deceleration=.6,
                         safety_margin=.5, verified_forward_range=5.,

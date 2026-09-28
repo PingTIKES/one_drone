@@ -17,7 +17,7 @@ from vio_bridge.vio_geometry import convert
 from vio_bridge.vio_tf_geometry import FLIP, vio_body_pose
 from vio_bridge.vio_geometry import quaternion
 from vio_bridge.calibration import transform
-from vio_bridge.vio_recovery import VioRecovery
+from vio_bridge.vio_recovery import VioRecovery, unexplained_rotation
 
 
 class VioBridge(Node):
@@ -36,7 +36,7 @@ class VioBridge(Node):
         self.odom_frame, self.body_frame = 'odom', 'base_link'
         self.extrinsic = transform(np.array(self.p('t_body_imu')).reshape(4,4))
         self.last_stamp = self.last_position = None
-        self.last_quat = self.last_velocity = None
+        self.last_quat = self.last_velocity = self.last_omega = None
         self.recovery = self.new_recovery()
         self.reason = 'WAITING_FOR_DATA'
         self.reset_count, self.latched = 0, False
@@ -97,7 +97,7 @@ class VioBridge(Node):
 
     def reset(self,request,response):
         self.last_stamp = self.last_position = None
-        self.last_quat = self.last_velocity = None
+        self.last_quat = self.last_velocity = self.last_omega = None
         self.recovery = self.new_recovery()
         self.reset_count = (self.reset_count+1)%256
         self.latched = False
@@ -152,15 +152,16 @@ class VioBridge(Node):
             self.reject('EXCESSIVE_VARIANCE'); return
         if self.last_stamp is not None and not self.recovery.active:
             dt = stamp-self.last_stamp
-            angle=2*math.acos(float(np.clip(abs(np.dot(quat,self.last_quat)),0.,1.)))
-            if dt > 1. or np.linalg.norm(pos-self.last_position)>self.p('max_jump')+self.p('max_speed')*dt or angle>math.radians(self.p('recovery_max_angle_deg')):
+            angle_residual = unexplained_rotation(
+                self.last_quat, quat, dt, self.last_omega, omega)
+            if dt > 1. or np.linalg.norm(pos-self.last_position)>self.p('max_jump')+self.p('max_speed')*dt or angle_residual>math.radians(self.p('recovery_max_angle_deg')):
                 self.recovery.begin(now,self.last_stamp,self.last_position,self.last_quat,
-                                    self.last_velocity,source_gap=dt>1.)
-                self.reason = 'DATA_GAP' if dt>1. else ('ORIENTATION_DISCONTINUITY' if angle>math.radians(self.p('recovery_max_angle_deg')) else 'POSITION_DISCONTINUITY')
+                                    self.last_velocity,self.last_omega,source_gap=dt>1.)
+                self.reason = 'DATA_GAP' if dt>1. else ('ORIENTATION_DISCONTINUITY' if angle_residual>math.radians(self.p('recovery_max_angle_deg')) else 'POSITION_DISCONTINUITY')
                 self.health.publish(String(data='INVALID'))
                 self.get_logger().warn(f'VIO quarantine: {self.reason}; dt={dt:.4f}s jump={np.linalg.norm(pos-self.last_position):.3f}m')
         if self.recovery.active:
-            if not self.recovery.accept(now,stamp,pos,quat,vel): return
+            if not self.recovery.accept(now,stamp,pos,quat,vel,omega): return
             # Explicitly inform EKF2 of the accepted discontinuity. Its reset
             # deltas must be handled by the controller; never conceal a shift.
             self.reset_count = (self.reset_count+1)%256
@@ -179,7 +180,7 @@ class VioBridge(Node):
         self.pub.publish(out)
         self.publish_vio_odom(msg,stamp,pos,quat,vel,omega,pv,ov,vv)
         self.last_stamp,self.last_position,self.last_good = stamp,pos,stamp
-        self.last_quat,self.last_velocity = quat,vel
+        self.last_quat,self.last_velocity,self.last_omega = quat,vel,omega
 
 
 def main(args=None):

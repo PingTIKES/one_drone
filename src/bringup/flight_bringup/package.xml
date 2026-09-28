@@ -15,11 +15,9 @@
   <exec_depend>obstacle_cloud</exec_depend>
   <exec_depend>modify_map_to_odom</exec_depend>
   <exec_depend>rviz_tf_shift</exec_depend>
-  <exec_depend>rviz_config</exec_depend>
   <exec_depend>map_alignment</exec_depend>
   <exec_depend>obstacle_filter</exec_depend>
   <exec_depend>goal_manager</exec_depend>
-  <exec_depend>nav2_config</exec_depend>
   <exec_depend>flight_bridge</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_planner</exec_depend>

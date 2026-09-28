@@ -49,11 +49,16 @@ Qt 共享内存在同一台电脑上传递面板调整；面板同时发布 `/ma
 
 ## 目录、功能包与接口
 
-`src` 第一层按职责分为 `bringup/`、`perception/`、`localization/`、`navigation/`、`control/` 和 `rviz/`。每个目录内再放 ROS 2 功能包。Python 包的实现直接位于该包的 `src/`，没有同名的第二层源码目录；C++ 包也使用 `src/` 保存实现。`bringup/flight_bringup/launch/navigation.launch.py` 是完整导航入口，Nav2 参数、行为树和先验地图位于 `navigation/nav2_config`。
+`src` 第一层按职责分为 `bringup/`、`perception/`、`localization/`、`navigation/`、`control/` 和 `rviz/`。每个目录内再放 ROS 2 功能包。Python 包的实现直接位于该包的 `src/`，没有同名的第二层源码目录；C++ 包也使用 `src/` 保存实现。`bringup/flight_bringup/launch/navigation.launch.py` 是完整导航入口；节点先逐个定义，文件末尾的启动清单逐行列出各节点，便于查看或注释。Nav2 参数、先验地图、行为树和 RViz 显示配置集中在 `bringup/flight_bringup/`。
 
 ```text
 src/
-├── bringup/flight_bringup/           # navigation.launch.py
+├── bringup/flight_bringup/           # 一键启动和上场配置
+│   ├── launch/navigation.launch.py   # 文件末尾逐行列出启动节点
+│   ├── params/nav2_params.yaml       # planner、controller、costmap、smoother
+│   ├── map/                        # 先验 PGM/YAML
+│   ├── behavior_trees/             # Nav2 行为树
+│   └── rviz/navigation.rviz         # RViz 默认视图
 ├── perception/
 │   ├── camera_stream/                # 真机相机与 IMU 话题转发
 │   ├── stereo_depth/                 # 双目深度
@@ -62,14 +67,12 @@ src/
 │   ├── vio_bridge/                   # OpenVINS 到里程计及 PX4
 │   └── map_alignment/                # 地图对齐就绪门控
 ├── navigation/
-│   ├── nav2_config/                  # nav2_params.yaml、行为树、PGM
 │   ├── obstacle_filter/              # 飞行高度障碍切片
 │   └── goal_manager/                 # 目标门控
 ├── control/flight_bridge/            # 平滑速度转 PX4 Offboard 指令
 └── rviz/
     ├── modify_map_to_odom/           # map→odom TF
-    ├── rviz_tf_shift/                # 手动地图对齐面板
-    └── rviz_config/                  # RViz 显示配置
+    └── rviz_tf_shift/                # 手动地图对齐面板
 ```
 
 | 包 | 职责 | 主要输入 | 主要输出／可调配置 |
@@ -81,13 +84,12 @@ src/
 | `localization/map_alignment` | 手动定位就绪和 VIO 重置门控 | `/map_odom/applied`、VIO 诊断 | `/localization_ready`、`/map_odom/current` |
 | `navigation/obstacle_filter` | 巡航高度障碍切片 | `/uav1/obstacles`、里程计 | `/navigation_obstacles` |
 | `navigation/goal_manager` | 目标和定位、感知状态门控 | `/goal_pose`、定位与避障状态 | Nav2 `NavigateToPose` 目标 |
-| `navigation/nav2_config` | Nav2 planner、controller、costmap、速度平滑器参数与先验地图 | YAML 参数、PGM 地图 | `/map`、`/plan`、`/cmd_vel_smoothed` |
-| `bringup/flight_bringup` | 一键启动地图、Nav2、算法和 RViz | 地图、以上话题 | 导航启动文件 |
+| `bringup/flight_bringup` | 一键启动算法和 Nav2，集中管理 Nav2 参数、先验地图、行为树、RViz 配置 | YAML 参数、PGM 地图、以上话题 | `/map`、`/plan`、`/cmd_vel_smoothed`、启动清单 |
 | `control/flight_bridge` | 起飞/悬停/降落、机体系 FLU 到 PX4 本地 NED 速度转换 | `/cmd_vel_smoothed`、PX4 本地状态 | PX4 Offboard 设定值、`/flight_state` |
 | `rviz/modify_map_to_odom` | 哨兵式 map→odom TF 发布节点 | 共享内存、`/map_odom/set` | `/tf` 中的 `map→odom`、`/map_odom/applied` |
-| `rviz/rviz_tf_shift`、`rviz/rviz_config` | RViz 调整面板、显示配置 | 操作者输入、导航话题 | `/map_odom/set`、导航显示 |
+| `rviz/rviz_tf_shift` | RViz 手动地图对齐面板 | 操作者输入、导航话题 | `/map_odom/set` |
 
-配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；Nav2 planner、controller、costmap、inflation 和 velocity smoother 的参数集中在 `src/navigation/nav2_config/params/nav2_params.yaml`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。修改配置后重新 `colcon build --symlink-install` 并重启 launch。核心运行参数无需编辑 Python 源码。
+配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；Nav2 planner、controller、costmap、inflation 和 velocity smoother 的参数集中在 `src/bringup/flight_bringup/params/nav2_params.yaml`。赛场地图放进 `src/bringup/flight_bringup/map/`，启动时用 `map_file:=/绝对路径/地图.yaml` 指定；RViz 默认配置是 `src/bringup/flight_bringup/rviz/navigation.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启 launch；新增配置文件或修改安装规则时重新构建。核心运行参数无需编辑 Python 源码。
 
 ## 仿真：从零运行
 

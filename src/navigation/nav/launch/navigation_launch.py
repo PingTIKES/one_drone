@@ -46,7 +46,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('params_file',
-                              default_value=str(bringup / 'params/nav2_odom_params.yaml')),
+                              default_value=str(bringup / 'params/nav2_params.yaml')),
         DeclareLaunchArgument('autostart', default_value='true'),
         planner_server,
         controller_server,

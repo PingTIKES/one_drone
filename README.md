@@ -1,12 +1,12 @@
 # one_drone
 
-基于 **Ubuntu 22.04、ROS 2 Humble、OpenVINS、Nav2、PX4 v1.14.3** 的单机自主导航实验工程。当前任务只包含定位、局部避障、路径规划和飞行控制；先验地图是可选模式。仿真和真机使用同一套算法节点；Gazebo 只提供场景、相机、IMU 与飞行动力学，算法不读取 Gazebo 真值位姿。仓库不包含集群和目标识别任务。
+基于 **Ubuntu 22.04、ROS 2 Humble、OpenVINS、Nav2、PX4 v1.14.3** 的单机自主导航实验工程。当前任务只包含定位、先验地图全局规划、点云局部避障和飞行控制。仿真和真机使用同一套算法节点；Gazebo 只提供场景、相机、IMU 与飞行动力学，算法不读取 Gazebo 真值位姿。仓库不包含集群和目标识别任务。
 
-> 状态：此前已在一台 PX4 1.14.3 SITL 无人机上验证前视双目/IMU → OpenVINS → Nav2 → PX4 Offboard → 到点。本次默认 odom 模式已验证 Nav2 激活和路径生成，尚未完成整机飞行复测。**真机尚未试飞验证**，必须完成实测标定、逐项检查与无桨台架测试，再在有隔离和人工接管条件的场地试飞。
+> 状态：此前已在一台 PX4 1.14.3 SITL 无人机上验证前视双目/IMU → OpenVINS → Nav2 → PX4 Offboard → 到点。纯 odom 模式已验证 Nav2 激活和路径生成；本次切换后的默认 map 全局／odom 局部模式尚未完成整机飞行复测。**真机尚未试飞验证**，必须完成实测标定、逐项检查与无桨台架测试，再在有隔离和人工接管条件的场地试飞。
 
 ## 当前启动入口
 
-启动分两步：`bringup` 负责相机、VIO、点云、飞控接口与 RViz；定位就绪后，再单独启动 `nav` 中的官方 Nav2 planner、controller、BT navigator 和 velocity smoother。**默认是纯 `odom` 导航**：RViz 的 Fixed Frame 和 2D Goal Pose 都使用 `odom`，不加载 PGM，不启动 `map→odom`，无需人工对齐。旧包名 `flight_bringup`、`one_drone_bringup` 已不再使用。
+启动分两步：`bringup` 负责相机、VIO、点云、飞控接口与 RViz；定位就绪后，再单独启动 `nav` 中的官方 Nav2 planner、controller、BT navigator 和 velocity smoother。**默认是 `map` 全局规划 + `odom` 局部控制**：RViz 的 Fixed Frame 和 2D Goal Pose 使用 `map`；先验 PGM 进入全局代价地图，深度点云进入 `odom` 局部代价地图。地图目标要求建立 `map→odom` 对应关系。纯 `odom` 模式仍可显式选择。旧包名 `flight_bringup`、`one_drone_bringup` 已不再使用。
 
 首次获取此版本或切换自旧目录结构后，先按下文安装依赖并在仓库根目录运行 `colcon build --symlink-install`。已有环境且已构建时，直接运行：
 
@@ -42,9 +42,9 @@ PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true
        └──> 双目深度或真机深度 ──> /uav1/obstacles
                                          └──> 高度切片 /navigation_obstacles
 
-默认：odom 坐标系中的滚动自由代价地图；点云只进入局部障碍层
-可选 map 模式：先验 PGM /map ──> Nav2 静态层 + 膨胀层
-                 RViz MapOdomModify ──> TF map→odom 与地图对齐确认
+默认：先验 PGM /map ──> map 全局静态层 + 膨胀层
+      RViz MapOdomModify ──> TF map→odom 与地图对齐确认
+      已观测点云 ──> odom 局部障碍层 + 膨胀层
 RViz 2D Goal Pose ──> goal_manager ──> Nav2 A* planner + DWB controller
                                                 └──> velocity_smoother
                                                        └──> /cmd_vel_smoothed
@@ -52,11 +52,11 @@ RViz 2D Goal Pose ──> goal_manager ──> Nav2 A* planner + DWB controller
                                                                     └──> PX4 NED 速度设定值
 ```
 
-仅在显式指定 `navigation_mode:=map` 时，`modify_map_to_odom` 使用哨兵工程的 Qt 共享内存机制持续发布 `map→odom` TF；其数值在操作者重定位前保持不变。`odom→base_link` **只由 OpenVINS 发布**。RViz 的 `MapOdomModify` 面板使用哨兵工程的圆形方向控件：W/S 调整 map→odom 的 X，A/D 调整 Y，Q/E 调整 yaw；也可输入 X/Y/Rotation 后按「强制发布」，Rotation 单位为弧度。这里输入的是 **TF 的平移和旋转，不是飞机在地图中的位姿**。起飞和 PX4 本地悬停只依赖本地定位，不要求先确认 map→odom；在先验地图上打点导航前，必须按场地中的实际位置确定地图坐标与 VIO 里程计坐标的关系。仿真中的 Gazebo 真值位姿不进入算法，也不是确认依据。默认 X/Y/Rotation 均为 0，可在 `src/rviz/modify_map_to_odom/config/config.yaml` 修改初值。手动调整会取消执行中的目标，需要重新打点；VIO 原点重置后必须重新确认地图定位。
+默认 `map` 模式下，`modify_map_to_odom` 使用哨兵工程的 Qt 共享内存机制持续发布 `map→odom` TF；其数值在操作者重定位前保持不变。`odom→base_link` **只由 OpenVINS 发布**。RViz 的 `MapOdomModify` 面板使用哨兵工程的圆形方向控件：W/S 调整 map→odom 的 X，A/D 调整 Y，Q/E 调整 yaw；也可输入 X/Y/Rotation 后按「强制发布」，Rotation 单位为弧度。这里输入的是 **TF 的平移和旋转，不是飞机在地图中的位姿**。起飞和 PX4 本地悬停只依赖本地定位，不要求先确认 map→odom；在先验地图上打点导航前，必须按场地中的实际位置确定地图坐标与 VIO 里程计坐标的关系。仿真中的 Gazebo 真值位姿不进入算法，也不是确认依据。默认 X/Y/Rotation 均为 0，可在 `src/rviz/modify_map_to_odom/config/config.yaml` 修改初值。手动调整会取消执行中的目标，需要重新打点；VIO 原点重置后必须重新确认地图定位。
 
 Qt 共享内存在同一台电脑上传递面板调整；面板同时发布 `/map_odom/set`，TF 节点订阅该话题，所以 RViz 与真机伴随计算机分开运行时也能调整。跨机使用时须保证两个 ROS 2 节点处于同一 DDS 域，并用 `ros2 run tf2_ros tf2_echo map odom` 检查调整确实到达飞行端。
 
-规划是 2D 的，默认巡航高度 2 m。运行时的 `/navigation_obstacles` 是深度点云经过机体同高切片、稀疏化后的点云。默认 `odom` 模式中，全局代价地图是 60 m 的滚动自由窗口，局部代价地图使用点云障碍层与膨胀层；看不到的障碍物不会进入全局规划，所以必须依赖局部避障，不能把未知空间当作已验证的安全空间。可选 `map` 模式加载 1.5–2.5 m 高度层的先验 PGM；全局代价地图使用先验静态层与膨胀层，局部代价地图使用先验静态层、点云障碍层与膨胀层。点云只影响局部避障，不改写先验全局路径。Nav2 行为树只做路径规划和路径跟踪，不包含 Spin、BackUp、Wait 等恢复行为；`NavigateThroughPoses` 的兼容树也使用同样的最小流程。Nav2 DWB 允许 x/y 平移，目标朝向容差宽，不要求机头先沿路径方向。相机看不到的障碍物不会凭空出现；只有可选地图模式会用 PGM 表达静态场地障碍。
+规划是 2D 的，默认巡航高度 2 m。运行时的 `/navigation_obstacles` 是深度点云经过机体同高切片、稀疏化后的点云。默认 `map` 模式加载 1.5–2.5 m 高度层的先验 PGM；全局代价地图在 `map` 中使用先验静态层与膨胀层，局部代价地图在 `odom` 中只使用点云障碍层与膨胀层。点云只影响局部避障，不改写先验全局路径。可选纯 `odom` 模式使用 60 m 的滚动自由全局窗口；该模式看不到的障碍物不会进入全局规划，不能把未知空间当作已验证的安全空间。Nav2 行为树只做路径规划和路径跟踪，不包含 Spin、BackUp、Wait 等恢复行为；`NavigateThroughPoses` 的兼容树也使用同样的最小流程。Nav2 DWB 允许 x/y 平移，目标朝向容差宽，不要求机头先沿路径方向。相机看不到的障碍物不会凭空出现；默认地图模式用 PGM 表达静态场地障碍。
 
 ## 目录、功能包与接口
 
@@ -67,12 +67,12 @@ src/
 ├── bringup/                         # 传感器、定位、地图、控制启动和上场配置
 │   ├── launch/startup.launch.py      # 文件末尾逐行列出启动节点，不启动 Nav2
 │   ├── params/global_config.yaml     # 地图模式选用的全局地图
-│   ├── params/nav2_odom_params.yaml  # 默认 odom 导航参数
-│   ├── params/nav2_params.yaml       # 可选 PGM 地图导航参数
+│   ├── params/nav2_params.yaml       # 默认 map 全局/odom 局部参数
+│   ├── params/nav2_odom_params.yaml  # 可选纯 odom 导航参数
 │   ├── map/                        # 先验 PGM/YAML
 │   ├── behavior_trees/             # Nav2 行为树
-│   ├── rviz/navigation_odom.rviz     # RViz 默认视图
-│   └── rviz/navigation.rviz          # 可选地图视图
+│   ├── rviz/navigation.rviz          # 默认地图视图
+│   └── rviz/navigation_odom.rviz     # 可选纯 odom 视图
 ├── perception/
 │   ├── camera_stream/                # 真机相机与 IMU 话题转发
 │   ├── stereo_depth/                 # 双目深度
@@ -99,13 +99,13 @@ src/
 | `localization/map_alignment` | 手动定位就绪和 VIO 重置门控 | `/map_odom/applied`、VIO 诊断 | `/localization_ready`、`/map_odom/current` |
 | `navigation/obstacle_filter` | 巡航高度障碍切片 | `/uav1/obstacles`、里程计 | `/navigation_obstacles` |
 | `navigation/goal_manager` | 目标和定位、感知状态门控 | `/navigation_goal`、定位与避障状态 | Nav2 `NavigateToPose` 目标、`/navigation_state` |
-| `bringup` | 启动感知、定位、可选地图服务、飞控接口、RViz；集中管理上场配置 | YAML 参数、可选 PGM 地图、传感器话题 | `/odom`、`/navigation_obstacles`、启动清单；地图模式另有 `/map` |
-| `navigation/nav` | 单独启动官方 Nav2 planner、controller、BT navigator、velocity smoother | TF、`/odom`、`/navigation_obstacles`、目标；地图模式另有 `/map` | `/plan`、`/cmd_vel`、`/cmd_vel_smoothed` |
+| `bringup` | 启动感知、定位、默认地图服务、飞控接口、RViz；集中管理上场配置 | YAML 参数、PGM 地图、传感器话题 | `/map`、`/odom`、`/navigation_obstacles`、启动清单 |
+| `navigation/nav` | 单独启动官方 Nav2 planner、controller、BT navigator、velocity smoother | `/map`、TF、`/odom`、`/navigation_obstacles`、目标 | `/plan`、`/cmd_vel`、`/cmd_vel_smoothed` |
 | `control/flight_bridge` | 起飞/悬停/降落、机体系 FLU 到 PX4 本地 NED 速度转换 | `/cmd_vel_smoothed`、PX4 本地状态 | PX4 Offboard 设定值、`/flight_state` |
 | `rviz/modify_map_to_odom` | 哨兵式 map→odom TF 发布节点 | 共享内存、`/map_odom/set` | `/tf` 中的 `map→odom`、`/map_odom/applied` |
 | `rviz/rviz_tf_shift` | RViz 手动地图对齐面板 | 操作者输入、导航话题 | `/map_odom/set` |
 
-配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；默认 Nav2 参数集中在 `src/bringup/params/nav2_odom_params.yaml`，地图模式参数在 `src/bringup/params/nav2_params.yaml`。赛场地图的 YAML 和图像放进 `src/bringup/map/`，在 `src/bringup/params/global_config.yaml` 的 `map:` 一行选用；临时切换可在启动 `bringup` 时传 `map_file:=/绝对路径/地图.yaml` 覆盖该设置。只有 `navigation_mode:=map` 才会读取地图；默认 RViz 配置是 `src/bringup/rviz/navigation_odom.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启相关 launch；新增配置文件或修改安装规则时重新构建。核心运行参数无需编辑 Python 源码。
+配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；默认 Nav2 参数集中在 `src/bringup/params/nav2_params.yaml`；可选纯 odom 参数在 `src/bringup/params/nav2_odom_params.yaml`。赛场地图的 YAML 和图像放进 `src/bringup/map/`，在 `src/bringup/params/global_config.yaml` 的 `map:` 一行选用；临时切换可在启动 `bringup` 时传 `map_file:=/绝对路径/地图.yaml` 覆盖该设置。默认 `navigation_mode:=map` 会读取地图；纯 odom 模式不读取。默认 RViz 配置是 `src/bringup/rviz/navigation.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启相关 launch；新增配置文件或修改安装规则时重新构建。核心运行参数无需编辑 Python 源码。
 
 ## 仿真：从零运行
 
@@ -127,7 +127,7 @@ src/
    bash scripts/start_algorithm_sim.sh
    ```
 
-3. 终端 B：启动感知、定位、飞控接口和 RViz。仿真时钟环境文件由终端 A 生成。
+3. 终端 B：启动感知、定位、先验地图服务、飞控接口和 RViz。仿真时钟环境文件由终端 A 生成。
 
    ```bash
    cd ~/one_drone
@@ -138,7 +138,7 @@ src/
    PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
    ```
 
-4. 等待 `/vio_health` 为 `VALID`、`/odom` 和深度点云连续发布。启动时 OpenVINS 可能短暂打印 `[ZUPT]: There are no IMU data to check for zero velocity with!!`；只有随后变为 `VALID` 且里程计持续发布，才能继续。若提示持续出现或 VIO 始终无效，按下文“运行检查”的 IMU/双目频率与时间戳步骤排查，**不要起飞**。默认模式下，RViz **Fixed Frame = odom**，无需 `/map`、`/localization_ready` 或 map→odom。确认 `odom→base_link` TF 正常即可；Gazebo 真值位姿不进入算法。
+4. 等待 `/vio_health` 为 `VALID`、`/odom` 和深度点云连续发布。启动时 OpenVINS 可能短暂打印 `[ZUPT]: There are no IMU data to check for zero velocity with!!`；只有随后变为 `VALID` 且里程计持续发布，才能继续。若提示持续出现或 VIO 始终无效，按下文“运行检查”的 IMU/双目频率与时间戳步骤排查，**不要起飞**。默认模式下，确认 `/map` 已发布、`ros2 lifecycle get /map_server` 为 `active`，以及 `odom→base_link` TF 正常。RViz **Fixed Frame = map**；在 `MapOdomModify` 中依据飞机在场地中的实际位置和方向调整 `map→odom`，按「强制发布」确认 `/localization_ready=true`。起飞只依赖本地定位，但地图目标要求完成这一步；Gazebo 真值位姿不进入算法。
 
 5. 终端 C：单独启动 Nav2。与终端 B 使用相同的 ROS 工作空间和仿真时钟，等待 `/planner_server`、`/controller_server`、`/bt_navigator`、`/velocity_smoother` 都进入 `active` 后再打点；启动 Nav2 不需要重启终端 B。
 
@@ -151,7 +151,7 @@ src/
    PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true
    ```
 
-6. 确认 `/vio_health=VALID`、PX4 本地位置有效后发出起飞命令。深度点云暂时中断时仍可起飞并在 PX4 本地坐标悬停；VIO 或 PX4 本地定位失效时 `/takeoff` 会返回具体缺失项。无人机应先进入 `PRESTREAM`、`ARMING`、`TAKEOFF`，到约 2 m 后成为 `CRUISE`。**在 RViz 打 2D Goal Pose 前**，确认 `/obstacle_fresh=true`、Nav2 已激活，目标位于当前 `odom` 坐标系中。导航目标经 Nav2 规划、控制和速度平滑后交给 PX4。观察 `/navigation_state`、`/flight_state`、`/plan`、`/cmd_vel_smoothed`。
+6. 确认 `/vio_health=VALID`、PX4 本地位置有效后发出起飞命令。深度点云暂时中断时仍可起飞并在 PX4 本地坐标悬停；VIO 或 PX4 本地定位失效时 `/takeoff` 会返回具体缺失项。无人机应先进入 `PRESTREAM`、`ARMING`、`TAKEOFF`，到约 2 m 后成为 `CRUISE`。**在 RViz 打 2D Goal Pose 前**，确认 `/localization_ready=true`、`/obstacle_fresh=true`、Nav2 已激活，且飞机在先验地图上的位置与方向合理。导航目标经 Nav2 规划、控制和速度平滑后交给 PX4。观察 `/navigation_state`、`/flight_state`、`/plan`、`/cmd_vel_smoothed`。
 
    ```bash
    ros2 service call /takeoff std_srvs/srv/Trigger '{}'
@@ -161,11 +161,13 @@ src/
    ros2 service call /land std_srvs/srv/Trigger '{}'
    ```
 
-   RViz 的 2D Goal Pose 发布到 `/navigation_goal`，只能经过 `goal_manager` 进入 Nav2。也可用 `ros2 topic pub --once /navigation_goal geometry_msgs/msg/PoseStamped` 发点，默认 `header.frame_id` 必须为 `odom`；地图模式才用 `map`。`/navigation_state` 使用 transient local QoS，查看最近一次门控结果可运行 `ros2 topic echo --once /navigation_state --qos-durability transient_local`。目标方位不会强迫飞机先转向。默认模式没有先验禁飞格，目标需位于 60 m 滚动规划窗口内；可选地图模式才会检查先验禁飞格和地图边界。
+   RViz 的 2D Goal Pose 发布到 `/navigation_goal`，只能经过 `goal_manager` 进入 Nav2。也可用 `ros2 topic pub --once /navigation_goal geometry_msgs/msg/PoseStamped` 发点，默认 `header.frame_id` 必须为 `map`；纯 odom 模式才用 `odom`。`/navigation_state` 使用 transient local QoS，查看最近一次门控结果可运行 `ros2 topic echo --once /navigation_state --qos-durability transient_local`。目标方位不会强迫飞机先转向。默认地图模式会检查先验禁飞格和地图边界；纯 odom 模式的目标需位于 60 m 滚动规划窗口内。
 
-### 可选：先验 PGM 地图模式
+### 可选：纯 odom 模式
 
-需要用先验地图规划时，先在 `src/bringup/params/global_config.yaml` 修改 `map: rmuc_2025_prior.yaml` 这一行，选择 `src/bringup/map/` 中的地图 YAML。地图 YAML 的 `image:` 应指向同目录中实际存在的 PGM/PNG。也可以保留配置文件不变，在当次启动中用 `map_file:=/absolute/path/to/field.yaml` 覆盖。然后终端 B 使用 `PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true navigation_mode:=map`，终端 C 使用 `PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true navigation_mode:=map`；真机把 `sim:=false`、相机和飞控参数照真机流程填写。**两个入口必须使用同一种模式**。此时 RViz Fixed Frame 为 `map`，PGM 地图服务会启动，全局和局部代价地图都使用先验静态层。在 RViz 的 `MapOdomModify` 面板根据实测位置调整 `map→odom`，按「强制发布」，确认 `/localization_ready=true` 后再打点；目标的 `header.frame_id` 是 `map`。默认 odom 模式无需这些步骤。内置 PGM 只适合仓库所附 RMUC 仿真场，真机必须换成实测场地地图。
+如果暂时不使用先验地图，可在终端 B 的启动命令末尾加 `navigation_mode:=odom`，终端 C 同样加 `navigation_mode:=odom`。两个入口必须使用同一种模式。此时不启动地图服务和 `map→odom`，RViz Fixed Frame 为 `odom`，打点目标也使用 `odom`；无需手动地图对齐。全局规划窗口默认 60 m 且未观测区域视作可通行，局部代价地图仍用点云避障，因此不能预知视野外的墙。
+
+默认地图模式的地图选择在 `src/bringup/params/global_config.yaml` 的 `map:` 一行；地图 YAML 和其 `image:` 指向的 PGM/PNG 放进 `src/bringup/map/`。当次启动可用 `map_file:=/absolute/path/to/field.yaml` 覆盖。内置 PGM 只适合仓库所附 RMUC 仿真场，真机必须换成实测场地地图。
 
 ## 真机：标定、连接和运行
 
@@ -189,7 +191,7 @@ src/
 
 4. **相机驱动和话题检查。** 启动 `realsense2_camera` 的红外双目、深度、陀螺仪、加速度计和组合 IMU 流。用 `ros2 topic list`、`ros2 topic hz`、`ros2 topic echo --once .../camera_info` 核实左右目同步且与标定一致、IMU 频率和深度量纲。将下面的五个启动参数改为当前驱动的真实话题；相机断开或帧率过低时先修 USB 带宽与驱动。
 
-5. **无桨台架验证，再低风险试飞。** 默认使用 `odom` 导航，无需 PGM 或地图对齐。启动后检查 TF、/odom、/vio_health、/navigation_obstacles 和代价地图。确认 PX4 接受外部视觉且本地位置稳定后，才按场地规程做小范围起飞和本地悬停。移动飞机/转机头，确认 RViz 中 `odom→base_link` 的方向与真机一致，然后做近距离目标测试。全过程保留遥控人工接管。
+5. **无桨台架验证，再低风险试飞。** 默认使用先验 PGM 做全局规划；请换成实测场地地图。启动后检查 TF、/odom、/vio_health、/navigation_obstacles 和代价地图。确认 PX4 接受外部视觉且本地位置稳定后，才按场地规程做小范围起飞和本地悬停。移动飞机/转机头，确认 RViz 中 `odom→base_link` 的方向与真机一致；在 `MapOdomModify` 中对齐实测地图位置，确认 `/localization_ready=true` 后再做近距离地图目标测试。全过程保留遥控人工接管。
 
    ```bash
    cd ~/one_drone
@@ -227,20 +229,20 @@ ros2 topic hz /uav1/cam1/image_raw
 ros2 topic hz /uav1/imu0
 ros2 topic hz /uav1/odomimu
 ros2 topic echo --once /vio_health
-# 仅地图模式：ros2 topic echo --once /localization_ready std_msgs/msg/Bool --qos-durability transient_local
+ros2 topic echo --once /localization_ready std_msgs/msg/Bool --qos-durability transient_local
 ros2 topic echo --once /obstacle_fresh
 ros2 topic hz /navigation_obstacles
 ros2 topic echo --once /flight_state
 ros2 topic echo --once /flight_hold_reason std_msgs/msg/String --qos-durability transient_local
 ros2 topic echo --once /navigation_state
 ros2 run tf2_ros tf2_echo odom base_link
-# 仅地图模式：ros2 run tf2_ros tf2_echo map base_link
+ros2 run tf2_ros tf2_echo map base_link
 ```
 
-`HOLD` 时不会自动恢复导航；`/flight_hold_reason` 保留最近一次进入 `HOLD` 的原因。`/cmd_vel` 和 `/cmd_vel_smoothed` 有数据只证明 Nav2 在输出；`flight_bridge` 在 `HOLD` 时向 PX4 发位置保持设定值，不执行这些速度。默认 odom 模式不使用 `/localization_ready`；地图模式中该话题为 false 会阻止或取消地图目标，需要在 RViz 调整 map→odom 后确认。深度点云暂时中断时，`flight_bridge` 停止执行导航速度并使用 PX4 本地位置悬停，`goal_manager` 取消不安全的目标；点云恢复后需要重新打点。若曾发生 VIO 重置，原有 odom 目标已失效，需要确认定位恢复后重新打点；地图模式还需重新对齐。VIO 或 PX4 本地位置失效进入 `HOLD` 后排除原因，再调用 `/resume_navigation`。若 OpenVINS 的轨迹跳到几百米，停止试飞并录制左右目、IMU、`/uav1/odomimu`、`/vio_health` 和 PX4 本地位置/状态。地图模式中的黑色区域可能来自先验 PGM 或局部已观测障碍层，排查时分别看 RViz 的 `PriorMap`、`LocalCostmap` 和 `DepthObstacles`。默认 odom 模式只使用局部观测障碍。OpenVINS 的坐标原点任意，不能把仿真的 PX4 坐标直接当成地图坐标。
+`HOLD` 时不会自动恢复导航；`/flight_hold_reason` 保留最近一次进入 `HOLD` 的原因。`/cmd_vel` 和 `/cmd_vel_smoothed` 有数据只证明 Nav2 在输出；`flight_bridge` 在 `HOLD` 时向 PX4 发位置保持设定值，不执行这些速度。默认地图模式中 `/localization_ready=false` 会阻止或取消地图目标，需要在 RViz 调整 map→odom 后确认；纯 odom 模式不使用该话题。深度点云暂时中断时，`flight_bridge` 停止执行导航速度并使用 PX4 本地位置悬停，`goal_manager` 取消不安全的目标；点云恢复后需要重新打点。若曾发生 VIO 重置，原有目标已失效，需要确认定位恢复后重新打点；默认地图模式还需重新对齐。VIO 或 PX4 本地位置失效进入 `HOLD` 后排除原因，再调用 `/resume_navigation`。若 OpenVINS 的轨迹跳到几百米，停止试飞并录制左右目、IMU、`/uav1/odomimu`、`/vio_health` 和 PX4 本地位置/状态。默认地图模式中的黑色区域可能来自先验 PGM 或局部已观测障碍层，排查时分别看 RViz 的 `PriorMap`、`LocalCostmap` 和 `DepthObstacles`。可选纯 odom 模式只使用局部观测障碍。OpenVINS 的坐标原点任意，不能把仿真的 PX4 坐标直接当成地图坐标。
 
 启动阶段的 `[init]: not enough feats to compute disp: 0,46 < 15` 表示初始化窗口前半段缺少可持续跟踪的特征；短暂出现后若 `/vio_health` 变为 `VALID`、`/uav1/odomimu` 连续发布，则初始化已完成。`[ZUPT]: There are no IMU data to check for zero velocity with!!` 是一次零速更新所需的**相机时间区间内**少于两条 IMU 样本，OpenVINS 会跳过这次零速更新；它本身不能证明整个 IMU 话题没有发布。`No IMU measurements to propagate with` 也是特定时间区间的样本不足。若持续出现或 `/vio_health` 不能变成 `VALID`，在算法运行时检查 `ros2 topic hz /uav1/imu0`（预期约 200 Hz）、`ros2 topic hz /uav1/cam0/image_raw` 和 `/uav1/cam1/image_raw`（各约 30 Hz），再用 `ros2 topic echo --once /uav1/imu0 --field header.stamp` 和相机的 `header.stamp` 核对是否处于同一仿真时间；同时确认终端 B 已 source 终端 A 生成的 `/tmp/one_drone_gz_env.sh`，且没有多套 Gazebo/PX4 残留。频率正常仍持续报错时，录制 `/clock`、双目和 IMU 供逐帧核对时间戳；不要靠关闭 ZUPT 掩盖时间同步问题。仿真退出后应由启动脚本回收 Gazebo、PX4 和 Agent；不要同时开启多套同名仿真。
 
 ## 版本与边界
 
-`setup_env.sh` 固定 MicoAir PX4 1.14.3 提交、`px4_msgs` release/1.14 提交和 OpenVINS 提交，以减少消息协议及行为差异。Gazebo 物理与图像模型不是实物传感器的完整复制；仿真跑通只证明该链路在当前模型上工作。当前固定高度 2D 规划不会规划升降绕障；默认 odom 模式不会预知未观测障碍，两种模式都不支持移动障碍预判或 VIO 完全失效后的自主返航。多机、视觉目标识别和任务决策留待后续独立开发。
+`setup_env.sh` 固定 MicoAir PX4 1.14.3 提交、`px4_msgs` release/1.14 提交和 OpenVINS 提交，以减少消息协议及行为差异。Gazebo 物理与图像模型不是实物传感器的完整复制；仿真跑通只证明该链路在当前模型上工作。当前固定高度 2D 规划不会规划升降绕障；可选纯 odom 模式不会预知未观测障碍，两种模式都不支持移动障碍预判或 VIO 完全失效后的自主返航。多机、视觉目标识别和任务决策留待后续独立开发。

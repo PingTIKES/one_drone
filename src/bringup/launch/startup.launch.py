@@ -56,7 +56,7 @@ def generate_launch_description():
                  ('map_file', ''), ('cam0_topic', ''), ('cam1_topic', ''),
                  ('imu_topic', ''), ('depth_topic', ''),
                  ('depth_info_topic', ''), ('depth_scale', '0.001'),
-                 ('navigation_mode', 'odom')]
+                 ('navigation_mode', 'map')]
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value=value)
           for name, value in arguments],

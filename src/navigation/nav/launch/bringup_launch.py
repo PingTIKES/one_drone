@@ -30,7 +30,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('navigation_mode', default_value='odom'),
+        DeclareLaunchArgument('navigation_mode', default_value='map'),
         DeclareLaunchArgument('params_file', default_value=''),
         DeclareLaunchArgument('autostart', default_value='true'),
         OpaqueFunction(function=include_navigation),

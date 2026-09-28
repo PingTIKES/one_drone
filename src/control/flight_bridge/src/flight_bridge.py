@@ -140,8 +140,6 @@ class FlightBridge(Node):
             missing.append('fresh PX4 local position')
         if not self.vio_valid():
             missing.append('VALID OpenVINS')
-        if not self.depth_valid():
-            missing.append('fresh depth obstacles')
         response.success = not missing
         response.message = ('Starting PX4 Offboard takeoff' if response.success else
                             'Takeoff blocked: ' + ', '.join(missing))
@@ -155,10 +153,10 @@ class FlightBridge(Node):
 
     def resume(self, _request, response):
         response.success = (self.state == 'HOLD' and self.pose_valid() and self.vio_valid() and
-                            self.depth_valid() and self.status is not None and
+                            self.status is not None and
                             self.status.nav_state == NAV_OFFBOARD)
-        response.message = ('Flight control resumed; confirm map pose before a new 2D goal' if response.success else
-                            'Waiting for stable VIO, depth and PX4 Offboard')
+        response.message = ('Flight control resumed; confirm map pose and depth before a new 2D goal' if response.success else
+                            'Waiting for stable VIO, PX4 position and Offboard')
         if response.success:
             self.state = 'CRUISE'
             self.cmd_at = -math.inf
@@ -236,8 +234,6 @@ class FlightBridge(Node):
         now = self.now()
         if self.state in ('TAKEOFF', 'CRUISE') and (not self.pose_valid() or not self.vio_valid()):
             self.enter_hold('Position or OpenVINS stale; holding for manual recovery')
-        if self.state == 'CRUISE' and not self.depth_valid():
-            self.enter_hold('Depth stale; holding for manual recovery')
         if self.state == 'PRESTREAM':
             if not self.pose_valid() or not self.vio_valid():
                 self.state = 'IDLE'
@@ -271,9 +267,13 @@ class FlightBridge(Node):
             else:
                 self.takeoff_reached_since = None
         elif self.state == 'CRUISE':
-            if not self.localized and self.pose_valid():
-                # Manual map alignment is only required for map-frame goals.
-                # Without it, hold position in PX4's local frame.
+            if (not self.localized or not self.depth_valid()) and self.pose_valid():
+                # Map alignment and depth are required to follow a map-frame
+                # path, not to maintain altitude at the current PX4 position.
+                if self.velocity_active:
+                    p = self.position
+                    self.hold_target = (p.x, p.y, p.z)
+                    self.cmd_at = -math.inf
                 self.send_position(self.hold_target)
             elif 0 <= now - self.cmd_at <= float(self.p('command_timeout')):
                 self.send_velocity(self.cmd)

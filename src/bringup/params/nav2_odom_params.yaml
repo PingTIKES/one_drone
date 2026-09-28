@@ -142,14 +142,14 @@ planner_server:
       motion_model_for_search: DUBIN
       angle_quantization_bins: 72
       analytic_expansion_ratio: 3.5
-      analytic_expansion_max_length: 15.0
-      minimum_turning_radius: 3.0
+      analytic_expansion_max_length: 4.0
+      minimum_turning_radius: 0.8
       reverse_penalty: 2.0
       change_penalty: 0.0
       non_straight_penalty: 1.2
       cost_penalty: 2.0
       retrospective_penalty: 0.015
-      lookup_table_size: 15.0
+      lookup_table_size: 8.0
       cache_obstacle_heuristic: true
       smooth_path: true
 velocity_smoother:

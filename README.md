@@ -54,7 +54,7 @@ RViz 2D Goal Pose ──> goal_manager ──> Smac Hybrid-A* + Regulated Pure P
 
 默认 `map` 模式下，`modify_map_to_odom` 是 `map→odom` 的唯一发布者，启动值直接读取 `src/rviz/modify_map_to_odom/config/config.yaml`；`odom→base_link` **只由 OpenVINS 发布**。导航和起飞不等待任何 `map→odom` 人工确认话题。RViz 面板可在运行时调整该变换；不使用面板时，配置文件中的值就是启动后的地图关系。仿真中的 Gazebo 真值位姿不进入算法。跨机使用时须保证节点处于同一 DDS 域，可用 `ros2 run tf2_ros tf2_echo map odom` 查看实际 TF。
 
-规划是 2D 的，默认巡航高度 2 m。运行时的 `/navigation_obstacles` 是深度点云经过机体同高切片、稀疏化后的点云。默认 `map` 模式加载 1.5–2.5 m 高度层的先验 PGM；全局代价地图在 `map` 中使用先验静态层与膨胀层，局部代价地图在 `odom` 中只使用点云障碍层与膨胀层。点云只影响局部避障，不改写先验全局路径。可选纯 `odom` 模式使用 60 m 的滚动自由全局窗口；该模式看不到的障碍物不会进入全局规划，不能把未知空间当作已验证的安全空间。Nav2 行为树只做路径规划和路径跟踪，不包含 Spin、BackUp、Wait 等恢复行为；`NavigateThroughPoses` 的兼容树也使用同样的最小流程。第一阶段采用前视相机运动约束：Smac Hybrid-A* 使用只允许前进的 `DUBIN` 模型和 3 m 最小转弯半径生成曲线路径，Regulated Pure Pursuit 同时输出前进速度和偏航角速度，关闭原地朝向对齐并禁止倒车、横移。曲率较大或接近障碍物时自动降速，开阔直线速度上限为 1.5 m/s，偏航角速度上限为 0.5 rad/s。`flight_bridge` 再执行一次相同的方向限制，防止错误参数把盲区速度发给 PX4。相机看不到的障碍物不会凭空出现；默认地图模式用 PGM 表达静态场地障碍。
+规划是 2D 的，默认巡航高度 2 m。运行时的 `/navigation_obstacles` 是深度点云经过机体同高切片、稀疏化后的点云。默认 `map` 模式加载 1.5–2.5 m 高度层的先验 PGM；全局代价地图在 `map` 中使用先验静态层与膨胀层，局部代价地图在 `odom` 中只使用点云障碍层与膨胀层。点云只影响局部避障，不改写先验全局路径。可选纯 `odom` 模式使用 60 m 的滚动自由全局窗口；该模式看不到的障碍物不会进入全局规划，不能把未知空间当作已验证的安全空间。Nav2 行为树只做路径规划和路径跟踪，不包含 Spin、BackUp、Wait 等恢复行为；`NavigateThroughPoses` 的兼容树也使用同样的最小流程。第一阶段采用前视相机运动约束：Smac Hybrid-A* 使用只允许前进的 `DUBIN` 模型生成曲线路径，规划器允许 0.8 m 的低速起步转弯；Regulated Pure Pursuit 同时输出前进速度和偏航角速度，关闭原地朝向对齐并禁止倒车、横移。曲率半径小于 3 m 或接近障碍物时自动降速，开阔直线速度上限为 1.5 m/s，偏航角速度上限为 0.5 rad/s。`flight_bridge` 再执行一次相同的方向限制，防止错误参数把盲区速度发给 PX4。相机看不到的障碍物不会凭空出现；默认地图模式用 PGM 表达静态场地障碍。
 
 ## 目录、功能包与接口
 

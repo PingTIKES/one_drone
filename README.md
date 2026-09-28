@@ -6,7 +6,7 @@
 
 ## 当前启动入口
 
-包名已随目录重组更新。启动算法请使用 `flight_bringup`；旧命令中的 `one_drone_bringup` 已删除，继续使用会报 `Package 'one_drone_bringup' not found`。
+启动分两步：`bringup` 负责相机、VIO、点云、地图、飞控接口与 RViz；地图和定位就绪后，再单独启动 `nav` 中的官方 Nav2 planner、controller、BT navigator 和 velocity smoother。旧包名 `flight_bringup`、`one_drone_bringup` 已不再使用。
 
 首次获取此版本或切换自旧目录结构后，先按下文安装依赖并在仓库根目录运行 `colcon build --symlink-install`。已有环境且已构建时，直接运行：
 
@@ -16,7 +16,18 @@ source /opt/ros/humble/setup.bash
 source ~/catkin_ws_ov/install/setup.bash
 source ~/one_drone/install/setup.bash
 source /tmp/one_drone_gz_env.sh
-PYTHONNOUSERSITE=1 ros2 launch flight_bringup navigation.launch.py sim:=true rviz:=true
+PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
+```
+
+另开终端，加载同一套 ROS 工作空间和仿真时钟环境后运行：
+
+```bash
+cd ~/one_drone
+source /opt/ros/humble/setup.bash
+source ~/catkin_ws_ov/install/setup.bash
+source ~/one_drone/install/setup.bash
+source /tmp/one_drone_gz_env.sh
+PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true
 ```
 
 完整仿真和真机流程见下文。
@@ -49,12 +60,12 @@ Qt 共享内存在同一台电脑上传递面板调整；面板同时发布 `/ma
 
 ## 目录、功能包与接口
 
-`src` 第一层按职责分为 `bringup/`、`perception/`、`localization/`、`navigation/`、`control/` 和 `rviz/`。每个目录内再放 ROS 2 功能包。Python 包的实现直接位于该包的 `src/`，没有同名的第二层源码目录；C++ 包也使用 `src/` 保存实现。`bringup/flight_bringup/launch/navigation.launch.py` 是完整导航入口；节点先逐个定义，文件末尾的启动清单逐行列出各节点，便于查看或注释。Nav2 参数、先验地图、行为树和 RViz 显示配置集中在 `bringup/flight_bringup/`。
+`src` 第一层按职责分为 `bringup/`、`perception/`、`localization/`、`navigation/`、`control/` 和 `rviz/`。`bringup/` 本身就是 ROS 2 包，直接包含 `launch/`、`map/`、`params/`、`rviz/`；其余目录内放对应功能包。Python 包的实现位于包内 `src/`。`bringup/launch/startup.launch.py` 在末尾逐行列出启动节点，方便上场时查看或注释；`navigation/nav/launch/bringup_launch.py` 是独立的 Nav2 入口。
 
 ```text
 src/
-├── bringup/flight_bringup/           # 一键启动和上场配置
-│   ├── launch/navigation.launch.py   # 文件末尾逐行列出启动节点
+├── bringup/                         # 传感器、定位、地图、控制启动和上场配置
+│   ├── launch/startup.launch.py      # 文件末尾逐行列出启动节点，不启动 Nav2
 │   ├── params/nav2_params.yaml       # planner、controller、costmap、smoother
 │   ├── map/                        # 先验 PGM/YAML
 │   ├── behavior_trees/             # Nav2 行为树
@@ -67,6 +78,7 @@ src/
 │   ├── vio_bridge/                   # OpenVINS 到里程计及 PX4
 │   └── map_alignment/                # 地图对齐就绪门控
 ├── navigation/
+│   ├── nav/                          # 单独启动官方 Nav2 功能包
 │   ├── obstacle_filter/              # 飞行高度障碍切片
 │   └── goal_manager/                 # 目标门控
 ├── control/flight_bridge/            # 平滑速度转 PX4 Offboard 指令
@@ -84,12 +96,13 @@ src/
 | `localization/map_alignment` | 手动定位就绪和 VIO 重置门控 | `/map_odom/applied`、VIO 诊断 | `/localization_ready`、`/map_odom/current` |
 | `navigation/obstacle_filter` | 巡航高度障碍切片 | `/uav1/obstacles`、里程计 | `/navigation_obstacles` |
 | `navigation/goal_manager` | 目标和定位、感知状态门控 | `/goal_pose`、定位与避障状态 | Nav2 `NavigateToPose` 目标 |
-| `bringup/flight_bringup` | 一键启动算法和 Nav2，集中管理 Nav2 参数、先验地图、行为树、RViz 配置 | YAML 参数、PGM 地图、以上话题 | `/map`、`/plan`、`/cmd_vel_smoothed`、启动清单 |
+| `bringup` | 启动感知、定位、地图服务、飞控接口、RViz；集中管理上场配置 | YAML 参数、PGM 地图、传感器话题 | `/map`、`/odom`、`/navigation_obstacles`、启动清单 |
+| `navigation/nav` | 单独启动官方 Nav2 planner、controller、BT navigator、velocity smoother | `/map`、TF、`/odom`、`/navigation_obstacles`、目标 | `/plan`、`/cmd_vel`、`/cmd_vel_smoothed` |
 | `control/flight_bridge` | 起飞/悬停/降落、机体系 FLU 到 PX4 本地 NED 速度转换 | `/cmd_vel_smoothed`、PX4 本地状态 | PX4 Offboard 设定值、`/flight_state` |
 | `rviz/modify_map_to_odom` | 哨兵式 map→odom TF 发布节点 | 共享内存、`/map_odom/set` | `/tf` 中的 `map→odom`、`/map_odom/applied` |
 | `rviz/rviz_tf_shift` | RViz 手动地图对齐面板 | 操作者输入、导航话题 | `/map_odom/set` |
 
-配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；Nav2 planner、controller、costmap、inflation 和 velocity smoother 的参数集中在 `src/bringup/flight_bringup/params/nav2_params.yaml`。赛场地图放进 `src/bringup/flight_bringup/map/`，启动时用 `map_file:=/绝对路径/地图.yaml` 指定；RViz 默认配置是 `src/bringup/flight_bringup/rviz/navigation.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启 launch；新增配置文件或修改安装规则时重新构建。核心运行参数无需编辑 Python 源码。
+配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；Nav2 planner、controller、costmap、inflation 和 velocity smoother 的参数集中在 `src/bringup/params/nav2_params.yaml`，由单独的 `nav` 启动文件读取。赛场地图放进 `src/bringup/map/`，启动 `bringup` 时用 `map_file:=/绝对路径/地图.yaml` 指定；RViz 默认配置是 `src/bringup/rviz/navigation.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启相关 launch；新增配置文件或修改安装规则时重新构建。核心运行参数无需编辑 Python 源码。
 
 ## 仿真：从零运行
 
@@ -111,7 +124,7 @@ src/
    bash scripts/start_algorithm_sim.sh
    ```
 
-3. 终端 B：启动全部算法、Nav2 和 RViz。仿真时钟环境文件由终端 A 生成。
+3. 终端 B：启动感知、定位、地图、飞控接口和 RViz。仿真时钟环境文件由终端 A 生成。
 
    ```bash
    cd ~/one_drone
@@ -119,12 +132,23 @@ src/
    source ~/catkin_ws_ov/install/setup.bash
    source ~/one_drone/install/setup.bash
    source /tmp/one_drone_gz_env.sh
-   PYTHONNOUSERSITE=1 ros2 launch flight_bringup navigation.launch.py sim:=true rviz:=true
+   PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
    ```
 
-4. 等待 `/vio_health` 为 `VALID`、`/odom` 和深度点云连续发布。启动时 OpenVINS 可能短暂打印 `[ZUPT]: There are no IMU data to check for zero velocity with!!`；只有随后变为 `VALID` 且里程计持续发布，才能继续。若提示持续出现或 VIO 始终无效，按下文“运行检查”的 IMU/双目频率与时间戳步骤排查，**不要起飞**。在 RViz **Fixed Frame = map**，用 `MapOdomModify` 面板调 X/Y/Rotation，直到 `base_link` 在先验地图上的位置、朝向与 Gazebo 中的飞机一致（默认 Gazebo 出生位置约 x=1.3、y=9.4）。最后按一次「强制发布」确认定位，检查 `/localization_ready` 为 `true` 及 `map→odom→base_link` TF 连通。这一步是人工全局重定位，不等同于 VIO 初始化。
+4. 等待 `/vio_health` 为 `VALID`、`/odom`、`/map` 和深度点云连续发布，且 `ros2 lifecycle get /map_server` 显示 `active`。启动时 OpenVINS 可能短暂打印 `[ZUPT]: There are no IMU data to check for zero velocity with!!`；只有随后变为 `VALID` 且里程计持续发布，才能继续。若提示持续出现或 VIO 始终无效，按下文“运行检查”的 IMU/双目频率与时间戳步骤排查，**不要起飞**。在 RViz **Fixed Frame = map**，用 `MapOdomModify` 面板调 X/Y/Rotation，直到 `base_link` 在先验地图上的位置、朝向与 Gazebo 中的飞机一致（默认 Gazebo 出生位置约 x=1.3、y=9.4）。最后按一次「强制发布」确认定位，检查 `/localization_ready` 为 `true` 及 `map→odom→base_link` TF 连通。这一步是人工全局重定位，不等同于 VIO 初始化。
 
-5. 确认 `/localization_ready=true`、`/vio_health=VALID`、深度障碍持续刷新后发出起飞命令。若地图尚未在 RViz 确认，或深度失效，`/takeoff` 会返回具体缺失项，不会先起飞再立即进入 `HOLD`。无人机应先进入 `PRESTREAM`、`ARMING`、`TAKEOFF`，到约 2 m 后成为 `CRUISE`。在 RViz 点击 **2D Goal Pose** 打一个空旷目标点，导航目标经 Nav2 规划、控制和速度平滑后交给 PX4。观察 `/navigation_state`、`/flight_state`、`/plan`、`/cmd_vel_smoothed`。
+5. 终端 C：单独启动 Nav2。与终端 B 使用相同的 ROS 工作空间和仿真时钟，等待 `/planner_server`、`/controller_server`、`/bt_navigator`、`/velocity_smoother` 都进入 `active` 后再打点；启动 Nav2 不需要重启终端 B。
+
+   ```bash
+   cd ~/one_drone
+   source /opt/ros/humble/setup.bash
+   source ~/catkin_ws_ov/install/setup.bash
+   source ~/one_drone/install/setup.bash
+   source /tmp/one_drone_gz_env.sh
+   PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true
+   ```
+
+6. 确认 `/localization_ready=true`、`/vio_health=VALID`、深度障碍持续刷新后发出起飞命令。若地图尚未在 RViz 确认，或深度失效，`/takeoff` 会返回具体缺失项，不会先起飞再立即进入 `HOLD`。无人机应先进入 `PRESTREAM`、`ARMING`、`TAKEOFF`，到约 2 m 后成为 `CRUISE`。在 RViz 点击 **2D Goal Pose** 打一个空旷目标点，导航目标经 Nav2 规划、控制和速度平滑后交给 PX4。观察 `/navigation_state`、`/flight_state`、`/plan`、`/cmd_vel_smoothed`。
 
    ```bash
    ros2 service call /takeoff std_srvs/srv/Trigger '{}'
@@ -165,7 +189,7 @@ src/
    source /opt/ros/humble/setup.bash
    source ~/catkin_ws_ov/install/setup.bash
    source ~/one_drone/install/setup.bash
-   PYTHONNOUSERSITE=1 ros2 launch flight_bringup navigation.launch.py \
+   PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
      sim:=false rviz:=true depth_source:=hardware \
      calibration_dir:=/home/ubuntu22/one_drone_calibration \
      map_file:=/absolute/path/to/field.yaml \
@@ -175,6 +199,16 @@ src/
      imu_topic:=/actual/synchronized/imu \
      depth_topic:=/actual/depth/image_rect_raw \
      depth_info_topic:=/actual/depth/camera_info
+   ```
+
+   地图服务和定位正常后，在另一终端加载同样的三个 ROS 环境，并单独启动 Nav2：
+
+   ```bash
+   cd ~/one_drone
+   source /opt/ros/humble/setup.bash
+   source ~/catkin_ws_ov/install/setup.bash
+   source ~/one_drone/install/setup.bash
+   PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=false
    ```
 
    `target_system` 和话题均为**示例占位**，运行前按真机修改。真机深度使用硬件深度数据，但 OpenVINS 仍使用左右红外灰度图和 IMU。测距的 `depth_scale` 默认 0.001（16 位毫米）；若驱动发布 32FC1 米，节点按米解释。飞行命令与仿真相同：`/takeoff`、RViz 2D Goal Pose、`/land`。失效进入 `HOLD` 后排除原因、重新定位，再调用 `/resume_navigation` 并重新打点。

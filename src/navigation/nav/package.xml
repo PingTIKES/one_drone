@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>nav</name>
+  <version>0.1.0</version>
+  <description>Separate launch for the official Nav2 navigation servers</description>
+  <maintainer email="team@example.com">PingTIKES</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>bringup</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav2_common</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

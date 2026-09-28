@@ -1,4 +1,4 @@
-"""Single-drone algorithm: Gazebo supplies sensors, OpenVINS/Nav2/PX4 fly."""
+"""Start sensing, localization, map, flight control and RViz; launch Nav2 separately."""
 from pathlib import Path
 import tempfile
 
@@ -54,7 +54,7 @@ def setup(context):
         raise ValueError('hardware needs explicit measured camera, IMU and depth topics')
     target_system = int(arg('target_system') or '2')
     px4_ns = arg('px4_ns') or ('px4_1' if sim else '/')
-    bringup = Path(get_package_share_directory('flight_bringup'))
+    bringup = Path(get_package_share_directory('bringup'))
     if sim:
         cfg_dir = Path(get_package_share_directory('vio_bridge')) / 'config/openvins_sim'
         config, cameras, imu = validate_config(cfg_dir / 'estimator_config.yaml')
@@ -181,49 +181,21 @@ def setup(context):
         name='flight_bridge', output='screen',
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
                     {'target_system': target_system, 'px4_ns': px4_ns}])
-    nav = yaml.safe_load((bringup / 'params/nav2_params.yaml').read_text())
-    for name, section in nav.items():
-        if name in ('local_costmap', 'global_costmap'):
-            section[name]['ros__parameters']['use_sim_time'] = sim
-        else:
-            section['ros__parameters']['use_sim_time'] = sim
-    nav_file = work / 'nav2_params.yaml'
-    nav_file.write_text(yaml.safe_dump(nav, sort_keys=False))
     map_file = arg('map_file') or str(bringup / 'map/rmuc_2025_prior.yaml')
     map_server = Node(
         package='nav2_map_server', executable='map_server',
         name='map_server', output='screen',
-        parameters=[str(nav_file), {'yaml_filename': map_file}])
-    planner_server = Node(
-        package='nav2_planner', executable='planner_server',
-        name='planner_server', output='screen', parameters=[str(nav_file)])
-    controller_server = Node(
-        package='nav2_controller', executable='controller_server',
-        name='controller_server', output='screen', parameters=[str(nav_file)])
-    bt_navigator = Node(
-        package='nav2_bt_navigator', executable='bt_navigator',
-        name='bt_navigator', output='screen',
-        parameters=[str(nav_file),
-                    {'default_nav_to_pose_bt_xml': str(bringup / 'behavior_trees/navigate.xml'),
-                     'default_nav_through_poses_bt_xml': str(bringup / 'behavior_trees/unused_through_poses.xml')}])
-    velocity_smoother = Node(
-        package='nav2_velocity_smoother', executable='velocity_smoother',
-        name='velocity_smoother', output='screen', parameters=[str(nav_file)])
-    # Keep this list aligned with the Nav2 nodes enabled below.
-    lifecycle_manager_navigation = Node(
+        parameters=[common, {'yaml_filename': map_file}])
+    lifecycle_manager_map = Node(
         package='nav2_lifecycle_manager', executable='lifecycle_manager',
-        name='lifecycle_manager_navigation', output='screen',
-        parameters=[common, {'autostart': True,
-                             'node_names': ['map_server', 'planner_server',
-                                            'controller_server', 'bt_navigator',
-                                            'velocity_smoother']}])
+        name='lifecycle_manager_map', output='screen',
+        parameters=[common, {'autostart': True, 'node_names': ['map_server']}])
     one_drone_rviz = Node(
         package='rviz2', executable='rviz2', name='one_drone_rviz',
         output='screen', condition=IfCondition(arg('rviz').lower()),
         parameters=[common], arguments=['-d', str(bringup / 'rviz/navigation.rviz')])
 
-    # Startup inventory. Comment a line to disable that node; if disabling a
-    # Nav2 lifecycle node, remove its name from node_names above as well.
+    # Startup inventory. Nav2 planner/controller/smoother start in nav/bringup_launch.py.
     return LaunchDescription([
         gazebo_sensors,              # sim: Gazebo camera, IMU, clock bridge
         sensor_relay,                # hardware: measured camera/IMU topics
@@ -238,10 +210,6 @@ def setup(context):
         goal_manager,                # RViz goal -> Nav2 action
         flight_bridge,               # cmd_vel_smoothed -> PX4 Offboard
         map_server,                  # prior PGM map
-        planner_server,              # Nav2 global planner
-        controller_server,           # Nav2 path controller
-        bt_navigator,                # Nav2 behavior tree
-        velocity_smoother,           # Nav2 speed and acceleration limits
-        lifecycle_manager_navigation,
+        lifecycle_manager_map,       # activate prior map independently
         one_drone_rviz,
     ]).entities

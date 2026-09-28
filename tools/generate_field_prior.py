@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFilter
 ROOT = Path(__file__).resolve().parents[1]
 MESH = Path(os.environ.get('RM27_FIELD_MESH', ROOT / 'worlds/models/rmuc_2025/meshes/rmuc_2025.stl'))
 WORLD = ROOT / 'worlds/rmuc_2025_3m_vio_columns.sdf'
-OUT = ROOT / 'src/bringup/flight_bringup/map/rmuc_2025_prior.pgm'
+OUT = ROOT / 'src/bringup/map/rmuc_2025_prior.pgm'
 RES = .1
 ORIGIN = (-10., -16.)
 WIDTH, HEIGHT = 200, 320

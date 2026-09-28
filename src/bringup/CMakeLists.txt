@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(flight_bringup)
+project(bringup)
 find_package(ament_cmake REQUIRED)
 install(DIRECTORY launch params map rviz behavior_trees DESTINATION share/${PROJECT_NAME})
 ament_package()

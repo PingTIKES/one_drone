@@ -16,7 +16,9 @@ Visualization Manager:
     - Class: rviz_default_plugins/Map
       Name: PriorMap
       Enabled: true
-      Alpha: 0.65
+      Alpha: 1
+      Color Scheme: map
+      Draw Behind: true
       Topic:
         Value: /map
         Durability Policy: Transient Local
@@ -26,6 +28,8 @@ Visualization Manager:
       Name: LocalCostmap
       Enabled: false
       Alpha: 0.6
+      Color Scheme: costmap
+      Draw Behind: false
       Topic:
         Value: /local_costmap/costmap
         Durability Policy: Volatile

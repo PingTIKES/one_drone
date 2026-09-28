@@ -8,6 +8,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>ov_msckf</exec_depend>
   <exec_depend>vio_bridge</exec_depend>
   <exec_depend>camera_stream</exec_depend>

@@ -9,7 +9,8 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
+from launch_ros.descriptions import ComposableNode
 
 from vio_bridge.calibration import read_yaml, transform, validate_config, write_opencv_yaml
 from vio_bridge.vio_geometry import quaternion
@@ -211,17 +212,33 @@ def setup(context):
         name='flight_bridge', output='screen',
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
                     {'target_system': target_system, 'px4_ns': px4_ns}])
+    # Prior-map selection is centralized in bringup/params/global_config.yaml.
+    # Set its `map:` value to any YAML stored in bringup/map, or pass an
+    # absolute YAML once with map_file:=... . The YAML selects its PGM image.
     map_file = selected_map_file(bringup, arg('map_file')) if use_prior_map else ''
-    map_server = Node(
-        package='nav2_map_server', executable='map_server',
-        name='map_server', output='screen',
+    container = ComposableNodeContainer(
+        name='container', namespace='', package='rclcpp_components',
+        executable='component_container', output='screen',
         condition=IfCondition('true' if use_prior_map else 'false'),
-        parameters=[common, {'yaml_filename': map_file}])
-    lifecycle_manager_map = Node(
-        package='nav2_lifecycle_manager', executable='lifecycle_manager',
-        name='lifecycle_manager_map', output='screen',
+        parameters=[common])
+    load_map_server = LoadComposableNodes(
+        target_container='container',
         condition=IfCondition('true' if use_prior_map else 'false'),
-        parameters=[common, {'autostart': True, 'node_names': ['map_server']}])
+        composable_node_descriptions=[
+            ComposableNode(
+                package='nav2_map_server',
+                plugin='nav2_map_server::MapServer',
+                name='map_server',
+                parameters=[common, {'yaml_filename': map_file}]),
+            ComposableNode(
+                package='nav2_lifecycle_manager',
+                plugin='nav2_lifecycle_manager::LifecycleManager',
+                name='lifecycle_manager_localization',
+                parameters=[common, {
+                    'autostart': True,
+                    'node_names': ['map_server'],
+                }]),
+        ])
     one_drone_rviz = Node(
         package='rviz2', executable='rviz2', name='one_drone_rviz',
         output='screen', condition=IfCondition(arg('rviz').lower()),
@@ -242,7 +259,7 @@ def setup(context):
         height_slice,                # depth cloud at flight height
         goal_manager,                # RViz goal -> Nav2 action
         flight_bridge,               # cmd_vel_smoothed -> PX4 Offboard
-        map_server,                  # prior PGM map
-        lifecycle_manager_map,       # activate prior map independently
+        container,                   # composable map-server container
+        load_map_server,             # prior PGM map + lifecycle manager
         one_drone_rviz,
     ]).entities

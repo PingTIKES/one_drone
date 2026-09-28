@@ -16,7 +16,9 @@ from std_srvs.srv import Trigger
 from px4_msgs.msg import (OffboardControlMode, TrajectorySetpoint,
                           VehicleCommand, VehicleLocalPosition, VehicleStatus)
 
-from flight_bridge.velocity_math import body_flu_to_ned, limit_horizontal
+from flight_bridge.velocity_math import (body_flu_to_ned,
+                                         constrain_body_velocity,
+                                         required_forward_clearance)
 
 
 NAV_OFFBOARD = 14
@@ -27,25 +29,38 @@ class FlightBridge(Node):
     def __init__(self):
         super().__init__('flight_bridge')
         defaults = dict(px4_ns='px4_1', target_system=2, takeoff_altitude=2.,
-                        max_horizontal_speed=.5, max_yaw_rate=.6,
+                        max_horizontal_speed=1.5, max_yaw_rate=.8,
+                        allow_reverse=False, max_lateral_speed=0.,
+                        reaction_time=.5, assumed_braking_deceleration=.6,
+                        safety_margin=.5, verified_forward_range=5.,
                         command_timeout=.3, pose_timeout=.5, vio_timeout=.5,
-                        depth_heartbeat_timeout=.3, depth_grace=.8,
+                        vio_stable_time=1., depth_heartbeat_timeout=.3, depth_grace=.55,
                         takeoff_tolerance=.2, takeoff_stable_time=1.)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         self.p = lambda key: self.get_parameter(key).value
+        required_clearance = required_forward_clearance(
+            float(self.p('max_horizontal_speed')), float(self.p('reaction_time')),
+            float(self.p('assumed_braking_deceleration')), float(self.p('safety_margin')))
+        if required_clearance > float(self.p('verified_forward_range')):
+            raise ValueError(
+                f'configured cruise needs {required_clearance:.2f} m forward clearance, '
+                f'but verified_forward_range is {float(self.p("verified_forward_range")):.2f} m')
+        self.required_clearance = required_clearance
         self.state = 'IDLE'
         self.position = None
         self.status = None
         self.pose_at = self.vio_at = self.cmd_at = self.obstacle_at = -math.inf
         self.last_obstacle_good = -math.inf
         self.vio_ok = self.obstacle_ok = False
+        self.vio_valid_since = None
         self.cmd = Twist()
         self.takeoff_target = self.hold_target = None
         self.takeoff_reached_since = None
         self.prestream_count = 0
         self.last_reset = None
         self.velocity_active = False
+        self.command_clamped = False
         px4_ns = str(self.p('px4_ns')).strip('/')
         px4 = '/' + (px4_ns + '/' if px4_ns else '') + 'fmu/'
         qos = qos_profile_sensor_data
@@ -56,7 +71,11 @@ class FlightBridge(Node):
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.hold_reason_pub = self.create_publisher(String, 'flight_hold_reason', latched)
+        self.safety_pub = self.create_publisher(String, 'flight_safety_status', latched)
         self.hold_reason_pub.publish(String(data=''))
+        self.safety_pub.publish(String(
+            data=f'FORWARD_ONLY max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
+                 f'required_clearance={self.required_clearance:.2f}m'))
         self.create_subscription(VehicleLocalPosition, px4 + 'out/vehicle_local_position', self.on_position, qos)
         self.create_subscription(VehicleStatus, px4 + 'out/vehicle_status', self.on_status, qos)
         self.create_subscription(Twist, 'cmd_vel_smoothed', self.on_velocity, 10)
@@ -66,6 +85,7 @@ class FlightBridge(Node):
         self.create_service(Trigger, 'resume_navigation', self.resume)
         self.create_service(Trigger, 'land', self.land)
         self.create_timer(.05, self.tick)
+        self.create_timer(1., self.publish_safety_status)
 
     def now(self):
         return self.get_clock().now().nanoseconds * 1e-9
@@ -82,11 +102,27 @@ class FlightBridge(Node):
     def vio_valid(self):
         return self.vio_ok and 0 <= self.now() - self.vio_at <= float(self.p('vio_timeout'))
 
+    def vio_stable(self):
+        return (self.vio_valid() and self.vio_valid_since is not None and
+                self.now() - self.vio_valid_since >= float(self.p('vio_stable_time')))
+
     def depth_valid(self):
         # Software stereo can occasionally skip a frame. Require a recent
         # positive depth heartbeat, with a bounded grace period for one skip.
         return (0 <= self.now() - self.obstacle_at <= float(self.p('depth_heartbeat_timeout')) and
                 0 <= self.now() - self.last_obstacle_good <= float(self.p('depth_grace')))
+
+    def publish_safety_status(self):
+        now = self.now()
+        vio_age = now - self.vio_at if math.isfinite(self.vio_at) else math.inf
+        depth_age = now - self.last_obstacle_good if math.isfinite(self.last_obstacle_good) else math.inf
+        self.safety_pub.publish(String(
+            data=f'forward_only={not bool(self.p("allow_reverse"))} '
+                 f'max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
+                 f'required_clearance={self.required_clearance:.2f}m '
+                 f'command_clamped={self.command_clamped} '
+                 f'vio_stable={self.vio_stable()} vio_age={vio_age:.3f}s '
+                 f'depth_valid={self.depth_valid()} depth_age={depth_age:.3f}s'))
 
     def on_position(self, msg):
         resets = (msg.xy_reset_counter, msg.z_reset_counter, msg.heading_reset_counter)
@@ -109,7 +145,12 @@ class FlightBridge(Node):
         self.cmd_at = self.now()
 
     def on_vio(self, msg):
-        self.vio_ok = msg.data == 'VALID'
+        valid = msg.data == 'VALID'
+        if valid and not self.vio_ok:
+            self.vio_valid_since = self.now()
+        elif not valid:
+            self.vio_valid_since = None
+        self.vio_ok = valid
         self.vio_at = self.now()
 
     def on_obstacle(self, msg):
@@ -124,8 +165,8 @@ class FlightBridge(Node):
             missing.append(f'flight_state={self.state} (need IDLE)')
         if not self.pose_valid():
             missing.append('fresh PX4 local position')
-        if not self.vio_valid():
-            missing.append('VALID OpenVINS')
+        if not self.vio_stable():
+            missing.append('stable VALID OpenVINS')
         response.success = not missing
         response.message = ('Starting PX4 Offboard takeoff' if response.success else
                             'Takeoff blocked: ' + ', '.join(missing))
@@ -138,7 +179,7 @@ class FlightBridge(Node):
         return response
 
     def resume(self, _request, response):
-        response.success = (self.state == 'HOLD' and self.pose_valid() and self.vio_valid() and
+        response.success = (self.state == 'HOLD' and self.pose_valid() and self.vio_stable() and
                             self.status is not None and
                             self.status.nav_state == NAV_OFFBOARD)
         response.message = ('Flight control resumed; confirm map pose and depth before a new 2D goal' if response.success else
@@ -189,8 +230,12 @@ class FlightBridge(Node):
     def send_velocity(self, body):
         self.velocity_active = True
         self.send_mode(True)
-        vx, vy = limit_horizontal(body.linear.x, body.linear.y,
-                                  float(self.p('max_horizontal_speed')))
+        self.command_clamped = (
+            (not bool(self.p('allow_reverse')) and body.linear.x < 0.0) or
+            abs(body.linear.y) > float(self.p('max_lateral_speed')) + 1e-6)
+        vx, vy = constrain_body_velocity(
+            body.linear.x, body.linear.y, float(self.p('max_horizontal_speed')),
+            bool(self.p('allow_reverse')), float(self.p('max_lateral_speed')))
         north, east = body_flu_to_ned(vx, vy, self.position.heading)
         yaw_rate = max(-float(self.p('max_yaw_rate')),
                        min(float(self.p('max_yaw_rate')), -body.angular.z))
@@ -291,6 +336,9 @@ def main(args=None):
     node = FlightBridge()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

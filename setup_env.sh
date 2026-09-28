@@ -41,6 +41,9 @@ if [[ "$(git -C "$OV_WS/src/open_vins" rev-parse HEAD)" != "$OPENVINS_COMMIT" ]]
 fi
 
 mkdir -p "$ROOT_DIR/third_party"
+# colcon scans the whole workspace recursively. px4_msgs is exposed through
+# src/px4_msgs below, so do not discover the same package a second time here.
+touch "$ROOT_DIR/third_party/COLCON_IGNORE"
 if [[ ! -d "$ROOT_DIR/third_party/px4_msgs/.git" ]]; then
     git clone --branch release/1.14 https://github.com/PX4/px4_msgs.git \
         "$ROOT_DIR/third_party/px4_msgs"
@@ -50,8 +53,18 @@ if [[ "$(git -C "$ROOT_DIR/third_party/px4_msgs" rev-parse HEAD)" != "$PX4_MSGS_
     echo "px4_msgs must be release/1.14 commit $PX4_MSGS_COMMIT." >&2
     exit 1
 fi
-if [[ ! -e "$ROOT_DIR/src/px4_msgs" ]]; then
-    ln -s ../third_party/px4_msgs "$ROOT_DIR/src/px4_msgs"
+PX4_MSGS_LINK="$ROOT_DIR/src/px4_msgs"
+PX4_MSGS_RELATIVE_TARGET="../third_party/px4_msgs"
+if [[ -L "$PX4_MSGS_LINK" ]]; then
+    if [[ "$(readlink "$PX4_MSGS_LINK")" != "$PX4_MSGS_RELATIVE_TARGET" ]]; then
+        unlink "$PX4_MSGS_LINK"
+        ln -s "$PX4_MSGS_RELATIVE_TARGET" "$PX4_MSGS_LINK"
+    fi
+elif [[ -e "$PX4_MSGS_LINK" ]]; then
+    echo "$PX4_MSGS_LINK exists but is not the managed px4_msgs symlink." >&2
+    exit 1
+else
+    ln -s "$PX4_MSGS_RELATIVE_TARGET" "$PX4_MSGS_LINK"
 fi
 
 if ! command -v MicroXRCEAgent >/dev/null 2>&1; then

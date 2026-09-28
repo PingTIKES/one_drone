@@ -65,8 +65,6 @@ namespace modify_map_to_odom
         }
 
         broadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(this);
-        applied_publisher = this->create_publisher<geometry_msgs::msg::Pose2D>(
-            "/map_odom/applied", 10);
         // Relay panel changes over ROS as well, so RViz may run on another host.
         alignment_subscription = this->create_subscription<geometry_msgs::msg::Pose2D>(
             "/map_odom/set", 10,
@@ -85,10 +83,6 @@ namespace modify_map_to_odom
                     data[2] = msg->theta;
                 }
                 XYR_memory_list.unlock();
-                if (data != nullptr)
-                {
-                    applied_publisher->publish(*msg);
-                }
             });
 
         map_to_odom = Eigen::Isometry3d();

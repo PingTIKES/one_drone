@@ -205,14 +205,12 @@ def setup(context):
         package='goal_manager', executable='goal_manager',
         name='goal_manager', output='screen',
         parameters=[common, node_config('goal_manager', 'goal_manager'),
-                    {'goal_frame': navigation_mode,
-                     'require_map_alignment': False}])
+                    {'goal_frame': navigation_mode}])
     flight_bridge = Node(
         package='flight_bridge', executable='flight_bridge',
         name='flight_bridge', output='screen',
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
-                    {'target_system': target_system, 'px4_ns': px4_ns,
-                     'require_map_alignment': False}])
+                    {'target_system': target_system, 'px4_ns': px4_ns}])
     map_file = selected_map_file(bringup, arg('map_file')) if use_prior_map else ''
     map_server = Node(
         package='nav2_map_server', executable='map_server',
@@ -240,7 +238,7 @@ def setup(context):
         software_stereo,             # sim/software depth
         stereo_depth_node,           # depth -> obstacle cloud
         camera_optical_tf,           # base_link -> camera_optical
-        modify_map_to_odom,          # manual relocalization interface
+        modify_map_to_odom,          # map -> odom TF publisher
         height_slice,                # depth cloud at flight height
         goal_manager,                # RViz goal -> Nav2 action
         flight_bridge,               # cmd_vel_smoothed -> PX4 Offboard

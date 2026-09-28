@@ -30,7 +30,6 @@ class FlightBridge(Node):
                         max_horizontal_speed=.5, max_yaw_rate=.6,
                         command_timeout=.3, pose_timeout=.5, vio_timeout=.5,
                         depth_heartbeat_timeout=.3, depth_grace=.8,
-                        require_map_alignment=False,
                         takeoff_tolerance=.2, takeoff_stable_time=1.)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
@@ -40,7 +39,7 @@ class FlightBridge(Node):
         self.status = None
         self.pose_at = self.vio_at = self.cmd_at = self.obstacle_at = -math.inf
         self.last_obstacle_good = -math.inf
-        self.vio_ok = self.obstacle_ok = self.localized = False
+        self.vio_ok = self.obstacle_ok = False
         self.cmd = Twist()
         self.takeoff_target = self.hold_target = None
         self.takeoff_reached_since = None
@@ -63,8 +62,6 @@ class FlightBridge(Node):
         self.create_subscription(Twist, 'cmd_vel_smoothed', self.on_velocity, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
         self.create_subscription(Bool, 'obstacle_fresh', self.on_obstacle, 10)
-        # Optional legacy readiness input. The default launch disables this gate.
-        self.create_subscription(Bool, 'localization_ready', self.on_localized, latched)
         self.create_service(Trigger, 'takeoff', self.takeoff)
         self.create_service(Trigger, 'resume_navigation', self.resume)
         self.create_service(Trigger, 'land', self.land)
@@ -120,19 +117,6 @@ class FlightBridge(Node):
         self.obstacle_at = self.now()
         if self.obstacle_ok:
             self.last_obstacle_good = self.obstacle_at
-
-    def on_localized(self, msg):
-        if not self.p('require_map_alignment'):
-            return
-        was_localized = self.localized
-        self.localized = bool(msg.data)
-        if was_localized and not self.localized and self.state == 'CRUISE':
-            # A map-frame goal is no longer safe, but PX4 can still hold its
-            # current local position using VIO. GoalManager cancels the goal.
-            self.cmd_at = -math.inf
-            if self.pose_valid():
-                p = self.position
-                self.hold_target = (p.x, p.y, p.z)
 
     def takeoff(self, _request, response):
         missing = []
@@ -269,10 +253,8 @@ class FlightBridge(Node):
             else:
                 self.takeoff_reached_since = None
         elif self.state == 'CRUISE':
-            if ((self.p('require_map_alignment') and not self.localized) or
-                    not self.depth_valid()) and self.pose_valid():
-                # Map alignment and depth are required to follow a map-frame
-                # path, not to maintain altitude at the current PX4 position.
+            if not self.depth_valid() and self.pose_valid():
+                # Fresh depth is required to follow a path, but not to hold altitude.
                 if self.velocity_active:
                     p = self.position
                     self.hold_target = (p.x, p.y, p.z)

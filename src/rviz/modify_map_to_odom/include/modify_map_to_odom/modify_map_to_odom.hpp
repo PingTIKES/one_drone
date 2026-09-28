@@ -25,7 +25,6 @@ namespace modify_map_to_odom
 
         std::shared_ptr<tf2_ros::TransformBroadcaster> broadcaster;
         rclcpp::Subscription<geometry_msgs::msg::Pose2D>::SharedPtr alignment_subscription;
-        rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr applied_publisher;
         std::string parent_frame;
         std::string target_frame;
 

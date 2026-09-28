@@ -1,11 +1,11 @@
-"""RViz 2D Goal Pose -> Nav2 NavigateToPose with localization/freshness gates."""
+"""RViz 2D Goal Pose -> Nav2 NavigateToPose with VIO, flight and depth gates."""
 import math
 
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from geometry_msgs.msg import Pose2D, PoseStamped
+from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import Bool, String
 
@@ -15,24 +15,18 @@ class GoalManager(Node):
         super().__init__('goal_manager')
         self.declare_parameter('depth_grace', 0.8)
         self.declare_parameter('goal_frame', 'map')
-        self.declare_parameter('require_map_alignment', False)
         self.goal_frame = str(self.get_parameter('goal_frame').value)
-        self.require_map_alignment = bool(self.get_parameter('require_map_alignment').value)
-        self.ready = not self.require_map_alignment
         self.obstacle_fresh = self.vio_valid = False
         self.last_obstacle_good = -math.inf
         self.flight_state = 'IDLE'
         self.pending = self.goal_handle = None
         self.sending = False
         self.request_epoch = 0
-        self.alignment = None
         self.action = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.pub = self.create_publisher(String, 'navigation_state', latched)
         self.create_subscription(PoseStamped, '/navigation_goal', self.on_goal, 10)
-        self.create_subscription(Bool, 'localization_ready', self.on_ready, latched)
-        self.create_subscription(Pose2D, 'map_odom/current', self.on_alignment, latched)
         self.create_subscription(Bool, 'obstacle_fresh', self.on_obstacle, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
         self.create_subscription(String, 'flight_state', self.on_flight, 10)
@@ -53,9 +47,6 @@ class GoalManager(Node):
         if msg.header.frame_id != self.goal_frame or not all(math.isfinite(v) for v in (p.x, p.y)):
             self.state('REJECTED_FRAME_OR_POSITION')
             return
-        if not self.ready:
-            self.state('RELOCALIZATION_REQUIRED')
-            return
         if not self.vio_valid:
             self.state('VIO_NOT_READY')
             return
@@ -69,27 +60,6 @@ class GoalManager(Node):
         self.cancel()
         self.pending = msg
         self.state('GOAL_QUEUED')
-
-    def on_ready(self, msg):
-        if not self.require_map_alignment:
-            return
-        self.ready = bool(msg.data)
-        if not self.ready:
-            self.pending = None
-            self.cancel()
-            self.state('RELOCALIZATION_REQUIRED')
-
-    def on_alignment(self, msg):
-        if not self.require_map_alignment:
-            return
-        new = (msg.x, msg.y, msg.theta)
-        if self.alignment is not None and any(abs(a-b) > 1e-6 for a,b in zip(new,self.alignment)):
-            had_goal = self.pending is not None or self.goal_handle is not None or self.sending
-            self.pending = None
-            self.cancel()
-            if had_goal:
-                self.state('MAP_ALIGNMENT_CHANGED_REISSUE_GOAL')
-        self.alignment = new
 
     def on_obstacle(self, msg):
         self.obstacle_fresh = bool(msg.data)
@@ -111,7 +81,7 @@ class GoalManager(Node):
         depth_valid = 0 <= depth_age <= float(self.get_parameter('depth_grace').value)
         if not depth_valid:
             self.cancel()
-        if not self.ready or not self.vio_valid or not depth_valid:
+        if not self.vio_valid or not depth_valid:
             return
         if self.flight_state != 'CRUISE' or self.pending is None or self.sending:
             return
@@ -135,7 +105,7 @@ class GoalManager(Node):
             self.get_logger().error(f'Nav2 goal request failed: {exc}')
             self.state('NAV2_UNAVAILABLE')
             return
-        if epoch != self.request_epoch or not self.ready or not self.vio_valid or self.flight_state != 'CRUISE':
+        if epoch != self.request_epoch or not self.vio_valid or self.flight_state != 'CRUISE':
             if handle.accepted:
                 handle.cancel_goal_async()
             return

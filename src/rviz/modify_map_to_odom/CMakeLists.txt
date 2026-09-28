@@ -29,10 +29,6 @@ rclcpp_components_register_node(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
   Qt5::Core
 )
-install(
-  DIRECTORY launch
-  DESTINATION share/${PROJECT_NAME}
-)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -49,5 +45,4 @@ endif()
 ament_auto_package(
   INSTALL_TO_SHARE
   config
-  launch
 )

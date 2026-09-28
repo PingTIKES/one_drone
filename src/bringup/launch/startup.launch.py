@@ -1,7 +1,6 @@
 """Start sensing, localization, map, flight control and RViz; launch Nav2 separately."""
 from pathlib import Path
 import tempfile
-
 import numpy as np
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -254,7 +253,7 @@ def setup(context):
         vio_bridge,                  # VIO -> PX4 and odom TF
         software_stereo,             # sim/software depth
         stereo_depth_node,           # depth -> obstacle cloud
-        camera_optical_tf,           # base_link -> camera_optical
+        # camera_optical_tf,           # base_link -> camera_optical
         modify_map_to_odom,          # map -> odom TF publisher
         height_slice,                # depth cloud at flight height
         goal_manager,                # RViz goal -> Nav2 action

@@ -8,7 +8,8 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
+                       qos_profile_sensor_data)
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
@@ -52,12 +53,18 @@ class FlightBridge(Node):
         self.setpoint_pub = self.create_publisher(TrajectorySetpoint, px4 + 'in/trajectory_setpoint', qos)
         self.command_pub = self.create_publisher(VehicleCommand, px4 + 'in/vehicle_command', qos)
         self.state_pub = self.create_publisher(String, 'flight_state', 10)
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.hold_reason_pub = self.create_publisher(String, 'flight_hold_reason', latched)
+        self.hold_reason_pub.publish(String(data=''))
         self.create_subscription(VehicleLocalPosition, px4 + 'out/vehicle_local_position', self.on_position, qos)
         self.create_subscription(VehicleStatus, px4 + 'out/vehicle_status', self.on_status, qos)
         self.create_subscription(Twist, 'cmd_vel_smoothed', self.on_velocity, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
         self.create_subscription(Bool, 'obstacle_fresh', self.on_obstacle, 10)
-        self.create_subscription(Bool, 'localization_ready', self.on_localized, 10)
+        # Map alignment publishes only when confirmed or invalidated. Keep its
+        # last value when this node joins after the publisher starts.
+        self.create_subscription(Bool, 'localization_ready', self.on_localized, latched)
         self.create_service(Trigger, 'takeoff', self.takeoff)
         self.create_service(Trigger, 'resume_navigation', self.resume)
         self.create_service(Trigger, 'land', self.land)
@@ -86,13 +93,13 @@ class FlightBridge(Node):
 
     def on_position(self, msg):
         resets = (msg.xy_reset_counter, msg.z_reset_counter, msg.heading_reset_counter)
-        if self.last_reset is not None and resets != self.last_reset and self.state in ('TAKEOFF', 'CRUISE'):
-            self.state = 'HOLD'
-            self.hold_target = (msg.x, msg.y, msg.z)
-            self.get_logger().warn('PX4 local estimate reset; manual relocalization and resume required')
+        reset_changed = (self.last_reset is not None and resets != self.last_reset and
+                         self.state in ('TAKEOFF', 'CRUISE'))
         self.last_reset = resets
         self.position = msg
         self.pose_at = msg.timestamp * 1e-6
+        if reset_changed:
+            self.enter_hold('PX4 local estimate reset; manual relocalization and resume required')
 
     def on_status(self, msg):
         self.status = msg
@@ -120,9 +127,20 @@ class FlightBridge(Node):
             self.enter_hold('Map localization lost')
 
     def takeoff(self, _request, response):
-        response.success = self.state == 'IDLE' and self.pose_valid() and self.vio_valid()
+        missing = []
+        if self.state != 'IDLE':
+            missing.append(f'flight_state={self.state} (need IDLE)')
+        if not self.pose_valid():
+            missing.append('fresh PX4 local position')
+        if not self.vio_valid():
+            missing.append('VALID OpenVINS')
+        if not self.localized:
+            missing.append('confirmed map localization (/localization_ready=true)')
+        if not self.depth_valid():
+            missing.append('fresh depth obstacles')
+        response.success = not missing
         response.message = ('Starting PX4 Offboard takeoff' if response.success else
-                            'Need IDLE, fresh PX4 local position and VALID OpenVINS')
+                            'Takeoff blocked: ' + ', '.join(missing))
         if response.success:
             p = self.position
             self.takeoff_target = (p.x, p.y, p.z - float(self.p('takeoff_altitude')))
@@ -140,6 +158,7 @@ class FlightBridge(Node):
         if response.success:
             self.state = 'CRUISE'
             self.cmd_at = -math.inf
+            self.hold_reason_pub.publish(String(data=''))
         return response
 
     def land(self, _request, response):
@@ -206,6 +225,7 @@ class FlightBridge(Node):
             self.hold_target = (p.x, p.y, p.z)
         self.state = 'HOLD'
         self.velocity_active = False
+        self.hold_reason_pub.publish(String(data=reason))
         self.get_logger().warn(reason)
 
     def tick(self):

@@ -60,7 +60,7 @@ Visualization Manager:
       Name: TF
       Enabled: true
       Frame Timeout: 15
-      Marker Scale: 1.5
+      Marker Scale: 2.5
       Show Arrows: true
       Show Axes: true
       Show Names: true

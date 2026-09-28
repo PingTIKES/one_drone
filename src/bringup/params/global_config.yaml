@@ -1,0 +1,4 @@
+# Prior global map for navigation_mode:=map.
+# Choose a YAML filename in bringup/map, or an absolute YAML path.
+# The launch argument map_file:=... overrides this setting for one run.
+map: rmuc_2025_prior.yaml

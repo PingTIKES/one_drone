@@ -66,6 +66,7 @@ Qt 共享内存在同一台电脑上传递面板调整；面板同时发布 `/ma
 src/
 ├── bringup/                         # 传感器、定位、地图、控制启动和上场配置
 │   ├── launch/startup.launch.py      # 文件末尾逐行列出启动节点，不启动 Nav2
+│   ├── params/global_config.yaml     # 地图模式选用的全局地图
 │   ├── params/nav2_odom_params.yaml  # 默认 odom 导航参数
 │   ├── params/nav2_params.yaml       # 可选 PGM 地图导航参数
 │   ├── map/                        # 先验 PGM/YAML
@@ -104,7 +105,7 @@ src/
 | `rviz/modify_map_to_odom` | 哨兵式 map→odom TF 发布节点 | 共享内存、`/map_odom/set` | `/tf` 中的 `map→odom`、`/map_odom/applied` |
 | `rviz/rviz_tf_shift` | RViz 手动地图对齐面板 | 操作者输入、导航话题 | `/map_odom/set` |
 
-配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；默认 Nav2 参数集中在 `src/bringup/params/nav2_odom_params.yaml`，地图模式参数在 `src/bringup/params/nav2_params.yaml`。赛场地图放进 `src/bringup/map/`，只有 `navigation_mode:=map` 时才用 `map_file:=/绝对路径/地图.yaml` 指定；默认 RViz 配置是 `src/bringup/rviz/navigation_odom.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启相关 launch；新增配置文件或修改安装规则时重新构建。核心运行参数无需编辑 Python 源码。
+配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；默认 Nav2 参数集中在 `src/bringup/params/nav2_odom_params.yaml`，地图模式参数在 `src/bringup/params/nav2_params.yaml`。赛场地图的 YAML 和图像放进 `src/bringup/map/`，在 `src/bringup/params/global_config.yaml` 的 `map:` 一行选用；临时切换可在启动 `bringup` 时传 `map_file:=/绝对路径/地图.yaml` 覆盖该设置。只有 `navigation_mode:=map` 才会读取地图；默认 RViz 配置是 `src/bringup/rviz/navigation_odom.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启相关 launch；新增配置文件或修改安装规则时重新构建。核心运行参数无需编辑 Python 源码。
 
 ## 仿真：从零运行
 
@@ -164,7 +165,7 @@ src/
 
 ### 可选：先验 PGM 地图模式
 
-需要用先验地图规划时，终端 B 改用 `PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true navigation_mode:=map map_file:=/absolute/path/to/field.yaml`，终端 C 改用 `PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true navigation_mode:=map`；真机把 `sim:=false`、相机和飞控参数照真机流程填写。**两个入口必须使用同一种模式**。此时 RViz Fixed Frame 为 `map`，PGM 地图服务会启动，全局和局部代价地图都使用先验静态层。在 RViz 的 `MapOdomModify` 面板根据实测位置调整 `map→odom`，按「强制发布」，确认 `/localization_ready=true` 后再打点；目标的 `header.frame_id` 是 `map`。默认 odom 模式无需这些步骤。内置 PGM 只适合仓库所附 RMUC 仿真场，真机必须换成实测场地地图。
+需要用先验地图规划时，先在 `src/bringup/params/global_config.yaml` 修改 `map: rmuc_2025_prior.yaml` 这一行，选择 `src/bringup/map/` 中的地图 YAML。地图 YAML 的 `image:` 应指向同目录中实际存在的 PGM/PNG。也可以保留配置文件不变，在当次启动中用 `map_file:=/absolute/path/to/field.yaml` 覆盖。然后终端 B 使用 `PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true navigation_mode:=map`，终端 C 使用 `PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true navigation_mode:=map`；真机把 `sim:=false`、相机和飞控参数照真机流程填写。**两个入口必须使用同一种模式**。此时 RViz Fixed Frame 为 `map`，PGM 地图服务会启动，全局和局部代价地图都使用先验静态层。在 RViz 的 `MapOdomModify` 面板根据实测位置调整 `map→odom`，按「强制发布」，确认 `/localization_ready=true` 后再打点；目标的 `header.frame_id` 是 `map`。默认 odom 模式无需这些步骤。内置 PGM 只适合仓库所附 RMUC 仿真场，真机必须换成实测场地地图。
 
 ## 真机：标定、连接和运行
 

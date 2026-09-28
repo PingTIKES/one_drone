@@ -22,6 +22,32 @@ def node_config(package_name, node_name):
     return {key: value for key, value in values.items() if value is not None}
 
 
+def selected_map_file(bringup, override):
+    """Resolve the one prior map selected in bringup/params/global_config.yaml."""
+    if override:
+        choice = override
+    else:
+        config = yaml.safe_load((bringup / 'params/global_config.yaml').read_text()) or {}
+        choice = config.get('map')
+    if not isinstance(choice, str) or not choice.strip():
+        raise ValueError('set map in bringup/params/global_config.yaml or pass map_file:=...')
+    path = Path(choice).expanduser()
+    if not path.is_absolute():
+        path = bringup / 'map' / path
+    path = path.resolve()
+    if not path.is_file() or path.suffix.lower() not in ('.yaml', '.yml'):
+        raise ValueError(f'prior map YAML does not exist: {path}')
+    image = (yaml.safe_load(path.read_text()) or {}).get('image')
+    if not isinstance(image, str) or not image.strip():
+        raise ValueError(f'prior map YAML needs an image field: {path}')
+    image_path = Path(image)
+    if not image_path.is_absolute():
+        image_path = path.parent / image_path
+    if not image_path.is_file():
+        raise ValueError(f'prior map image does not exist: {image_path}')
+    return str(path)
+
+
 def generate_launch_description():
     # Runtime calibration depends on launch arguments. setup() builds the named
     # node list below after those arguments have been resolved.
@@ -192,7 +218,7 @@ def setup(context):
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
                     {'target_system': target_system, 'px4_ns': px4_ns,
                      'require_map_alignment': use_prior_map}])
-    map_file = arg('map_file') or str(bringup / 'map/rmuc_2025_prior.yaml')
+    map_file = selected_map_file(bringup, arg('map_file')) if use_prior_map else ''
     map_server = Node(
         package='nav2_map_server', executable='map_server',
         name='map_server', output='screen',

@@ -165,7 +165,7 @@ ros2 topic hz /ego/occupancy_inflate
 ros2 run tf2_ros tf2_echo odom base_link
 ```
 
-必须满足：`/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。当前软件双目实测约 3.5 Hz，因此深度心跳超时为 0.5 秒；若实际频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
+必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中短时数据缺口会显示 `DEGRADED`，控制器自动停止平移并保持当前位置；数据恢复且运动连续时自动回到 `VALID`，任务无需人工恢复。持续超过 2 秒的断流或真实位姿跳变才显示 `INVALID` 并进入 `HOLD`。当前软件双目实测约 3.5 Hz，因此深度心跳超时为 0.5 秒；若实际频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
 
 ### 4. 起飞、打点和降落
 
@@ -242,7 +242,7 @@ PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
 
 ## 安全状态与故障排查
 
-`flight_bridge` 保留显式 `/takeoff`、`/land` 和 `/resume_navigation` 服务。深度暂时中断时停止执行轨迹并用 PX4 本地位置悬停；VIO 或 PX4 本地位置失效时进入 `HOLD`，不会由本节点主动发送降落命令。PX4 自身 estimator failsafe 仍然具有最终控制权。
+`flight_bridge` 保留显式 `/takeoff`、`/land` 和 `/resume_navigation` 服务。深度暂时中断或 VIO 为 `DEGRADED` 时停止执行轨迹并用 PX4 本地位置悬停，数据恢复后自动继续；VIO 为 `INVALID` 或 PX4 本地位置失效时才进入 `HOLD`。本节点不会主动发送故障降落命令，PX4 自身 estimator failsafe 仍然具有最终控制权。
 
 ```bash
 ros2 topic echo --once /flight_hold_reason std_msgs/msg/String --qos-durability transient_local

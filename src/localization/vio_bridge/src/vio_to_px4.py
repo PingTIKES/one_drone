@@ -23,15 +23,20 @@ from vio_bridge.vio_recovery import VioRecovery, unexplained_rotation
 class VioBridge(Node):
     def __init__(self):
         super().__init__('vio_to_px4')
-        for k,v in dict(uav_id=1,px4_ns='px4_1',max_age=.25,max_position_variance=1.,
+        for k,v in dict(uav_id=1,px4_ns='px4_1',max_age=.5,invalid_age=2.,max_position_variance=1.,
                         max_orientation_variance=.25,max_velocity_variance=1.,
-                        max_speed=4.,max_jump=.4,expected_world='global',expected_imu='imu',
+                        max_speed=4.,max_jump=.4,max_continuous_gap=2.,
+                        expected_world='global',expected_imu='imu',
                         recovery_stable_time=.5,recovery_timeout=2.,recovery_max_correction=.75,
-                        recovery_max_angle_deg=20.,recovery_sample_gap=.1,recovery_residual=.03,
+                        recovery_max_angle_deg=35.,recovery_sample_gap=.1,recovery_residual=.15,
                         recovery_max_source_gap=3.,recovery_gap_max_correction=2.5,
                         recovery_gap_max_angle_deg=90.,
                         t_body_imu=np.eye(4).ravel().tolist()).items(): self.declare_parameter(k,v)
         self.p = lambda k: self.get_parameter(k).value
+        if not 0 < self.p('max_age') < self.p('invalid_age'):
+            raise ValueError('VIO freshness requires 0 < max_age < invalid_age')
+        if self.p('max_continuous_gap') <= self.p('max_age'):
+            raise ValueError('max_continuous_gap must be greater than max_age')
         uid = int(self.p('uav_id'))
         self.odom_frame, self.body_frame = 'odom', 'base_link'
         self.extrinsic = transform(np.array(self.p('t_body_imu')).reshape(4,4))
@@ -112,12 +117,25 @@ class VioBridge(Node):
             self.latched, self.reason = True, 'RECOVERY_TIMEOUT'
         if self.recovery.active and not all(0 <= now-t <= self.p('max_age') for t in self.image_at):
             self.recovery.previous = self.recovery.stable_since = None
-        healthy = not self.latched and not self.recovery.active and all(0 <= now-t <= self.p('max_age') for t in [self.last_good]+self.image_at)
-        self.health.publish(String(data='VALID' if healthy else 'INVALID'))
+        ages = [now-t for t in [self.last_good]+self.image_at]
+        fresh = all(0 <= age <= self.p('max_age') for age in ages)
+        within_grace = all(0 <= age <= self.p('invalid_age') for age in ages)
+        healthy = not self.latched and not self.recovery.active and fresh
+        if healthy:
+            health = 'VALID'
+        elif not self.latched and not self.recovery.active and within_grace:
+            # A bounded sensor/output pause is recoverable. Consumers pause
+            # translation while retaining their mission and resume on VALID.
+            health = 'DEGRADED'
+        else:
+            health = 'INVALID'
+        self.health.publish(String(data=health))
         self.diagnostics.publish(String(data=json.dumps(dict(
-            state='LATCHED' if self.latched else ('RECOVERING' if self.recovery.active else ('VALID' if healthy else 'STALE')),
+            state='LATCHED' if self.latched else ('RECOVERING' if self.recovery.active else health),
             reason=self.reason, reset_counter=self.reset_count,
-            age=None if not math.isfinite(self.last_good) else round(now-self.last_good,4)))))
+            odom_age=None if not math.isfinite(self.last_good) else round(ages[0],4),
+            cam0_age=None if not math.isfinite(self.image_at[0]) else round(ages[1],4),
+            cam1_age=None if not math.isfinite(self.image_at[1]) else round(ages[2],4)))))
 
     def reject(self, reason):
         self.reason = reason
@@ -154,12 +172,14 @@ class VioBridge(Node):
             dt = stamp-self.last_stamp
             angle_residual = unexplained_rotation(
                 self.last_quat, quat, dt, self.last_omega, omega)
-            if dt > 1. or np.linalg.norm(pos-self.last_position)>self.p('max_jump')+self.p('max_speed')*dt or angle_residual>math.radians(self.p('recovery_max_angle_deg')):
+            position_jump = np.linalg.norm(pos-self.last_position)
+            source_gap = dt > self.p('max_continuous_gap')
+            if source_gap or position_jump>self.p('max_jump')+self.p('max_speed')*dt or angle_residual>math.radians(self.p('recovery_max_angle_deg')):
                 self.recovery.begin(now,self.last_stamp,self.last_position,self.last_quat,
-                                    self.last_velocity,self.last_omega,source_gap=dt>1.)
-                self.reason = 'DATA_GAP' if dt>1. else ('ORIENTATION_DISCONTINUITY' if angle_residual>math.radians(self.p('recovery_max_angle_deg')) else 'POSITION_DISCONTINUITY')
+                                    self.last_velocity,self.last_omega,source_gap=source_gap)
+                self.reason = 'DATA_GAP' if source_gap else ('ORIENTATION_DISCONTINUITY' if angle_residual>math.radians(self.p('recovery_max_angle_deg')) else 'POSITION_DISCONTINUITY')
                 self.health.publish(String(data='INVALID'))
-                self.get_logger().warn(f'VIO quarantine: {self.reason}; dt={dt:.4f}s jump={np.linalg.norm(pos-self.last_position):.3f}m')
+                self.get_logger().warn(f'VIO quarantine: {self.reason}; dt={dt:.4f}s jump={position_jump:.3f}m')
         if self.recovery.active:
             if not self.recovery.accept(now,stamp,pos,quat,vel,omega): return
             # Explicitly inform EKF2 of the accepted discontinuity. Its reset
@@ -181,6 +201,7 @@ class VioBridge(Node):
         self.publish_vio_odom(msg,stamp,pos,quat,vel,omega,pv,ov,vv)
         self.last_stamp,self.last_position,self.last_good = stamp,pos,stamp
         self.last_quat,self.last_velocity,self.last_omega = quat,vel,omega
+        self.reason = 'OK'
 
 
 def main(args=None):

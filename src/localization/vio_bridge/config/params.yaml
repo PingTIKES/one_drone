@@ -9,20 +9,27 @@ vio_bridge:
     uav_id: null
     px4_ns: null
     t_body_imu: null
-    max_age: 0.25
+    # Freshness has two levels. A short scheduling/feature-tracking pause asks
+    # control to hold position and recover automatically; only a sustained
+    # outage becomes INVALID.
+    max_age: 0.5
+    invalid_age: 2.0
     max_position_variance: 1.0
     max_orientation_variance: 0.25
     max_velocity_variance: 1.0
     max_speed: 4.0
     max_jump: 0.4
+    # Do not call an otherwise plausible displacement a jump merely because
+    # one second of OpenVINS output was skipped.
+    max_continuous_gap: 2.0
     # Quarantine a discontinuity; resume real measurements only after a stable
     # sequence inside the prediction envelope. Persistent failure stays latched.
     recovery_stable_time: 0.5
     recovery_timeout: 2.0
     recovery_max_correction: 0.75
-    recovery_max_angle_deg: 20.0
+    recovery_max_angle_deg: 35.0
     recovery_sample_gap: 0.1
-    recovery_residual: 0.03
+    recovery_residual: 0.15
     # A data gap is checked separately from recovery time: the first new VIO
     # sample may arrive >2 s after the last accepted one.
     recovery_max_source_gap: 3.0

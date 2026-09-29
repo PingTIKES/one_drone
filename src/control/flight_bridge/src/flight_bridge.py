@@ -53,6 +53,7 @@ class FlightBridge(Node):
         self.pose_at = self.vio_at = self.cmd_at = self.obstacle_at = -math.inf
         self.last_obstacle_good = -math.inf
         self.vio_ok = self.obstacle_ok = False
+        self.vio_state = 'INVALID'
         self.vio_valid_since = None
         self.cmd = None
         self.ego_odom = None
@@ -103,6 +104,10 @@ class FlightBridge(Node):
 
     def vio_valid(self):
         return self.vio_ok and 0 <= self.now() - self.vio_at <= float(self.p('vio_timeout'))
+
+    def vio_degraded(self):
+        return (self.vio_state == 'DEGRADED' and
+                0 <= self.now() - self.vio_at <= float(self.p('vio_timeout')))
 
     def vio_stable(self):
         return (self.vio_valid() and self.vio_valid_since is not None and
@@ -159,8 +164,9 @@ class FlightBridge(Node):
         valid = msg.data == 'VALID'
         if valid and not self.vio_ok:
             self.vio_valid_since = self.now()
-        elif not valid:
+        elif msg.data == 'INVALID':
             self.vio_valid_since = None
+        self.vio_state = msg.data
         self.vio_ok = valid
         self.vio_at = self.now()
 
@@ -305,7 +311,8 @@ class FlightBridge(Node):
 
     def tick(self):
         now = self.now()
-        if self.state in ('TAKEOFF', 'CRUISE') and (not self.pose_valid() or not self.vio_valid()):
+        if self.state in ('TAKEOFF', 'CRUISE') and (not self.pose_valid() or
+                                                    (not self.vio_valid() and not self.vio_degraded())):
             self.enter_hold('Position or OpenVINS stale; holding for manual recovery')
         if self.state == 'PRESTREAM':
             if not self.pose_valid() or not self.vio_valid():
@@ -340,7 +347,14 @@ class FlightBridge(Node):
             else:
                 self.takeoff_reached_since = None
         elif self.state == 'CRUISE':
-            if not self.depth_valid() and self.pose_valid():
+            if self.vio_degraded() and self.pose_valid():
+                # A brief VIO pause must not destroy the mission or require a
+                # manual resume. Stop translation at PX4's current estimate;
+                # normal EGO commands resume as soon as VIO returns VALID.
+                p = self.position
+                self.hold_target = (p.x, p.y, p.z)
+                self.send_position(self.hold_target)
+            elif not self.depth_valid() and self.pose_valid():
                 # Fresh depth is required to follow a path, but not to hold altitude.
                 if self.velocity_active:
                     p = self.position

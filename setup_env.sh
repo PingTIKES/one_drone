@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ubuntu 22.04 / ROS 2 Humble setup for the one_drone PX4 1.14.3 Nav2 stack.
+# Ubuntu 22.04 / ROS 2 Humble setup for the one_drone PX4 1.14.3 EGO-Planner stack.
 # Usage: ./setup_env.sh sim | ./setup_env.sh onboard
 set -euo pipefail
 
@@ -27,8 +27,8 @@ set -u
 sudo apt update
 sudo apt install -y python3-colcon-common-extensions python3-rosdep python3-numpy python3-pil \
     python3-yaml python3-opencv python3-pip git curl build-essential cmake \
-    ros-humble-cv-bridge ros-humble-rmw-cyclonedds-cpp \
-    ros-humble-navigation2 ros-humble-nav2-bringup
+    ros-humble-cv-bridge ros-humble-rmw-cyclonedds-cpp ros-humble-pcl-conversions \
+    libpcl-dev libeigen3-dev
 
 if [[ ! -d "$OV_WS/src/open_vins/.git" ]]; then
     mkdir -p "$OV_WS/src"

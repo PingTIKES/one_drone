@@ -1,0 +1,106 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 255; 255; 255
+    Fixed Frame: odom
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Color: 170; 170; 170
+    - Class: rviz_default_plugins/PointCloud2
+      Name: EGOInflatedOccupancy
+      Enabled: true
+      Topic:
+        Value: /ego/occupancy_inflate
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Depth: 5
+      Style: Boxes
+      Size (m): 0.15
+      Color Transformer: FlatColor
+      Color: 30; 30; 30
+    - Class: rviz_default_plugins/PointCloud2
+      Name: DepthObstacles
+      Enabled: false
+      Topic:
+        Value: /uav1/obstacles
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        Depth: 5
+      Style: Points
+      Size (Pixels): 2
+    - Class: rviz_default_plugins/Odometry
+      Name: OpenVINSOdom
+      Enabled: true
+      Keep: 1
+      Shape:
+        Value: Arrow
+        Color: 255; 120; 20
+        Alpha: 1
+      Topic:
+        Value: /ego/odom
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Depth: 10
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 2.5
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Frames:
+        All Enabled: true
+    - Class: rviz_default_plugins/Marker
+      Name: EGOOptimalPath
+      Enabled: true
+      Topic:
+        Value: /ego/visualization/optimal_path
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Depth: 10
+    - Class: rviz_default_plugins/Marker
+      Name: EGOGlobalPath
+      Enabled: true
+      Topic:
+        Value: /ego/visualization/global_path
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Depth: 10
+    - Class: rviz_default_plugins/Marker
+      Name: EGOGoal
+      Enabled: true
+      Topic:
+        Value: /ego/visualization/goal
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Depth: 10
+    - Class: rviz_default_plugins/Image
+      Name: Infrared
+      Enabled: false
+      Topic:
+        Value: /uav1/cam0/image_raw
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        Depth: 1
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/SetGoal
+      Topic: /navigation_goal
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 35
+      Pitch: 1.1
+      Yaw: 0.8
+Window Geometry:
+  Width: 1300
+  Height: 850

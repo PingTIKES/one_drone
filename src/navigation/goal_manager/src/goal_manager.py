@@ -1,46 +1,38 @@
-"""RViz 2D Goal Pose -> Nav2 NavigateToPose with VIO, flight and depth gates."""
+"""Validate RViz goals and publish odom-frame targets to EGO-Planner."""
 import math
 
 import rclpy
-from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import Bool, String
 
 
 class GoalManager(Node):
     def __init__(self):
         super().__init__('goal_manager')
-        self.declare_parameter('depth_grace', 0.8)
-        self.declare_parameter('goal_frame', 'map')
+        self.declare_parameter('depth_grace', .8)
+        self.declare_parameter('goal_frame', 'odom')
+        self.declare_parameter('goal_altitude', 2.0)
         self.goal_frame = str(self.get_parameter('goal_frame').value)
-        self.obstacle_fresh = self.vio_valid = False
-        self.last_obstacle_good = -math.inf
+        self.vio_valid = False
+        self.last_depth_good = -math.inf
         self.flight_state = 'IDLE'
-        self.pending = self.goal_handle = None
-        self.sending = False
-        self.request_epoch = 0
-        self.action = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.pub = self.create_publisher(String, 'navigation_state', latched)
+        self.state_pub = self.create_publisher(String, 'navigation_state', latched)
+        self.goal_pub = self.create_publisher(PoseStamped, '/ego/goal', 10)
         self.create_subscription(PoseStamped, '/navigation_goal', self.on_goal, 10)
-        self.create_subscription(Bool, 'obstacle_fresh', self.on_obstacle, 10)
+        self.create_subscription(Bool, '/ego/depth_fresh', self.on_depth, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
         self.create_subscription(String, 'flight_state', self.on_flight, 10)
-        self.create_timer(.1, self.tick)
         self.state('WAITING_FOR_GOAL')
 
-    def state(self, text):
-        self.pub.publish(String(data=text))
+    def now(self):
+        return self.get_clock().now().nanoseconds * 1e-9
 
-    def cancel(self):
-        self.request_epoch += 1
-        if self.goal_handle is not None:
-            self.goal_handle.cancel_goal_async()
-            self.goal_handle = None
+    def state(self, text):
+        self.state_pub.publish(String(data=text))
 
     def on_goal(self, msg):
         p = msg.pose.position
@@ -53,80 +45,28 @@ class GoalManager(Node):
         if self.flight_state != 'CRUISE':
             self.state('FLIGHT_NOT_CRUISE')
             return
-        depth_age = self.get_clock().now().nanoseconds * 1e-9 - self.last_obstacle_good
-        if not 0 <= depth_age <= float(self.get_parameter('depth_grace').value):
+        if not 0 <= self.now() - self.last_depth_good <= float(self.get_parameter('depth_grace').value):
             self.state('DEPTH_NOT_READY')
             return
-        self.cancel()
-        self.pending = msg
-        self.state('GOAL_QUEUED')
+        goal = PoseStamped()
+        goal.header.stamp = self.get_clock().now().to_msg()
+        goal.header.frame_id = self.goal_frame
+        goal.pose = msg.pose
+        goal.pose.position.z = float(self.get_parameter('goal_altitude').value)
+        self.goal_pub.publish(goal)
+        self.state('GOAL_SENT_TO_EGO')
 
-    def on_obstacle(self, msg):
-        self.obstacle_fresh = bool(msg.data)
-        if self.obstacle_fresh:
-            self.last_obstacle_good = self.get_clock().now().nanoseconds * 1e-9
+    def on_depth(self, msg):
+        if msg.data:
+            self.last_depth_good = self.now()
 
     def on_vio(self, msg):
         self.vio_valid = msg.data == 'VALID'
         if not self.vio_valid:
-            self.cancel()
+            self.state('VIO_NOT_READY')
 
     def on_flight(self, msg):
         self.flight_state = msg.data
-        if self.flight_state != 'CRUISE':
-            self.cancel()
-
-    def tick(self):
-        depth_age = self.get_clock().now().nanoseconds * 1e-9 - self.last_obstacle_good
-        depth_valid = 0 <= depth_age <= float(self.get_parameter('depth_grace').value)
-        if not depth_valid:
-            self.cancel()
-        if not self.vio_valid or not depth_valid:
-            return
-        if self.flight_state != 'CRUISE' or self.pending is None or self.sending:
-            return
-        if not self.action.server_is_ready():
-            self.state('WAITING_FOR_NAV2')
-            return
-        goal = NavigateToPose.Goal()
-        goal.pose = self.pending
-        self.pending = None
-        self.sending = True
-        epoch = self.request_epoch
-        future = self.action.send_goal_async(goal)
-        future.add_done_callback(lambda result, e=epoch: self.on_goal_response(result, e))
-        self.state('PLANNING')
-
-    def on_goal_response(self, future, epoch):
-        self.sending = False
-        try:
-            handle = future.result()
-        except Exception as exc:
-            self.get_logger().error(f'Nav2 goal request failed: {exc}')
-            self.state('NAV2_UNAVAILABLE')
-            return
-        if epoch != self.request_epoch or not self.vio_valid or self.flight_state != 'CRUISE':
-            if handle.accepted:
-                handle.cancel_goal_async()
-            return
-        if not handle.accepted:
-            self.state('GOAL_REJECTED_BY_NAV2')
-            return
-        self.goal_handle = handle
-        self.state('FOLLOWING_PATH')
-        handle.get_result_async().add_done_callback(
-            lambda result, h=handle: self.on_result(result, h))
-
-    def on_result(self, future, handle):
-        if self.goal_handle is not handle:
-            return
-        self.goal_handle = None
-        try:
-            result = future.result()
-            self.state('GOAL_REACHED' if result.status == 4 else f'NAVIGATION_STOPPED_{result.status}')
-        except Exception as exc:
-            self.get_logger().error(f'Nav2 result failed: {exc}')
-            self.state('NAVIGATION_RESULT_ERROR')
 
 
 def main(args=None):
@@ -134,6 +74,9 @@ def main(args=None):
     node = GoalManager()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

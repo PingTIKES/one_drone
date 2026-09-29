@@ -1,245 +1,283 @@
 # one_drone
 
-基于 **Ubuntu 22.04、ROS 2 Humble、OpenVINS、Nav2、PX4 v1.14.3** 的单机自主导航实验工程。当前任务只包含定位、先验地图全局规划、点云局部避障和飞行控制。仿真和真机使用同一套算法节点；Gazebo 只提供场景、相机、IMU 与飞行动力学，算法不读取 Gazebo 真值位姿。仓库不包含集群和目标识别任务。
+`one_drone` 是一台无人机的三维局部自主导航工程，运行环境为 **Ubuntu 22.04、ROS 2 Humble、OpenVINS、EGO-Planner / EGO-Swarm 单机模式和 MicoAir PX4 1.14.3**。仿真与真机使用同一套算法节点；Gazebo 只提供环境、相机、IMU 和飞行动力学，算法不读取仿真真值位姿。
 
-> 状态：此前已在一台 PX4 1.14.3 SITL 无人机上验证前视双目/IMU → OpenVINS → Nav2 → PX4 Offboard → 到点。纯 odom 模式已验证 Nav2 激活和路径生成；本次切换后的默认 map 全局／odom 局部模式尚未完成整机飞行复测。**真机尚未试飞验证**，必须完成实测标定、逐项检查与无桨台架测试，再在有隔离和人工接管条件的场地试飞。
+当前仓库只保留单机定位、三维局部建图、轨迹规划和 PX4 控制。Nav2、PGM 地图服务器、2D 代价地图、行为树、`cmd_vel` 控制链、`map→odom` 人工调整及相关功能包已经移除。多机协同、目标识别和任务决策暂不在本阶段范围内。
 
-## 当前启动入口
+> 当前状态：所有 ROS 2 功能包和总启动文件已在 Ubuntu 22.04 / Humble 上完成干净编译，并在 PX4 1.14.3 SITL 与 3 m 墙体识别柱场景中完成起飞、EGO 规划、轨迹执行和降落闭环验证。2 m 前向目标的最终 VIO 位置误差约 5 cm。真机尚未试飞验证，因此默认速度限制为 0.5 m/s，真机验证稳定后再逐步提高。
 
-启动分两步：`bringup` 负责相机、VIO、点云、飞控接口与 RViz；定位就绪后，再单独启动 `nav` 中的官方 Nav2 planner、controller、BT navigator 和 velocity smoother。**默认是 `map` 全局规划 + `odom` 局部控制**：RViz 的 Fixed Frame 和 2D Goal Pose 使用 `map`；先验 PGM 进入全局代价地图，深度点云进入 `odom` 局部代价地图。`map→odom` 由 `modify_map_to_odom` 直接发布，不设人工确认门控；其启动值直接读取 `src/rviz/modify_map_to_odom/config/config.yaml`。纯 `odom` 模式仍可显式选择。旧包名 `flight_bringup`、`one_drone_bringup` 已不再使用。
-
-首次获取此版本或切换自旧目录结构后，先按下文安装依赖并在仓库根目录运行 `colcon build --symlink-install`。已有环境且已构建时，直接运行：
-
-```bash
-cd ~/one_drone
-source /opt/ros/humble/setup.bash
-source ~/catkin_ws_ov/install/setup.bash
-source ~/one_drone/install/setup.bash
-source /tmp/one_drone_gz_env.sh
-PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
-```
-
-另开终端，加载同一套 ROS 工作空间和仿真时钟环境后运行：
-
-```bash
-cd ~/one_drone
-source /opt/ros/humble/setup.bash
-source ~/catkin_ws_ov/install/setup.bash
-source ~/one_drone/install/setup.bash
-source /tmp/one_drone_gz_env.sh
-PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true
-```
-
-完整仿真和真机流程见下文。
-
-## 数据和控制路径
+## 算法链路
 
 ```text
-仿真 Gazebo 或真机 D435i 的左右红外灰度图 + IMU
-       │
-       ├──> OpenVINS ──> /uav1/odomimu ──> vio_bridge ──> /odom + TF odom→base_link
-       │                                                └──> PX4 external vision
-       └──> 双目深度或真机深度 ──> /uav1/obstacles
-                                         └──> 高度切片 /navigation_obstacles
+左右红外灰度图 + IMU
+  └─ OpenVINS
+      ├─ /odom + TF odom→base_link
+      ├─ /vio_health
+      └─ PX4 vehicle_visual_odometry
 
-默认：先验 PGM /map ──> map 全局静态层 + 膨胀层
-      modify_map_to_odom ──> TF map→odom（不作为目标门控）
-      已观测点云 ──> odom 局部障碍层 + 膨胀层
-RViz 2D Goal Pose ──> goal_manager ──> Smac Hybrid-A* + Regulated Pure Pursuit
-                                                └──> velocity_smoother
-                                                       └──> /cmd_vel_smoothed
-                                                              └──> flight_bridge
-                                                                    └──> PX4 NED 速度设定值
+/odom
+  └─ ego_odom_adapter（机体系速度转 odom 世界系速度）
+      └─ /ego/odom
+
+双目深度图 + CameraInfo + T_body_depth + /ego/odom
+  └─ EGO GridMap（三维占用栅格和膨胀）
+      └─ B-spline 局部规划器
+          └─ /ego/planning/bspline
+              └─ traj_server
+                  └─ /ego/position_cmd
+                      └─ flight_bridge
+                          └─ PX4 Offboard 速度和偏航角速度设定值
+
+RViz 2D Goal Pose
+  └─ /navigation_goal
+      └─ goal_manager（VIO、飞行状态、深度门控）
+          └─ /ego/goal
 ```
 
-默认 `map` 模式下，`modify_map_to_odom` 是 `map→odom` 的唯一发布者，启动值直接读取 `src/rviz/modify_map_to_odom/config/config.yaml`；`odom→base_link` **只由 OpenVINS 发布**。导航和起飞不等待任何 `map→odom` 人工确认话题。RViz 面板可在运行时调整该变换；不使用面板时，配置文件中的值就是启动后的地图关系。仿真中的 Gazebo 真值位姿不进入算法。跨机使用时须保证节点处于同一 DDS 域，可用 `ros2 run tf2_ros tf2_echo map odom` 查看实际 TF。
+全链使用 `odom` 作为规划世界坐标。OpenVINS 启动位置就是 `(0,0,0)` 附近，起飞后 RViz 中的 `odom→base_link` 决定飞机位置；无需 PGM、`map` 坐标或人工对齐。EGO 的局部地图只由实际深度观测生成，未知区域不直接写成障碍。地图采用三维体素，能够在后续阶段扩展升降绕障。
 
-规划是 2D 的，默认巡航高度 2 m。运行时的 `/navigation_obstacles` 是深度点云经过机体同高切片、稀疏化后的点云。默认 `map` 模式加载 1.5–2.5 m 高度层的先验 PGM；全局代价地图在 `map` 中使用先验静态层与膨胀层，局部代价地图在 `odom` 中只使用点云障碍层与膨胀层。点云只影响局部避障，不改写先验全局路径。可选纯 `odom` 模式使用 60 m 的滚动自由全局窗口；该模式看不到的障碍物不会进入全局规划，不能把未知空间当作已验证的安全空间。Nav2 行为树只做路径规划和路径跟踪，不包含 Spin、BackUp、Wait 等恢复行为；`NavigateThroughPoses` 的兼容树也使用同样的最小流程。第一阶段采用前视相机运动约束：Smac Hybrid-A* 使用只允许前进的 `DUBIN` 模型生成曲线路径，规划器允许 0.8 m 的低速起步转弯；Regulated Pure Pursuit 同时输出前进速度和偏航角速度，关闭原地朝向对齐并禁止倒车、横移。曲率半径小于 3 m 或接近障碍物时自动降速，开阔直线速度上限为 1.5 m/s，偏航角速度上限为 0.5 rad/s。`flight_bridge` 再执行一次相同的方向限制，防止错误参数把盲区速度发给 PX4。相机看不到的障碍物不会凭空出现；默认地图模式用 PGM 表达静态场地障碍。
+`flight_bridge` 执行
 
-## 目录、功能包与接口
+```text
+v_cmd = v_ego + Kp × (p_ego - p_actual)
+```
 
-`src` 第一层按职责分为 `bringup/`、`perception/`、`localization/`、`navigation/`、`control/` 和 `rviz/`。`bringup/` 本身就是 ROS 2 包，直接包含 `launch/`、`map/`、`params/`、`rviz/`；其余目录内放对应功能包。Python 包的实现位于包内 `src/`。`bringup/launch/startup.launch.py` 在末尾逐行列出启动节点，方便上场时查看或注释；`navigation/nav/launch/bringup_launch.py` 是独立的 Nav2 入口。
+并把 odom 世界系速度转换到机体系和 PX4 NED。本阶段使用前视视场约束：目标方向在机头 ±30° 内正常平移；30°–55° 同时平移和缓慢转向；超过 55° 暂停平移并以最高 0.2 rad/s 把目标转回前视范围。因此没有“先原地转完再走”的阶段，也不会执行后退盲飞。
+
+## 目录与功能包
 
 ```text
 src/
-├── bringup/                         # 传感器、定位、地图、控制启动和上场配置
-│   ├── launch/startup.launch.py      # 文件末尾逐行列出启动节点，不启动 Nav2
-│   ├── params/global_config.yaml     # 地图模式选用的全局地图
-│   ├── params/nav2_params.yaml       # 默认 map 全局/odom 局部参数
-│   ├── params/nav2_odom_params.yaml  # 可选纯 odom 导航参数
-│   ├── map/                        # 先验 PGM/YAML
-│   ├── behavior_trees/             # Nav2 行为树
-│   ├── rviz/navigation.rviz          # 默认地图视图
-│   └── rviz/navigation_odom.rviz     # 可选纯 odom 视图
+├── bringup/
+│   ├── launch/startup.launch.py     # 唯一算法启动入口
+│   ├── params/ego_params.yaml       # EGO GridMap、规划和优化参数
+│   └── rviz/ego_navigation.rviz     # odom、TF、三维占用和轨迹显示
 ├── perception/
-│   ├── camera_stream/                # 真机相机与 IMU 话题转发
-│   ├── stereo_depth/                 # 双目深度
-│   └── obstacle_cloud/               # 深度转障碍点云
+│   ├── camera_stream/               # 真机图像与 IMU 话题转发
+│   ├── stereo_depth/                # 仿真/软件双目深度
+│   └── obstacle_cloud/              # 调试用深度点云与自体掩膜
 ├── localization/
-│   └── vio_bridge/                   # OpenVINS 到里程计及 PX4
+│   └── vio_bridge/                  # OpenVINS 健康检查、/odom、TF、PX4 外部视觉
 ├── navigation/
-│   ├── nav/                          # 单独启动官方 Nav2 功能包
-│   ├── obstacle_filter/              # 飞行高度障碍切片
-│   └── goal_manager/                 # 目标门控
-├── control/flight_bridge/            # 平滑速度转 PX4 Offboard 指令
-└── rviz/
-    ├── modify_map_to_odom/           # map→odom TF
-    └── rviz_tf_shift/                # 保留的手动调整面板，无需操作
+│   ├── ego_bridge/                  # /odom 与深度健康适配
+│   ├── ego_planner/                 # EGO-Swarm ROS 2 单机规划核心
+│   └── goal_manager/                # RViz 目标门控与 /ego/goal 发布
+└── control/
+    └── flight_bridge/               # PositionCommand 到 PX4 Offboard
 ```
 
-| 包 | 职责 | 主要输入 | 主要输出／可调配置 |
+EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，固定来源提交写在 `src/navigation/ego_planner/UPSTREAM.md`，许可证保留在同目录 `LICENSE`。仓库只引入单机运行必需的 `plan_env`、`path_searching`、`bspline_opt`、`traj_utils`、`ego_planner` 和 `quadrotor_msgs`。
+
+| 功能包 | 主要输入 | 主要输出 | 参数位置 |
 | --- | --- | --- | --- |
-| `perception/camera_stream` | 真机左右目和 IMU 话题转发 | 相机驱动话题 | `/uav1/cam0/image_raw`、`/uav1/cam1/image_raw`、`/uav1/imu0` |
-| `perception/stereo_depth` | 左右目软件双目匹配 | 左右灰度图、标定 | `/uav1/d435i/depth/image_raw` |
-| `perception/obstacle_cloud` | 深度反投影及机架遮挡过滤 | 深度图、内外参 | `/uav1/obstacles` |
-| `localization/vio_bridge` | 校验 VIO、跳变恢复、里程计、PX4 外部视觉 | `/uav1/odomimu`、双目时间戳 | `/odom`、`odom→base_link`、`/vio_health`、PX4 `vehicle_visual_odometry` |
-| `navigation/obstacle_filter` | 巡航高度障碍切片 | `/uav1/obstacles`、里程计 | `/navigation_obstacles` |
-| `navigation/goal_manager` | 目标和定位、感知状态门控 | `/navigation_goal`、定位与避障状态 | Nav2 `NavigateToPose` 目标、`/navigation_state` |
-| `bringup` | 启动感知、定位、默认地图服务、飞控接口、RViz；集中管理上场配置 | YAML 参数、PGM 地图、传感器话题 | `/map`、`/odom`、`/navigation_obstacles`、启动清单 |
-| `navigation/nav` | 单独启动官方 Nav2 planner、controller、BT navigator、velocity smoother | `/map`、TF、`/odom`、`/navigation_obstacles`、目标 | `/plan`、`/cmd_vel`、`/cmd_vel_smoothed` |
-| `control/flight_bridge` | 起飞/悬停/降落、前向速度安全约束、机体系 FLU 到 PX4 本地 NED 转换 | `/cmd_vel_smoothed`、PX4 本地状态 | PX4 Offboard 设定值、`/flight_state`、`/flight_safety_status` |
-| `rviz/modify_map_to_odom` | 哨兵式 map→odom TF 发布节点 | 配置文件、共享内存、`/map_odom/set` | `/tf` 中的 `map→odom` |
-| `rviz/rviz_tf_shift` | 保留的手动地图调整面板，无需操作 | 操作者输入、导航话题 | `/map_odom/set` |
+| `camera_stream` | 真机驱动左右目、IMU | `/uav1/cam0/image_raw`、`cam1`、`imu0` | 包内 `config/params.yaml` |
+| `stereo_depth` | 左右红外灰度图、双目标定 | `/uav1/d435i/depth/image_raw`、CameraInfo | 包内 `config/params.yaml` |
+| `obstacle_cloud` | 深度、CameraInfo、相机外参 | `/uav1/obstacles`，仅调试显示 | 包内 `config/params.yaml` |
+| `vio_bridge` | `/uav1/odomimu`、双目时间戳 | `/odom`、`odom→base_link`、`/vio_health`、PX4 外部视觉 | 包内 `config/params.yaml` |
+| `ego_bridge` | `/odom`、深度图 | `/ego/odom`、`/ego/depth_fresh` | 包内 `config/params.yaml` |
+| `ego_planner` | `/ego/odom`、深度、CameraInfo、`/ego/goal` | 三维占用、B-spline、可视化 Marker | `bringup/params/ego_params.yaml` |
+| `goal_manager` | `/navigation_goal`、VIO、深度、飞行状态 | `/ego/goal`、`/navigation_state` | 包内 `config/params.yaml` |
+| `flight_bridge` | `/ego/position_cmd`、`/ego/odom`、PX4 状态 | PX4 Offboard 设定值、飞行状态与安全状态 | 包内 `config/params.yaml` |
 
-配置文件由 launch 加载。各包自身的参数位于包内 `config/params.yaml`；默认 Nav2 参数集中在 `src/bringup/params/nav2_params.yaml`；可选纯 odom 参数在 `src/bringup/params/nav2_odom_params.yaml`。赛场地图的 YAML 和图像放进 `src/bringup/map/`，在 `src/bringup/params/global_config.yaml` 的 `map:` 一行选用；临时切换可在启动 `bringup` 时传 `map_file:=/绝对路径/地图.yaml` 覆盖该设置。`startup.launch.py` 按哨兵工程的结构，通过 `ComposableNodeContainer` 和 `LoadComposableNodes` 加载 `MapServer` 与 `lifecycle_manager_localization`。地图 YAML 的 `image:` 字段选择实际 PGM/PNG，因此切换地图时选择 YAML 文件。默认 `navigation_mode:=map` 会读取地图；纯 odom 模式不读取。默认 RViz 配置是 `src/bringup/rviz/navigation.rviz`。相机安装外参、PX4 system id 和驱动话题由启动参数覆盖；这些值必须来自当前飞机的实测或实际连接。按本仓库的 `--symlink-install` 构建后，修改已有 YAML、PGM 或 RViz 配置只需重启相关 launch；新增地图或其他资源后，在仓库根目录执行一次 `colcon build --symlink-install` 即可自动重新配置并安装。核心运行参数无需编辑 Python 源码。
+## 关键参数
 
-## 仿真：从零运行
+所有常用参数均在 YAML 中修改，无需改源码。
 
-1. 准备机器。安装 Ubuntu 22.04/ROS 2 Humble，确保 Gazebo Garden、图形驱动与磁盘空间充足。运行环境安装脚本，它会检出并校验固定版本的 MicoAir PX4 1.14.3、OpenVINS 与对应 `px4_msgs`，给 SITL 加入仿真时钟适配，构建算法工作区：
+`src/bringup/params/ego_params.yaml` 的初始 RK3566 配置：
 
-   ```bash
-   # 仅首次安装时执行；如果 ~/one_drone 已存在，跳过 git clone。
-   git clone https://github.com/PingTIKES/one_drone.git ~/one_drone
-   cd ~/one_drone
-   bash setup_env.sh sim
-   ```
+- 体素分辨率 `grid_map/resolution: 0.15`
+- 地图尺寸 `32 × 36 × 3 m`
+- 局部更新范围 `4.5 × 4.5 × 2 m`
+- 障碍膨胀 `0.30 m`
+- 深度范围 `0.30–5.0 m`，最大射线 `4.5 m`
+- 深度降采样 `skip_pixel: 4`
+- 最大规划速度 `0.5 m/s`，最大加速度 `1.0 m/s²`
+- 规划视距 `4.5 m`
+- 单机模式 `drone_id: 0`，移动目标预测数量 `0`
 
-   默认路径为 `~/PX4-Autopilot-1.14.3` 和 `~/catkin_ws_ov`，可用 `PX4_DIR`、`OV_WS` 环境变量修改。`setup_env.sh` 用 `bash` 执行，**不要 `source`**。如果此前已有同名 PX4 目录但不是脚本要求的固定提交，先另选空目录作为 `PX4_DIR`。若安装时出现 `packagekitd` 占用 `/var/lib/apt/lists/lock`，等待系统软件更新完成后重新运行 `bash setup_env.sh sim`；不要删除锁文件。仓库只存储压缩后的 3 m 墙体模型；`scripts/prepare_field_model.sh` 会校验并解压它，仿真世界含六个有色识别柱。地图 PGM 与此世界配套。
+速度上限必须同时修改以下位置：
 
-2. 终端 A：启动一台 Gazebo/PX4 1.14.3 和 Micro XRCE Agent。默认打开 Gazebo 图形窗口；无图形环境使用 `HEADLESS=1`。等终端输出 `[sim] Ready.` 后再执行第 3 步；Gazebo 窗口出现不代表相机和 IMU 已经开始发布。
+1. `bringup/params/ego_params.yaml` 中 `manager/max_vel`、`optimization/max_vel` 和 `bspline/limit_vel`；
+2. `control/flight_bridge/config/params.yaml` 中 `max_horizontal_speed`。
 
-   ```bash
-   cd ~/one_drone
-   bash scripts/start_algorithm_sim.sh
-   ```
+先完成 0.5 m/s 的避障和 VIO 稳定验证，再提高到 1.0 m/s。达到 3 m/s 前必须实测深度有效距离、端到端延迟、制动距离、转弯半径和 RK3566 规划耗时；不能只修改速度数值。
 
-3. 终端 B：启动感知、定位、先验地图服务、飞控接口和 RViz。仿真时钟环境文件由终端 A 生成。
+GridMap 不再使用上游硬编码相机安装关系。`startup.launch.py` 从仿真模型或真机 `body.yaml` 取得 `T_body_depth`，并传入 `grid_map/cam2body`；内参由对应深度 `CameraInfo` 动态更新。深度与里程计采用近似时间同步。
 
-   ```bash
-   cd ~/one_drone
-   source /opt/ros/humble/setup.bash
-   source ~/catkin_ws_ov/install/setup.bash
-   source ~/one_drone/install/setup.bash
-   source /tmp/one_drone_gz_env.sh
-   PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
-   ```
+## 首次安装与构建
 
-4. 等待 `/vio_health` 为 `VALID`、`/odom` 和深度点云连续发布。启动时 OpenVINS 可能短暂打印 `[ZUPT]: There are no IMU data to check for zero velocity with!!`；只有随后变为 `VALID` 且里程计持续发布，才能继续。若提示持续出现或 VIO 始终无效，按下文“运行检查”的 IMU/双目频率与时间戳步骤排查，**不要起飞**。默认模式下，确认 `/map` 已发布、`ros2 lifecycle get /map_server` 为 `active`，以及 `map→odom→base_link` TF 正常。RViz **Fixed Frame = map**。系统直接使用 `modify_map_to_odom/config/config.yaml` 的变换，不需要人工确认。Gazebo 真值位姿不进入算法。
+```bash
+git clone https://github.com/PingTIKES/one_drone.git ~/one_drone
+cd ~/one_drone
+bash setup_env.sh sim       # 仿真机
+# 或 bash setup_env.sh onboard
+```
 
-5. 终端 C：单独启动 Nav2。与终端 B 使用相同的 ROS 工作空间和仿真时钟，等待 `/planner_server`、`/controller_server`、`/bt_navigator`、`/velocity_smoother` 都进入 `active` 后再打点；启动 Nav2 不需要重启终端 B。
+脚本固定并校验 MicoAir PX4 1.14.3、`px4_msgs` release/1.14 和 OpenVINS 版本，安装 PCL、Eigen、cv_bridge 和 CycloneDDS，然后构建工作区。已有仓库不要再次 `git clone`。若 `apt` 被 `packagekitd` 占锁，等系统更新完成后重试，不要删除锁文件。
 
-   ```bash
-   cd ~/one_drone
-   source /opt/ros/humble/setup.bash
-   source ~/catkin_ws_ov/install/setup.bash
-   source ~/one_drone/install/setup.bash
-   source /tmp/one_drone_gz_env.sh
-   PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=true
-   ```
+日常修改 YAML、launch 或 Python 后执行：
 
-6. 确认 `/vio_health=VALID`、PX4 本地位置有效后发出起飞命令。深度点云暂时中断时仍可起飞并在 PX4 本地坐标悬停；VIO 或 PX4 本地定位失效时 `/takeoff` 会返回具体缺失项。无人机应先进入 `PRESTREAM`、`ARMING`、`TAKEOFF`，到约 2 m 后成为 `CRUISE`。**在 RViz 打 2D Goal Pose 前**，确认 `/obstacle_fresh=true`、Nav2 已激活，且飞机在先验地图上的位置与方向合理。导航目标经 Nav2 规划、控制和速度平滑后交给 PX4。观察 `/navigation_state`、`/flight_state`、`/plan`、`/cmd_vel_smoothed`。
+```bash
+cd ~/one_drone
+colcon build --symlink-install
+```
 
-   ```bash
-   ros2 service call /takeoff std_srvs/srv/Trigger '{}'
-   ros2 topic echo /flight_state
-   ros2 topic echo /navigation_state
-   # 完成后主动降落
-   ros2 service call /land std_srvs/srv/Trigger '{}'
-   ```
+## 仿真流程
 
-   RViz 的 2D Goal Pose 发布到 `/navigation_goal`，只能经过 `goal_manager` 进入 Nav2。也可用 `ros2 topic pub --once /navigation_goal geometry_msgs/msg/PoseStamped` 发点，默认 `header.frame_id` 必须为 `map`；纯 odom 模式才用 `odom`。`/navigation_state` 使用 transient local QoS，查看最近一次门控结果可运行 `ros2 topic echo --once /navigation_state --qos-durability transient_local`。目标方位不会强迫飞机先转向。默认地图模式会检查先验禁飞格和地图边界；纯 odom 模式的目标需位于 60 m 滚动规划窗口内。
+### 1. 启动环境和 PX4 1.14.3
 
-### 可选：纯 odom 模式
+终端 A：
 
-如果暂时不使用先验地图，可在终端 B 的启动命令末尾加 `navigation_mode:=odom`，终端 C 同样加 `navigation_mode:=odom`。两个入口必须使用同一种模式。此时不启动地图服务和 `map→odom`，RViz Fixed Frame 为 `odom`，打点目标也使用 `odom`；无需手动地图对齐。全局规划窗口默认 60 m 且未观测区域视作可通行，局部代价地图仍用点云避障，因此不能预知视野外的墙。
+```bash
+cd ~/one_drone
+bash scripts/start_algorithm_sim.sh
+```
 
-默认地图模式的地图选择在 `src/bringup/params/global_config.yaml` 的 `map:` 一行；地图 YAML 和其 `image:` 指向的 PGM/PNG 放进 `src/bringup/map/`。当次启动可用 `map_file:=/absolute/path/to/field.yaml` 覆盖。内置 PGM 只适合仓库所附 RMUC 仿真场，真机必须换成实测场地地图。
+等待输出 `[sim] Ready.`。无图形环境可在命令前加 `HEADLESS=1`。脚本使用 3 m 墙体且带彩色识别柱的场景，并生成 `/tmp/one_drone_gz_env.sh`。
 
-## 真机：标定、连接和运行
+### 2. 一键启动全部算法
 
-目标飞控为 **MicoAir743v2-AIO-35A，PX4 1.14.3**。当前没有第二套独立定位传感器。PX4 对 OpenVINS 外部视觉的融合用于飞控本地位置；飞控估计与 OpenVINS 可能相关，二者不能当成互相独立的冗余定位。深度中断时取消当前导航目标并使用 PX4 本地位置悬停；VIO 或 PX4 本地位置失效时进入需要人工恢复的 `HOLD`。如果 PX4 自身丢失本地位置，PX4 的 failsafe 仍可能接管并降落。本工程无法在无定位备份时保证任何情况下都不会非撞击降落。
+终端 B：
 
-1. **机械与时间同步。** 将 D435i 刚性安装在机头正前方，确保双红外、深度视野不被桨叶/机架挡住，测量机体 FLU 到相机 IMU 与深度光学系的外参。相机/IMU 数据需使用同一时基并确认时间戳单调；不可把不同电脑的未同步系统时间混用。确认飞机重心、桨方向、飞控朝向、遥控接管/急停、PX4 电池/失控保护和场地净空。
+```bash
+cd ~/one_drone
+source /opt/ros/humble/setup.bash
+source ~/catkin_ws_ov/install/setup.bash
+source ~/one_drone/install/setup.bash
+source /tmp/one_drone_gz_env.sh
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
+```
 
-2. **离线标定。** 对该台 D435i 的双红外做内参、双目外参和相机 IMU 时延/外参标定（例如 Kalibr）；在静止和多方向运动数据上检查重投影误差、同步和尺度。测量 IMU 噪声密度/随机游走与 `T_body_imu`，硬件深度路径还需 `T_body_depth`。准备 `camchain-imucam.yaml`、`imu.yaml` 和 `body.yaml`，然后导入并校验：
+不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。
 
-   ```bash
-   python3 tools/import_kalibr.py \
-     --camchain /path/to/camchain-imucam.yaml \
-     --imu /path/to/imu.yaml \
-     --body /path/to/body.yaml \
-     --output ~/one_drone_calibration
-   ```
-
-   `body.yaml` 中 `T_body_imu`、`T_body_depth` 是 4×4 矩阵，表示 **body FLU ← sensor**。输出目录必须是新目录。仿真内参/外参不能直接用于真机。使用标定对应的红外图像格式及分辨率；变更分辨率、镜头位置或设备需重标定。
-
-3. **安装环境并确认 PX4 与 DDS。** 在伴随计算机运行 `bash setup_env.sh onboard`。飞控刷机、参数、EKF2 外部视觉融合和 uXRCE DDS 启动需在 QGroundControl/PX4 侧按该机硬件配置完成，并确认实际 `MAV_SYS_ID`。启动 Micro XRCE Agent，检查 `/fmu/out/vehicle_local_position`、`/fmu/out/vehicle_status` 的**实际前缀**，以及飞控能接收 `vehicle_visual_odometry`。仿真的 `/px4_1/fmu/...` 是实例 1；真机可能是 `/fmu/...`，此时启动时传 `px4_ns:=/`。不要假设仿真的 system id 2 等于真机 id。
-
-4. **相机驱动和话题检查。** 启动 `realsense2_camera` 的红外双目、深度、陀螺仪、加速度计和组合 IMU 流。用 `ros2 topic list`、`ros2 topic hz`、`ros2 topic echo --once .../camera_info` 核实左右目同步且与标定一致、IMU 频率和深度量纲。将下面的五个启动参数改为当前驱动的真实话题；相机断开或帧率过低时先修 USB 带宽与驱动。
-
-5. **无桨台架验证，再低风险试飞。** 默认使用先验 PGM 做全局规划；请换成实测场地地图。启动后检查 TF、/odom、/vio_health、/navigation_obstacles 和代价地图。确认 PX4 接受外部视觉且本地位置稳定后，才按场地规程做小范围起飞和本地悬停。移动飞机/转机头，确认 RViz 中 `odom→base_link` 的方向与真机一致。全过程保留遥控人工接管。
-
-   ```bash
-   cd ~/one_drone
-   source /opt/ros/humble/setup.bash
-   source ~/catkin_ws_ov/install/setup.bash
-   source ~/one_drone/install/setup.bash
-   PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
-     sim:=false rviz:=true depth_source:=hardware \
-     calibration_dir:=/home/ubuntu22/one_drone_calibration \
-     target_system:=1 px4_ns:=/ \
-     cam0_topic:=/actual/right/infrared \
-     cam1_topic:=/actual/left/infrared \
-     imu_topic:=/actual/synchronized/imu \
-     depth_topic:=/actual/depth/image_rect_raw \
-     depth_info_topic:=/actual/depth/camera_info
-   ```
-
-   本地 VIO 定位正常后，在另一终端加载同样的三个 ROS 环境，并单独启动 Nav2：
-
-   ```bash
-   cd ~/one_drone
-   source /opt/ros/humble/setup.bash
-   source ~/catkin_ws_ov/install/setup.bash
-   source ~/one_drone/install/setup.bash
-   PYTHONNOUSERSITE=1 ros2 launch nav bringup_launch.py use_sim_time:=false
-   ```
-
-   `target_system` 和话题均为**示例占位**，运行前按真机修改。真机深度使用硬件深度数据，但 OpenVINS 仍使用左右红外灰度图和 IMU。测距的 `depth_scale` 默认 0.001（16 位毫米）；若驱动发布 32FC1 米，节点按米解释。飞行命令与仿真相同：`/takeoff`、RViz 2D Goal Pose、`/land`。失效进入 `HOLD` 后排除原因、重新定位，再调用 `/resume_navigation` 并重新打点。
-
-## 排查与观测
+### 3. 起飞前检查
 
 ```bash
 ros2 topic hz /uav1/cam0/image_raw
 ros2 topic hz /uav1/cam1/image_raw
 ros2 topic hz /uav1/imu0
-ros2 topic hz /uav1/odomimu
+ros2 topic hz /uav1/d435i/depth/image_raw
+ros2 topic hz /ego/odom
 ros2 topic echo --once /vio_health
-ros2 topic echo --once /vio_diagnostics
-ros2 topic echo --once /obstacle_fresh
-ros2 topic hz /navigation_obstacles
-ros2 topic echo --once /flight_state
-ros2 topic echo --once /flight_hold_reason std_msgs/msg/String --qos-durability transient_local
-ros2 topic echo --once /flight_safety_status std_msgs/msg/String --qos-durability transient_local
-ros2 topic echo --once /navigation_state
+ros2 topic echo --once /ego/depth_fresh
+ros2 topic hz /ego/occupancy_inflate
 ros2 run tf2_ros tf2_echo odom base_link
-ros2 run tf2_ros tf2_echo map base_link
 ```
 
-`HOLD` 时不会自动恢复导航；`/flight_hold_reason` 保留最近一次进入 `HOLD` 的原因。`/cmd_vel` 和 `/cmd_vel_smoothed` 有数据只证明 Nav2 在输出；`flight_bridge` 在 `HOLD` 时向 PX4 发位置保持设定值，不执行这些速度。第一阶段按 1.5 m/s、0.5 s 反应时间、0.6 m/s² 制动减速度和 0.5 m 余量计算，要求至少 3.125 m 前向净空；如果配置的速度所需距离超过 `verified_forward_range`，`flight_bridge` 会拒绝启动。1.5 m/s 和 0.5 rad/s 对应 3 m 最小转弯半径；提高到 3 m/s 前必须同步增大转弯半径、前视距离和制动净空。`/flight_safety_status` 每秒给出当前 VIO/深度年龄、稳定状态和所需制动净空。起飞与从 HOLD 恢复前，VIO 必须连续有效 1 s。VIO 姿态跳变检测会扣除 IMU 角速度能够解释的正常转动，持续转弯本身不会再触发固定 20°跳变门限；无法由角速度解释的姿态突变仍会隔离。`map→odom` 没有人工确认门控，系统始终采用 `modify_map_to_odom` 当前发布的变换。深度点云暂时中断时，`flight_bridge` 停止执行导航速度并使用 PX4 本地位置悬停，`goal_manager` 取消不安全的目标；点云恢复后需要重新打点。若曾发生 VIO 重置，原有目标已失效，需要确认定位恢复后重新打点。VIO 或 PX4 本地位置失效进入 `HOLD` 后排除原因，再调用 `/resume_navigation`。若 OpenVINS 的轨迹跳到几百米，停止试飞并录制左右目、IMU、`/uav1/odomimu`、`/vio_health` 和 PX4 本地位置/状态。默认地图模式中的黑色区域可能来自先验 PGM 或局部已观测障碍层，排查时分别看 RViz 的 `PriorMap`、`LocalCostmap` 和 `DepthObstacles`。可选纯 odom 模式只使用局部观测障碍。OpenVINS 的坐标原点任意，不能把仿真的 PX4 坐标直接当成地图坐标。
+必须满足：`/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。当前软件双目实测约 3.5 Hz，因此深度心跳超时为 0.5 秒；若实际频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
 
-启动阶段的 `[init]: not enough feats to compute disp: 0,46 < 15` 表示初始化窗口前半段缺少可持续跟踪的特征；短暂出现后若 `/vio_health` 变为 `VALID`、`/uav1/odomimu` 连续发布，则初始化已完成。`[ZUPT]: There are no IMU data to check for zero velocity with!!` 是一次零速更新所需的**相机时间区间内**少于两条 IMU 样本，OpenVINS 会跳过这次零速更新；它本身不能证明整个 IMU 话题没有发布。`No IMU measurements to propagate with` 也是特定时间区间的样本不足。若持续出现或 `/vio_health` 不能变成 `VALID`，在算法运行时检查 `ros2 topic hz /uav1/imu0`（预期约 200 Hz）、`ros2 topic hz /uav1/cam0/image_raw` 和 `/uav1/cam1/image_raw`（各约 30 Hz），再用 `ros2 topic echo --once /uav1/imu0 --field header.stamp` 和相机的 `header.stamp` 核对是否处于同一仿真时间；同时确认终端 B 已 source 终端 A 生成的 `/tmp/one_drone_gz_env.sh`，且没有多套 Gazebo/PX4 残留。频率正常仍持续报错时，录制 `/clock`、双目和 IMU 供逐帧核对时间戳；不要靠关闭 ZUPT 掩盖时间同步问题。仿真退出后应由启动脚本回收 Gazebo、PX4 和 Agent；不要同时开启多套同名仿真。
+### 4. 起飞、打点和降落
 
-## 版本与边界
+```bash
+ros2 service call /takeoff std_srvs/srv/Trigger '{}'
+ros2 topic echo /flight_state
+```
 
-`setup_env.sh` 固定 MicoAir PX4 1.14.3 提交、`px4_msgs` release/1.14 提交和 OpenVINS 提交，以减少消息协议及行为差异。Gazebo 物理与图像模型不是实物传感器的完整复制；仿真跑通只证明该链路在当前模型上工作。当前固定高度 2D 规划不会规划升降绕障；可选纯 odom 模式不会预知未观测障碍，两种模式都不支持移动障碍预判或 VIO 完全失效后的自主返航。多机、视觉目标识别和任务决策留待后续独立开发。
+`flight_state` 依次经过 `PRESTREAM → ARMING → TAKEOFF → CRUISE`。进入 `CRUISE` 后使用 RViz 的 **2D Goal Pose** 打点。工具发布 `/navigation_goal`，`goal_manager` 将高度设为默认 2 m 后发布 `/ego/goal`。观察：
+
+```bash
+ros2 topic echo /navigation_state
+ros2 topic hz /ego/planning/bspline
+ros2 topic hz /ego/position_cmd
+ros2 topic echo /flight_safety_status --qos-durability transient_local
+```
+
+任务结束主动降落：
+
+```bash
+ros2 service call /land std_srvs/srv/Trigger '{}'
+```
+
+## 真机流程
+
+目标飞控为 **MicoAir743v2-AIO-35A，PX4 1.14.3**。当前只有 D435i 和飞控，没有独立定位备份，因此 VIO 完全失效后无法继续自主定位。
+
+### 1. 机械安装和标定
+
+- D435i 刚性安装在机头正前方，左右红外和深度视野不得被桨叶、保护架或线束遮挡。
+- 标定左右红外内参、双目外参、相机与 IMU 的时间偏差和外参。
+- 测量 `T_body_imu` 与 `T_body_depth`，定义为 **body FLU ← sensor** 的 4×4 变换。
+- 采集静止、平移和多方向转动数据，检查重投影误差、尺度、时间戳单调性和 IMU 噪声参数。
+
+导入 Kalibr 结果：
+
+```bash
+python3 tools/import_kalibr.py \
+  --camchain /path/to/camchain-imucam.yaml \
+  --imu /path/to/imu.yaml \
+  --body /path/to/body.yaml \
+  --output ~/one_drone_calibration
+```
+
+改变分辨率、镜头相对位置或相机设备后必须重标定。仿真标定不能用于真机。
+
+### 2. PX4 和传感器检查
+
+- 在 QGroundControl 中确认机型、飞控朝向、传感器标定、遥控接管、急停、电池和失控保护。
+- 配置 PX4 EKF2 融合外部视觉，确认实际 `MAV_SYS_ID` 和 uXRCE DDS 名称空间。
+- 启动 D435i 左右红外、深度、陀螺仪与加速度计，确认组合 IMU 与图像使用同一时基。
+- 无桨状态下验证 PX4 能收到 `vehicle_visual_odometry`，移动机体时 `/ego/odom`、RViz 与实物方向一致。
+
+### 3. 启动真机算法
+
+```bash
+cd ~/one_drone
+source /opt/ros/humble/setup.bash
+source ~/catkin_ws_ov/install/setup.bash
+source ~/one_drone/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
+  sim:=false rviz:=true depth_source:=hardware \
+  calibration_dir:=/home/ubuntu22/one_drone_calibration \
+  target_system:=1 px4_ns:=/ \
+  cam0_topic:=/actual/right/infrared \
+  cam1_topic:=/actual/left/infrared \
+  imu_topic:=/actual/synchronized/imu \
+  depth_topic:=/actual/depth/image_rect_raw \
+  depth_info_topic:=/actual/depth/camera_info
+```
+
+示例话题和 `target_system` 必须替换为当前设备实际值。真机深度进入 EGO GridMap，OpenVINS 仍使用左右红外灰度图和 IMU。先完成无桨台架和小范围 0.5 m/s 试飞，再逐级放开速度。
+
+## 安全状态与故障排查
+
+`flight_bridge` 保留显式 `/takeoff`、`/land` 和 `/resume_navigation` 服务。深度暂时中断时停止执行轨迹并用 PX4 本地位置悬停；VIO 或 PX4 本地位置失效时进入 `HOLD`，不会由本节点主动发送降落命令。PX4 自身 estimator failsafe 仍然具有最终控制权。
+
+```bash
+ros2 topic echo --once /flight_hold_reason std_msgs/msg/String --qos-durability transient_local
+ros2 topic echo --once /flight_safety_status std_msgs/msg/String --qos-durability transient_local
+ros2 topic echo --once /vio_diagnostics
+ros2 topic echo --once /navigation_state --qos-durability transient_local
+```
+
+`[init]: not enough feats` 表示 OpenVINS 初始化窗口缺少持续特征；若之后 VIO 变为 `VALID`，短暂出现可以接受。持续出现 `No IMU measurements to propagate with` 或 ZUPT 无 IMU，需检查左右目约 30 Hz、IMU 约 200 Hz，以及所有 `header.stamp` 是否处于同一个仿真或系统时钟。不要通过关闭 ZUPT 掩盖同步问题。
+
+EGO 无轨迹时先检查：
+
+1. `/ego/odom` 是否有频率且 `frame_id=odom`；
+2. 深度与 CameraInfo 是否发布，QoS 是否匹配；
+3. `/ego/occupancy_inflate` 是否有数据；
+4. 飞行状态是否为 `CRUISE`；
+5. `/navigation_state` 是否为 `GOAL_SENT_TO_EGO`；
+6. 目标是否位于当前 32 × 36 × 3 m 地图边界内。
+
+VIO 跳变或自动进入 HOLD 时，录制：
+
+```bash
+ros2 bag record -o flight_bags/vio_fault_$(date +%Y%m%d_%H%M%S) \
+  /clock /uav1/cam0/image_raw /uav1/cam1/image_raw /uav1/imu0 \
+  /uav1/odomimu /vio_health /vio_diagnostics /ego/odom \
+  /ego/position_cmd /px4_1/fmu/out/vehicle_local_position \
+  /px4_1/fmu/out/vehicle_status
+```
+
+真机将 `/px4_1` 改为实际 PX4 名称空间，并同时保存 `.ulg`。把 rosbag 目录与对应 ULog 一并提供，才能区分图像/IMU 时间缺口、OpenVINS 跳变、PX4 EKF reset 或控制链超时。
+
+## 已知边界
+
+- 当前是单机 EGO 模式，不做 EGO-Swarm 多机轨迹广播与碰撞协调。
+- 当前目标高度固定为 2 m，EGO 内部已是三维规划，但 RViz 2D Goal Pose 不提供目标高度；可在 `goal_manager/config/params.yaml` 修改。
+- 只有前视深度。目标落在后方时会先以低速转入视场，无法感知的后方区域不会被假定为安全。
+- 无独立定位备份时，OpenVINS 完全失效不能保证继续自主飞行。
+- 仿真通过只证明软件链与当前模型兼容，不能替代真机标定、台架测试和受控场地试飞。

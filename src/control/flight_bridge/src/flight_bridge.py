@@ -1,4 +1,4 @@
-"""Explicit PX4 takeoff/hold/land service and Nav2 body-velocity adapter.
+"""Explicit PX4 takeoff/hold/land service and EGO trajectory adapter.
 
 No autonomous land command is sent on VIO or depth loss. On loss, this node
 holds PX4's current local position and requires explicit resume after recovery.
@@ -10,15 +10,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
-from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
+from quadrotor_msgs.msg import PositionCommand
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from px4_msgs.msg import (OffboardControlMode, TrajectorySetpoint,
                           VehicleCommand, VehicleLocalPosition, VehicleStatus)
 
-from flight_bridge.velocity_math import (body_flu_to_ned,
-                                         constrain_body_velocity,
-                                         required_forward_clearance)
+from flight_bridge.velocity_math import body_flu_to_ned, required_forward_clearance
 
 
 NAV_OFFBOARD = 14
@@ -29,12 +28,13 @@ class FlightBridge(Node):
     def __init__(self):
         super().__init__('flight_bridge')
         defaults = dict(px4_ns='px4_1', target_system=2, takeoff_altitude=2.,
-                        max_horizontal_speed=1.5, max_yaw_rate=.5,
-                        allow_reverse=False, max_lateral_speed=0.,
+                        max_horizontal_speed=.5, max_vertical_speed=.3,
+                        max_yaw_rate=.2, position_gain=.8,
+                        fov_soft_angle_deg=30., fov_hard_angle_deg=55.,
                         reaction_time=.5, assumed_braking_deceleration=.6,
                         safety_margin=.5, verified_forward_range=5.,
-                        command_timeout=.3, pose_timeout=.5, vio_timeout=.5,
-                        vio_stable_time=1., depth_heartbeat_timeout=.3, depth_grace=.55,
+                        command_timeout=.2, pose_timeout=.5, vio_timeout=.5,
+                        vio_stable_time=1., depth_heartbeat_timeout=.5, depth_grace=.8,
                         takeoff_tolerance=.2, takeoff_stable_time=1.)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
@@ -54,7 +54,8 @@ class FlightBridge(Node):
         self.last_obstacle_good = -math.inf
         self.vio_ok = self.obstacle_ok = False
         self.vio_valid_since = None
-        self.cmd = Twist()
+        self.cmd = None
+        self.ego_odom = None
         self.takeoff_target = self.hold_target = None
         self.takeoff_reached_since = None
         self.prestream_count = 0
@@ -74,13 +75,14 @@ class FlightBridge(Node):
         self.safety_pub = self.create_publisher(String, 'flight_safety_status', latched)
         self.hold_reason_pub.publish(String(data=''))
         self.safety_pub.publish(String(
-            data=f'FORWARD_ONLY max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
+            data=f'EGO_FOV_GATED max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
                  f'required_clearance={self.required_clearance:.2f}m'))
         self.create_subscription(VehicleLocalPosition, px4 + 'out/vehicle_local_position', self.on_position, qos)
         self.create_subscription(VehicleStatus, px4 + 'out/vehicle_status', self.on_status, qos)
-        self.create_subscription(Twist, 'cmd_vel_smoothed', self.on_velocity, 10)
+        self.create_subscription(PositionCommand, '/ego/position_cmd', self.on_position_command, 20)
+        self.create_subscription(Odometry, '/ego/odom', self.on_ego_odom, 20)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
-        self.create_subscription(Bool, 'obstacle_fresh', self.on_obstacle, 10)
+        self.create_subscription(Bool, '/ego/depth_fresh', self.on_obstacle, 10)
         self.create_service(Trigger, 'takeoff', self.takeoff)
         self.create_service(Trigger, 'resume_navigation', self.resume)
         self.create_service(Trigger, 'land', self.land)
@@ -117,7 +119,7 @@ class FlightBridge(Node):
         vio_age = now - self.vio_at if math.isfinite(self.vio_at) else math.inf
         depth_age = now - self.last_obstacle_good if math.isfinite(self.last_obstacle_good) else math.inf
         self.safety_pub.publish(String(
-            data=f'forward_only={not bool(self.p("allow_reverse"))} '
+            data=f'ego_tracking=true '
                  f'max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
                  f'required_clearance={self.required_clearance:.2f}m '
                  f'command_clamped={self.command_clamped} '
@@ -130,19 +132,28 @@ class FlightBridge(Node):
                          self.state in ('TAKEOFF', 'CRUISE'))
         self.last_reset = resets
         self.position = msg
-        self.pose_at = msg.timestamp * 1e-6
+        # PX4 publishes its boot-relative uORB timestamp. Freshness must use
+        # ROS callback arrival time in both SITL and hardware deployments.
+        self.pose_at = self.now()
         if reset_changed:
             self.enter_hold('PX4 local estimate reset; manual relocalization and resume required')
 
     def on_status(self, msg):
         self.status = msg
 
-    def on_velocity(self, msg):
-        values = (msg.linear.x, msg.linear.y, msg.angular.z)
+    def on_position_command(self, msg):
+        values = (msg.position.x, msg.position.y, msg.position.z,
+                  msg.velocity.x, msg.velocity.y, msg.velocity.z)
         if not all(math.isfinite(v) for v in values):
+            return
+        if (msg.header.frame_id != 'odom' or
+                msg.trajectory_flag != PositionCommand.TRAJECTORY_STATUS_READY):
             return
         self.cmd = msg
         self.cmd_at = self.now()
+
+    def on_ego_odom(self, msg):
+        self.ego_odom = msg
 
     def on_vio(self, msg):
         valid = msg.data == 'VALID'
@@ -182,7 +193,7 @@ class FlightBridge(Node):
         response.success = (self.state == 'HOLD' and self.pose_valid() and self.vio_stable() and
                             self.status is not None and
                             self.status.nav_state == NAV_OFFBOARD)
-        response.message = ('Flight control resumed; confirm map pose and depth before a new 2D goal' if response.success else
+        response.message = ('Flight control resumed; confirm VIO and depth before a new goal' if response.success else
                             'Waiting for stable VIO, PX4 position and Offboard')
         if response.success:
             self.state = 'CRUISE'
@@ -227,28 +238,59 @@ class FlightBridge(Node):
         msg.yawspeed = math.nan
         self.setpoint_pub.publish(msg)
 
-    def send_velocity(self, body):
+    @staticmethod
+    def world_to_body(vector, orientation):
+        q = orientation
+        norm = math.sqrt(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z)
+        if norm < 1e-6:
+            return (0., 0., 0.)
+        w, x, y, z = q.w/norm, q.x/norm, q.y/norm, q.z/norm
+        yaw = math.atan2(2*(w*z+x*y), 1-2*(y*y+z*z))
+        c, s = math.cos(yaw), math.sin(yaw)
+        # Planning uses the odom horizontal plane. Roll and pitch must not
+        # tilt a horizontal world command into vertical velocity.
+        return (c*vector[0] + s*vector[1],
+                -s*vector[0] + c*vector[1], vector[2])
+
+    def send_ego_command(self):
+        if self.cmd is None or self.ego_odom is None:
+            return False
+        actual = self.ego_odom.pose.pose.position
+        gain = float(self.p('position_gain'))
+        world = [
+            self.cmd.velocity.x + gain * (self.cmd.position.x - actual.x),
+            self.cmd.velocity.y + gain * (self.cmd.position.y - actual.y),
+            self.cmd.velocity.z + gain * (self.cmd.position.z - actual.z)]
+        horizontal = math.hypot(world[0], world[1])
+        limit = float(self.p('max_horizontal_speed'))
+        if horizontal > limit:
+            world[0] *= limit / horizontal
+            world[1] *= limit / horizontal
+        world[2] = max(-float(self.p('max_vertical_speed')),
+                       min(float(self.p('max_vertical_speed')), world[2]))
+        bx, by, bz = self.world_to_body(world, self.ego_odom.pose.pose.orientation)
+        angle = math.atan2(by, bx)
+        soft = math.radians(float(self.p('fov_soft_angle_deg')))
+        hard = math.radians(float(self.p('fov_hard_angle_deg')))
+        absolute = abs(angle)
+        scale = 1.0 if absolute <= soft else max(0.0, (hard - absolute) / max(1e-3, hard - soft))
+        # Translate and align simultaneously. A target outside the verified
+        # forward field pauses translation while the vehicle yaws into view.
+        bx, by = bx * scale, by * scale
+        yaw_flu = max(-float(self.p('max_yaw_rate')),
+                      min(float(self.p('max_yaw_rate')), angle))
         self.velocity_active = True
+        self.command_clamped = scale < .999 or horizontal > limit
         self.send_mode(True)
-        self.command_clamped = (
-            (not bool(self.p('allow_reverse')) and body.linear.x < 0.0) or
-            abs(body.linear.y) > float(self.p('max_lateral_speed')) + 1e-6)
-        vx, vy = constrain_body_velocity(
-            body.linear.x, body.linear.y, float(self.p('max_horizontal_speed')),
-            bool(self.p('allow_reverse')), float(self.p('max_lateral_speed')))
-        north, east = body_flu_to_ned(vx, vy, self.position.heading)
-        yaw_rate = max(-float(self.p('max_yaw_rate')),
-                       min(float(self.p('max_yaw_rate')), -body.angular.z))
+        north, east = body_flu_to_ned(bx, by, self.position.heading)
         msg = TrajectorySetpoint()
         msg.timestamp = self.usec()
         msg.position = msg.acceleration = [math.nan] * 3
-        # PX4 receives velocity-only Offboard commands. A bounded vertical
-        # feedback term keeps the aircraft near the selected cruise height.
-        vertical = max(-.3, min(.3, self.takeoff_target[2] - self.position.z))
-        msg.velocity = [north, east, vertical]
+        msg.velocity = [north, east, -bz]
         msg.yaw = math.nan
-        msg.yawspeed = yaw_rate
+        msg.yawspeed = -yaw_flu
         self.setpoint_pub.publish(msg)
+        return True
 
     def enter_hold(self, reason):
         if self.state == 'HOLD':
@@ -306,7 +348,8 @@ class FlightBridge(Node):
                     self.cmd_at = -math.inf
                 self.send_position(self.hold_target)
             elif 0 <= now - self.cmd_at <= float(self.p('command_timeout')):
-                self.send_velocity(self.cmd)
+                if not self.send_ego_command() and self.pose_valid():
+                    self.send_position(self.hold_target)
             elif self.pose_valid():
                 if self.velocity_active or self.hold_target is None:
                     p = self.position

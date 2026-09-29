@@ -1,4 +1,4 @@
-"""Start sensing, localization, map, flight control and RViz; launch Nav2 separately."""
+"""Start sensing, OpenVINS, EGO-Planner, PX4 control and RViz."""
 from pathlib import Path
 import tempfile
 import numpy as np
@@ -8,8 +8,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
-from launch_ros.descriptions import ComposableNode
+from launch_ros.actions import Node
 
 from vio_bridge.calibration import read_yaml, transform, validate_config, write_opencv_yaml
 from vio_bridge.vio_geometry import quaternion
@@ -22,41 +21,15 @@ def node_config(package_name, node_name):
     return {key: value for key, value in values.items() if value is not None}
 
 
-def selected_map_file(bringup, override):
-    """Resolve the one prior map selected in bringup/params/global_config.yaml."""
-    if override:
-        choice = override
-    else:
-        config = yaml.safe_load((bringup / 'params/global_config.yaml').read_text()) or {}
-        choice = config.get('map')
-    if not isinstance(choice, str) or not choice.strip():
-        raise ValueError('set map in bringup/params/global_config.yaml or pass map_file:=...')
-    path = Path(choice).expanduser()
-    if not path.is_absolute():
-        path = bringup / 'map' / path
-    path = path.resolve()
-    if not path.is_file() or path.suffix.lower() not in ('.yaml', '.yml'):
-        raise ValueError(f'prior map YAML does not exist: {path}')
-    image = (yaml.safe_load(path.read_text()) or {}).get('image')
-    if not isinstance(image, str) or not image.strip():
-        raise ValueError(f'prior map YAML needs an image field: {path}')
-    image_path = Path(image)
-    if not image_path.is_absolute():
-        image_path = path.parent / image_path
-    if not image_path.is_file():
-        raise ValueError(f'prior map image does not exist: {image_path}')
-    return str(path)
-
-
 def generate_launch_description():
     # Runtime calibration depends on launch arguments. setup() builds the named
     # node list below after those arguments have been resolved.
     arguments = [('sim', 'true'), ('rviz', 'true'), ('depth_source', 'software'),
                  ('calibration_dir', ''), ('target_system', ''), ('px4_ns', ''),
-                 ('map_file', ''), ('cam0_topic', ''), ('cam1_topic', ''),
+                 ('cam0_topic', ''), ('cam1_topic', ''),
                  ('imu_topic', ''), ('depth_topic', ''),
                  ('depth_info_topic', ''), ('depth_scale', '0.001'),
-                 ('navigation_mode', 'map')]
+                 ]
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value=value)
           for name, value in arguments],
@@ -67,10 +40,6 @@ def generate_launch_description():
 def setup(context):
     arg = lambda key: LaunchConfiguration(key).perform(context)
     sim = arg('sim').lower() == 'true'
-    navigation_mode = arg('navigation_mode')
-    if navigation_mode not in ('map', 'odom'):
-        raise ValueError('navigation_mode must be map or odom')
-    use_prior_map = navigation_mode == 'map'
     mode = arg('depth_source')
     if mode not in ('software', 'hardware'):
         raise ValueError('depth_source must be software or hardware')
@@ -181,6 +150,43 @@ def setup(context):
                      'self_mask_model': 'x500' if sim else 'none',
                      'frame_decimation': 1 if mode == 'software' else 3}],
         remappings=depth_remaps)
+    ego_depth_topic = ('/uav1/d435i/depth/image_raw' if mode == 'software'
+                       else arg('depth_topic'))
+    ego_info_topic = ('/uav1/d435i/depth/camera_info' if mode == 'software'
+                      else arg('depth_info_topic'))
+    ego_odom_adapter = Node(
+        package='ego_bridge', executable='ego_odom_adapter',
+        name='ego_odom_adapter', output='screen',
+        parameters=[common, node_config('ego_bridge', 'ego_odom_adapter'),
+                    {'depth_topic': ego_depth_topic}])
+    ego_planner = Node(
+        package='ego_planner', executable='ego_planner_node',
+        name='ego_planner_node', output='screen',
+        parameters=[str(bringup / 'params/ego_params.yaml'), common,
+                    {'grid_map/cam2body': t_body_camera.ravel().tolist()}],
+        remappings=[
+            ('odom_world', '/ego/odom'),
+            ('grid_map/odom', '/ego/odom'),
+            ('grid_map/depth', ego_depth_topic),
+            ('grid_map/camera_info', ego_info_topic),
+            ('grid_map/cloud', '/ego/unused_cloud'),
+            ('planning/bspline', '/ego/planning/bspline'),
+            ('planning/data_display', '/ego/planning/data_display'),
+            ('planning/broadcast_bspline_from_planner', '/ego/broadcast_bspline'),
+            ('planning/broadcast_bspline_to_planner', '/ego/broadcast_bspline'),
+            ('grid_map/occupancy', '/ego/occupancy'),
+            ('grid_map/occupancy_inflate', '/ego/occupancy_inflate'),
+            ('goal_point', '/ego/visualization/goal'),
+            ('global_list', '/ego/visualization/global_path'),
+            ('init_list', '/ego/visualization/initial_path'),
+            ('optimal_list', '/ego/visualization/optimal_path'),
+            ('a_star_list', '/ego/visualization/a_star')])
+    ego_traj_server = Node(
+        package='ego_planner', executable='traj_server',
+        name='traj_server', output='screen',
+        parameters=[str(bringup / 'params/ego_params.yaml'), common],
+        remappings=[('planning/bspline', '/ego/planning/bspline'),
+                    ('position_cmd', '/ego/position_cmd')])
     camera_q = quaternion(t_body_camera[:3, :3])
     camera_optical_tf = Node(
         package='tf2_ros', executable='static_transform_publisher',
@@ -191,61 +197,23 @@ def setup(context):
             '--qx', str(float(camera_q[1])), '--qy', str(float(camera_q[2])),
             '--qz', str(float(camera_q[3])), '--qw', str(float(camera_q[0])),
             '--frame-id', 'base_link', '--child-frame-id', 'camera_optical'])
-    modify_map_to_odom = Node(
-        package='modify_map_to_odom', executable='modify_map_to_odom_node',
-        name='modify_map_to_odom', output='screen',
-        condition=IfCondition('true' if use_prior_map else 'false'),
-        parameters=[str(Path(get_package_share_directory('modify_map_to_odom')) /
-                        'config/config.yaml'), common])
-    height_slice = Node(
-        package='obstacle_filter', executable='height_slice',
-        name='height_slice', output='screen',
-        parameters=[common, node_config('obstacle_filter', 'height_slice')])
     goal_manager = Node(
         package='goal_manager', executable='goal_manager',
         name='goal_manager', output='screen',
         parameters=[common, node_config('goal_manager', 'goal_manager'),
-                    {'goal_frame': navigation_mode}])
+                    {'goal_frame': 'odom'}])
     flight_bridge = Node(
         package='flight_bridge', executable='flight_bridge',
         name='flight_bridge', output='screen',
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
                     {'target_system': target_system, 'px4_ns': px4_ns}])
-    # Prior-map selection is centralized in bringup/params/global_config.yaml.
-    # Set its `map:` value to any YAML stored in bringup/map, or pass an
-    # absolute YAML once with map_file:=... . The YAML selects its PGM image.
-    map_file = selected_map_file(bringup, arg('map_file')) if use_prior_map else ''
-    container = ComposableNodeContainer(
-        name='container', namespace='', package='rclcpp_components',
-        executable='component_container', output='screen',
-        condition=IfCondition('true' if use_prior_map else 'false'),
-        parameters=[common])
-    load_map_server = LoadComposableNodes(
-        target_container='container',
-        condition=IfCondition('true' if use_prior_map else 'false'),
-        composable_node_descriptions=[
-            ComposableNode(
-                package='nav2_map_server',
-                plugin='nav2_map_server::MapServer',
-                name='map_server',
-                parameters=[common, {'yaml_filename': map_file}]),
-            ComposableNode(
-                package='nav2_lifecycle_manager',
-                plugin='nav2_lifecycle_manager::LifecycleManager',
-                name='lifecycle_manager_localization',
-                parameters=[common, {
-                    'autostart': True,
-                    'node_names': ['map_server'],
-                }]),
-        ])
     one_drone_rviz = Node(
         package='rviz2', executable='rviz2', name='one_drone_rviz',
         output='screen', condition=IfCondition(arg('rviz').lower()),
         parameters=[common],
-        arguments=['-d', str(bringup / ('rviz/navigation.rviz' if use_prior_map
-                                         else 'rviz/navigation_odom.rviz'))])
+        arguments=['-d', str(bringup / 'rviz/ego_navigation.rviz')])
 
-    # Startup inventory. Nav2 planner/controller/smoother start in nav/bringup_launch.py.
+    # Startup inventory. EGO-Planner is part of this single launch chain.
     return LaunchDescription([
         gazebo_sensors,              # sim: Gazebo camera, IMU, clock bridge
         sensor_relay,                # hardware: measured camera/IMU topics
@@ -253,12 +221,11 @@ def setup(context):
         vio_bridge,                  # VIO -> PX4 and odom TF
         software_stereo,             # sim/software depth
         stereo_depth_node,           # depth -> obstacle cloud
-        # camera_optical_tf,           # base_link -> camera_optical
-        modify_map_to_odom,          # map -> odom TF publisher
-        height_slice,                # depth cloud at flight height
-        goal_manager,                # RViz goal -> Nav2 action
-        flight_bridge,               # cmd_vel_smoothed -> PX4 Offboard
-        container,                   # composable map-server container
-        load_map_server,             # prior PGM map + lifecycle manager
+        camera_optical_tf,           # measured base_link -> camera_optical
+        ego_odom_adapter,            # body twist -> world twist + depth health
+        ego_planner,                 # depth GridMap + local B-spline planning
+        ego_traj_server,             # B-spline -> PositionCommand
+        goal_manager,                # RViz goal -> EGO target
+        flight_bridge,               # EGO PositionCommand -> PX4 Offboard
         one_drone_rviz,
     ]).entities

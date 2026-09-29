@@ -1,4 +1,5 @@
 goal_manager:
   ros__parameters:
     depth_grace: 0.8
-    goal_frame: null
+    goal_frame: odom
+    goal_altitude: 2.0

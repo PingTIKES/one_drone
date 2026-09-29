@@ -7,6 +7,8 @@
   <license>MIT</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>quadrotor_msgs</depend>
   <depend>px4_msgs</depend>
   <depend>rclpy</depend>
   <depend>std_msgs</depend>

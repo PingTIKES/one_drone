@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gazebo/PX4 environment ONLY. Start bringup/startup.launch.py, then nav/bringup_launch.py.
+# Gazebo/PX4 environment only. Start bringup/startup.launch.py in another terminal.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot-1.14.3}"

@@ -1,0 +1,8 @@
+ego_odom_adapter:
+  ros__parameters:
+    source_odom: /odom
+    output_odom: /ego/odom
+    depth_topic: /uav1/d435i/depth/image_raw
+    depth_fresh_topic: /ego/depth_fresh
+    depth_timeout: 0.5
+    expected_frame: odom

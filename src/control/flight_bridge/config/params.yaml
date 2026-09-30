@@ -5,10 +5,16 @@ flight_bridge:
     takeoff_altitude: 2.0
     max_horizontal_speed: 0.5
     max_vertical_speed: 0.3
-    max_yaw_rate: 0.2
+    # Yaw is a perception policy, independent from EGO's XYZ trajectory.
+    # Up to the soft limit the vehicle translates laterally with fixed yaw.
+    # It then translates and turns together; only almost-reverse motion stops.
+    max_yaw_rate: 0.35
     position_gain: 0.8
-    fov_soft_angle_deg: 30.0
-    fov_hard_angle_deg: 55.0
+    yaw_soft_limit_deg: 30.0
+    yaw_hard_limit_deg: 100.0
+    yaw_reverse_limit_deg: 150.0
+    yaw_min_speed_scale: 0.25
+    yaw_rate_gain: 0.8
     reaction_time: 0.5
     assumed_braking_deceleration: 0.6
     safety_margin: 0.5

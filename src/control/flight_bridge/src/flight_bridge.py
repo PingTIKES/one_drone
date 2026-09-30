@@ -17,7 +17,8 @@ from std_srvs.srv import Trigger
 from px4_msgs.msg import (OffboardControlMode, TrajectorySetpoint,
                           VehicleCommand, VehicleLocalPosition, VehicleStatus)
 
-from flight_bridge.velocity_math import body_flu_to_ned, required_forward_clearance
+from flight_bridge.velocity_math import (body_flu_to_ned,
+                                         required_forward_clearance, yaw_policy)
 
 
 NAV_OFFBOARD = 14
@@ -29,8 +30,10 @@ class FlightBridge(Node):
         super().__init__('flight_bridge')
         defaults = dict(px4_ns='px4_1', target_system=2, takeoff_altitude=2.,
                         max_horizontal_speed=.5, max_vertical_speed=.3,
-                        max_yaw_rate=.2, position_gain=.8,
-                        fov_soft_angle_deg=30., fov_hard_angle_deg=55.,
+                        max_yaw_rate=.35, position_gain=.8,
+                        yaw_soft_limit_deg=30., yaw_hard_limit_deg=100.,
+                        yaw_reverse_limit_deg=150., yaw_min_speed_scale=.25,
+                        yaw_rate_gain=.8,
                         reaction_time=.5, assumed_braking_deceleration=.6,
                         safety_margin=.5, verified_forward_range=5.,
                         command_timeout=.2, pose_timeout=.5, vio_timeout=.5,
@@ -46,6 +49,14 @@ class FlightBridge(Node):
             raise ValueError(
                 f'configured cruise needs {required_clearance:.2f} m forward clearance, '
                 f'but verified_forward_range is {float(self.p("verified_forward_range")):.2f} m')
+        yaw_policy(
+            0.0,
+            math.radians(float(self.p('yaw_soft_limit_deg'))),
+            math.radians(float(self.p('yaw_hard_limit_deg'))),
+            math.radians(float(self.p('yaw_reverse_limit_deg'))),
+            float(self.p('yaw_min_speed_scale')),
+            float(self.p('max_yaw_rate')),
+            float(self.p('yaw_rate_gain')))
         self.required_clearance = required_clearance
         self.state = 'IDLE'
         self.position = None
@@ -63,6 +74,8 @@ class FlightBridge(Node):
         self.last_reset = None
         self.velocity_active = False
         self.command_clamped = False
+        self.yaw_mode = 'YAW_HOLD'
+        self.translation_scale = 1.0
         px4_ns = str(self.p('px4_ns')).strip('/')
         px4 = '/' + (px4_ns + '/' if px4_ns else '') + 'fmu/'
         qos = qos_profile_sensor_data
@@ -76,7 +89,7 @@ class FlightBridge(Node):
         self.safety_pub = self.create_publisher(String, 'flight_safety_status', latched)
         self.hold_reason_pub.publish(String(data=''))
         self.safety_pub.publish(String(
-            data=f'EGO_FOV_GATED max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
+            data=f'EGO_YAW_MANAGER max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
                  f'required_clearance={self.required_clearance:.2f}m'))
         self.create_subscription(VehicleLocalPosition, px4 + 'out/vehicle_local_position', self.on_position, qos)
         self.create_subscription(VehicleStatus, px4 + 'out/vehicle_status', self.on_status, qos)
@@ -128,6 +141,7 @@ class FlightBridge(Node):
                  f'max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
                  f'required_clearance={self.required_clearance:.2f}m '
                  f'command_clamped={self.command_clamped} '
+                 f'yaw_mode={self.yaw_mode} translation_scale={self.translation_scale:.2f} '
                  f'vio_stable={self.vio_stable()} vio_age={vio_age:.3f}s '
                  f'depth_valid={self.depth_valid()} depth_age={depth_age:.3f}s'))
 
@@ -276,15 +290,18 @@ class FlightBridge(Node):
                        min(float(self.p('max_vertical_speed')), world[2]))
         bx, by, bz = self.world_to_body(world, self.ego_odom.pose.pose.orientation)
         angle = math.atan2(by, bx)
-        soft = math.radians(float(self.p('fov_soft_angle_deg')))
-        hard = math.radians(float(self.p('fov_hard_angle_deg')))
-        absolute = abs(angle)
-        scale = 1.0 if absolute <= soft else max(0.0, (hard - absolute) / max(1e-3, hard - soft))
-        # Translate and align simultaneously. A target outside the verified
-        # forward field pauses translation while the vehicle yaws into view.
+        scale, yaw_flu, self.yaw_mode = yaw_policy(
+            angle,
+            math.radians(float(self.p('yaw_soft_limit_deg'))),
+            math.radians(float(self.p('yaw_hard_limit_deg'))),
+            math.radians(float(self.p('yaw_reverse_limit_deg'))),
+            float(self.p('yaw_min_speed_scale')),
+            float(self.p('max_yaw_rate')),
+            float(self.p('yaw_rate_gain')))
+        # XYZ remains the planner's independent trajectory. Yaw is held for
+        # small direction changes and blended in only as perception requires.
         bx, by = bx * scale, by * scale
-        yaw_flu = max(-float(self.p('max_yaw_rate')),
-                      min(float(self.p('max_yaw_rate')), angle))
+        self.translation_scale = scale
         self.velocity_active = True
         self.command_clamped = scale < .999 or horizontal > limit
         self.send_mode(True)
@@ -353,6 +370,8 @@ class FlightBridge(Node):
                 # normal EGO commands resume as soon as VIO returns VALID.
                 p = self.position
                 self.hold_target = (p.x, p.y, p.z)
+                self.yaw_mode = 'VIO_DEGRADED_HOLD'
+                self.translation_scale = 0.0
                 self.send_position(self.hold_target)
             elif not self.depth_valid() and self.pose_valid():
                 # Fresh depth is required to follow a path, but not to hold altitude.

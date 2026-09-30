@@ -18,6 +18,7 @@ class GoalManager(Node):
         self.vio_valid = False
         self.last_depth_good = -math.inf
         self.flight_state = 'IDLE'
+        self.pending_goal = None
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.state_pub = self.create_publisher(String, 'navigation_state', latched)
@@ -39,22 +40,30 @@ class GoalManager(Node):
         if msg.header.frame_id != self.goal_frame or not all(math.isfinite(v) for v in (p.x, p.y)):
             self.state('REJECTED_FRAME_OR_POSITION')
             return
-        if not self.vio_valid:
-            self.state('VIO_NOT_READY')
-            return
-        if self.flight_state != 'CRUISE':
-            self.state('FLIGHT_NOT_CRUISE')
-            return
-        if not 0 <= self.now() - self.last_depth_good <= float(self.get_parameter('depth_grace').value):
-            self.state('DEPTH_NOT_READY')
-            return
         goal = PoseStamped()
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.header.frame_id = self.goal_frame
         goal.pose = msg.pose
         goal.pose.position.z = float(self.get_parameter('goal_altitude').value)
-        self.goal_pub.publish(goal)
-        self.state('GOAL_SENT_TO_EGO')
+        self.pending_goal = goal
+        self.publish_pending_goal('GOAL_SENT_TO_EGO')
+
+    def publish_pending_goal(self, success_state):
+        if self.pending_goal is None:
+            return False
+        if not self.vio_valid:
+            self.state('GOAL_QUEUED_VIO_NOT_READY')
+            return False
+        if self.flight_state != 'CRUISE':
+            self.state('GOAL_QUEUED_FLIGHT_NOT_CRUISE')
+            return False
+        if not 0 <= self.now() - self.last_depth_good <= float(self.get_parameter('depth_grace').value):
+            self.state('GOAL_QUEUED_DEPTH_NOT_READY')
+            return False
+        self.pending_goal.header.stamp = self.get_clock().now().to_msg()
+        self.goal_pub.publish(self.pending_goal)
+        self.state(success_state)
+        return True
 
     def on_depth(self, msg):
         if msg.data:
@@ -66,7 +75,10 @@ class GoalManager(Node):
             self.state('VIO_NOT_READY')
 
     def on_flight(self, msg):
+        previous = self.flight_state
         self.flight_state = msg.data
+        if self.flight_state == 'CRUISE' and previous != 'CRUISE':
+            self.publish_pending_goal('GOAL_REPLANNED_AFTER_RECOVERY')
 
 
 def main(args=None):

@@ -1,8 +1,8 @@
 """Explicit PX4 takeoff/hold/land service and EGO trajectory adapter.
 
-No autonomous land command is sent on VIO or depth loss. On loss, this node
-holds PX4's current local position and requires explicit resume after recovery.
-PX4's own configured failsafe remains authoritative if its estimator is lost.
+No autonomous land command is sent on VIO or depth loss. A recoverable
+estimator interruption holds PX4's current local position, then resumes after
+VIO and PX4 are stable. PX4's own failsafe remains authoritative.
 """
 import math
 
@@ -38,7 +38,8 @@ class FlightBridge(Node):
                         safety_margin=.5, verified_forward_range=5.,
                         command_timeout=.2, pose_timeout=.5, vio_timeout=.5,
                         vio_stable_time=1., depth_heartbeat_timeout=.5, depth_grace=.8,
-                        takeoff_tolerance=.2, takeoff_stable_time=1.)
+                        takeoff_tolerance=.2, takeoff_stable_time=1.,
+                        auto_recover_from_hold=True, status_timeout=1.5)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         self.p = lambda key: self.get_parameter(key).value
@@ -61,7 +62,7 @@ class FlightBridge(Node):
         self.state = 'IDLE'
         self.position = None
         self.status = None
-        self.pose_at = self.vio_at = self.cmd_at = self.obstacle_at = -math.inf
+        self.pose_at = self.status_at = self.vio_at = self.cmd_at = self.obstacle_at = -math.inf
         self.last_obstacle_good = -math.inf
         self.vio_ok = self.obstacle_ok = False
         self.vio_state = 'INVALID'
@@ -76,6 +77,8 @@ class FlightBridge(Node):
         self.command_clamped = False
         self.yaw_mode = 'YAW_HOLD'
         self.translation_scale = 1.0
+        self.hold_auto_recover = False
+        self.hold_resume_state = None
         px4_ns = str(self.p('px4_ns')).strip('/')
         px4 = '/' + (px4_ns + '/' if px4_ns else '') + 'fmu/'
         qos = qos_profile_sensor_data
@@ -142,6 +145,7 @@ class FlightBridge(Node):
                  f'required_clearance={self.required_clearance:.2f}m '
                  f'command_clamped={self.command_clamped} '
                  f'yaw_mode={self.yaw_mode} translation_scale={self.translation_scale:.2f} '
+                 f'hold_auto_recover={self.hold_auto_recover} '
                  f'vio_stable={self.vio_stable()} vio_age={vio_age:.3f}s '
                  f'depth_valid={self.depth_valid()} depth_age={depth_age:.3f}s'))
 
@@ -155,10 +159,12 @@ class FlightBridge(Node):
         # ROS callback arrival time in both SITL and hardware deployments.
         self.pose_at = self.now()
         if reset_changed:
-            self.enter_hold('PX4 local estimate reset; manual relocalization and resume required')
+            self.enter_hold('PX4 local estimate reset; waiting for stable automatic recovery',
+                            auto_recover=True)
 
     def on_status(self, msg):
         self.status = msg
+        self.status_at = self.now()
 
     def on_position_command(self, msg):
         values = (msg.position.x, msg.position.y, msg.position.z,
@@ -213,11 +219,13 @@ class FlightBridge(Node):
         response.success = (self.state == 'HOLD' and self.pose_valid() and self.vio_stable() and
                             self.status is not None and
                             self.status.nav_state == NAV_OFFBOARD)
-        response.message = ('Flight control resumed; confirm VIO and depth before a new goal' if response.success else
+        response.message = ('Flight control resumed; retained goal will be replanned' if response.success else
                             'Waiting for stable VIO, PX4 position and Offboard')
         if response.success:
             self.state = 'CRUISE'
             self.cmd_at = -math.inf
+            self.hold_auto_recover = False
+            self.hold_resume_state = None
             self.hold_reason_pub.publish(String(data=''))
         return response
 
@@ -315,22 +323,49 @@ class FlightBridge(Node):
         self.setpoint_pub.publish(msg)
         return True
 
-    def enter_hold(self, reason):
+    def enter_hold(self, reason, auto_recover=False):
         if self.state == 'HOLD':
             return
+        previous_state = self.state
         if self.pose_valid():
             p = self.position
             self.hold_target = (p.x, p.y, p.z)
         self.state = 'HOLD'
+        self.hold_auto_recover = bool(auto_recover and
+                                      self.p('auto_recover_from_hold'))
+        self.hold_resume_state = previous_state if self.hold_auto_recover else None
         self.velocity_active = False
         self.hold_reason_pub.publish(String(data=reason))
         self.get_logger().warn(reason)
+
+    def can_auto_recover(self):
+        return (self.state == 'HOLD' and self.hold_auto_recover and
+                self.hold_resume_state in ('TAKEOFF', 'CRUISE') and
+                self.pose_valid() and self.vio_stable() and
+                self.status is not None and
+                0 <= self.now() - self.status_at <= float(self.p('status_timeout')) and
+                self.status.arming_state == ARMED and
+                self.status.nav_state == NAV_OFFBOARD and
+                not bool(self.status.failsafe))
+
+    def finish_auto_recovery(self):
+        resume_state = self.hold_resume_state
+        self.state = resume_state
+        self.hold_auto_recover = False
+        self.hold_resume_state = None
+        self.cmd_at = -math.inf
+        self.hold_reason_pub.publish(String(data=''))
+        self.get_logger().info(
+            f'Estimator stable; automatically resuming {resume_state}')
 
     def tick(self):
         now = self.now()
         if self.state in ('TAKEOFF', 'CRUISE') and (not self.pose_valid() or
                                                     (not self.vio_valid() and not self.vio_degraded())):
-            self.enter_hold('Position or OpenVINS stale; holding for manual recovery')
+            self.enter_hold('Position or OpenVINS invalid; waiting for stable automatic recovery',
+                            auto_recover=True)
+        if self.can_auto_recover():
+            self.finish_auto_recovery()
         if self.state == 'PRESTREAM':
             if not self.pose_valid() or not self.vio_valid():
                 self.state = 'IDLE'

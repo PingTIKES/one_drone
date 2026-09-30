@@ -23,6 +23,11 @@ flight_bridge:
     pose_timeout: 0.5
     vio_timeout: 0.5
     vio_stable_time: 1.0
+    # After an INVALID event, resume only when VIO has remained VALID for
+    # vio_stable_time and PX4 is armed, in OFFBOARD, position-valid and not in
+    # failsafe. The retained navigation goal is replanned from the new pose.
+    auto_recover_from_hold: true
+    status_timeout: 1.5
     depth_heartbeat_timeout: 0.5
     depth_grace: 0.8
     takeoff_tolerance: 0.2

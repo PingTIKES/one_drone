@@ -1,0 +1,9 @@
+depth_filter:
+  ros__parameters:
+    depth_scale: null
+    min_range: 0.3
+    max_range: 8.0
+    spatial_kernel: 3
+    temporal_alpha: 0.65
+    temporal_max_delta: 0.4
+    hole_min_neighbors: 5

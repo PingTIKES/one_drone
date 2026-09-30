@@ -2,13 +2,14 @@
 """Guarded OpenVINS odomimu -> PX4 external vision. No ground-truth input."""
 import math
 import json
+import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from px4_msgs.msg import VehicleOdometry
@@ -18,6 +19,7 @@ from vio_bridge.vio_tf_geometry import FLIP, vio_body_pose
 from vio_bridge.vio_geometry import quaternion
 from vio_bridge.calibration import transform
 from vio_bridge.vio_recovery import VioRecovery, unexplained_rotation
+from vio_bridge.vio_quality import normalized_covariance, quality_state
 
 
 class VioBridge(Node):
@@ -31,6 +33,9 @@ class VioBridge(Node):
                         recovery_max_angle_deg=35.,recovery_sample_gap=.1,recovery_residual=.15,
                         recovery_max_source_gap=3.,recovery_gap_max_correction=2.5,
                         recovery_gap_max_angle_deg=90.,
+                        feature_check_period=.5,feature_bad_count=15,feature_good_count=40,
+                        quality_velocity_window=.1,quality_acceleration_warn=6.,
+                        quality_angular_rate_warn=.6,
                         t_body_imu=np.eye(4).ravel().tolist()).items(): self.declare_parameter(k,v)
         self.p = lambda k: self.get_parameter(k).value
         if not 0 < self.p('max_age') < self.p('invalid_age'):
@@ -47,6 +52,18 @@ class VioBridge(Node):
         self.reset_count, self.latched = 0, False
         self.last_good = -math.inf
         self.image_at = [-math.inf,-math.inf]
+        self.feature_counts = [None, None]
+        self.feature_checked_at = [-math.inf, -math.inf]
+        self.imu_at = -math.inf
+        self.imu_angular_rate = 0.0
+        self.imu_acceleration = 0.0
+        self.quality_confidence = 0.0
+        self.quality_reasons = ['WAITING_FOR_DATA']
+        self.quality_velocity = None
+        self.quality_velocity_stamp = None
+        self.quality_acceleration = 0.0
+        self.covariance_ratio = math.inf
+        self.position_covariance = self.orientation_covariance = self.velocity_covariance = math.inf
         px4_ns = str(self.p('px4_ns')).strip('/')
         px4_root = '/' + (px4_ns + '/' if px4_ns else '') + 'fmu/'
         self.pub = self.create_publisher(VehicleOdometry,px4_root + 'in/vehicle_visual_odometry',qos_profile_sensor_data)
@@ -57,6 +74,7 @@ class VioBridge(Node):
         self.create_subscription(Odometry,'odomimu',self.callback,qos_profile_sensor_data)
         for i in range(2):
             self.create_subscription(Image,f'cam{i}/image_raw',lambda msg,index=i:self.image(msg,index),qos_profile_sensor_data)
+        self.create_subscription(Imu, 'imu0', self.imu, qos_profile_sensor_data)
         self.create_service(Trigger,'reset_vio_bridge',self.reset)
         self.create_timer(.1,self.watchdog)
 
@@ -70,7 +88,47 @@ class VioBridge(Node):
             'recovery_gap_max_angle_deg')))
 
     def image(self,msg,index):
-        self.image_at[index]=msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9
+        stamp = msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9
+        self.image_at[index] = stamp
+        if stamp - self.feature_checked_at[index] < float(self.p('feature_check_period')):
+            return
+        self.feature_checked_at[index] = stamp
+        try:
+            image = self.gray_image(msg)
+            image = image[::2, ::2]
+            points = cv2.goodFeaturesToTrack(
+                image, maxCorners=200, qualityLevel=.01, minDistance=4,
+                blockSize=3, useHarrisDetector=False)
+            self.feature_counts[index] = 0 if points is None else len(points)
+        except ValueError:
+            self.feature_counts[index] = None
+
+    @staticmethod
+    def gray_image(msg):
+        channels = {'mono8': 1, '8UC1': 1, 'rgb8': 3, 'bgr8': 3,
+                    'rgba8': 4, 'bgra8': 4}
+        if msg.encoding not in channels:
+            raise ValueError('unsupported image encoding')
+        channel_count = channels[msg.encoding]
+        rows = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
+        packed = rows[:, :msg.width * channel_count]
+        image = packed.reshape(msg.height, msg.width, channel_count)
+        if channel_count == 1:
+            return image[:, :, 0]
+        conversion = (cv2.COLOR_RGBA2GRAY if msg.encoding == 'rgba8' else
+                      cv2.COLOR_BGRA2GRAY if msg.encoding == 'bgra8' else
+                      cv2.COLOR_RGB2GRAY if msg.encoding == 'rgb8' else
+                      cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(image, conversion)
+
+    def imu(self, msg):
+        self.imu_at = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.imu_angular_rate = math.sqrt(
+            msg.angular_velocity.x ** 2 + msg.angular_velocity.y ** 2 +
+            msg.angular_velocity.z ** 2)
+        self.imu_acceleration = math.sqrt(
+            msg.linear_acceleration.x ** 2 + msg.linear_acceleration.y ** 2 +
+            msg.linear_acceleration.z ** 2)
 
     def publish_vio_odom(self, msg, stamp, position, orientation, velocity, omega, pv, ov, vv):
         # OpenVINS is the sole odom -> base_link authority. Its first valid
@@ -108,6 +166,10 @@ class VioBridge(Node):
         self.latched = False
         self.reason = 'MANUAL_RESET'
         self.last_good = -math.inf
+        self.quality_velocity = self.quality_velocity_stamp = None
+        self.quality_acceleration = 0.0
+        self.quality_confidence = 0.0
+        self.quality_reasons = ['WAITING_FOR_DATA']
         response.success, response.message = True,'Reset acknowledged; awaiting fresh VIO. Re-arm separately.'
         return response
 
@@ -117,12 +179,12 @@ class VioBridge(Node):
             self.latched, self.reason = True, 'RECOVERY_TIMEOUT'
         if self.recovery.active and not all(0 <= now-t <= self.p('max_age') for t in self.image_at):
             self.recovery.previous = self.recovery.stable_since = None
-        ages = [now-t for t in [self.last_good]+self.image_at]
+        ages = [now-t for t in [self.last_good]+self.image_at+[self.imu_at]]
         fresh = all(0 <= age <= self.p('max_age') for age in ages)
         within_grace = all(0 <= age <= self.p('invalid_age') for age in ages)
         healthy = not self.latched and not self.recovery.active and fresh
         if healthy:
-            health = 'VALID'
+            health = 'DEGRADED' if self.quality_reasons else 'VALID'
         elif not self.latched and not self.recovery.active and within_grace:
             # A bounded sensor/output pause is recoverable. Consumers pause
             # translation while retaining their mission and resume on VALID.
@@ -135,7 +197,19 @@ class VioBridge(Node):
             reason=self.reason, reset_counter=self.reset_count,
             odom_age=None if not math.isfinite(self.last_good) else round(ages[0],4),
             cam0_age=None if not math.isfinite(self.image_at[0]) else round(ages[1],4),
-            cam1_age=None if not math.isfinite(self.image_at[1]) else round(ages[2],4)))))
+            cam1_age=None if not math.isfinite(self.image_at[1]) else round(ages[2],4),
+            imu_age=None if not math.isfinite(self.imu_at) else round(ages[3],4),
+            quality='GOOD' if health == 'VALID' else ('DEGRADED' if health == 'DEGRADED' else 'BAD'),
+            confidence=round(self.quality_confidence,3),
+            feature_count=None if any(v is None for v in self.feature_counts) else min(self.feature_counts),
+            position_covariance=None if not math.isfinite(self.position_covariance) else round(self.position_covariance,6),
+            orientation_covariance=None if not math.isfinite(self.orientation_covariance) else round(self.orientation_covariance,6),
+            velocity_covariance=None if not math.isfinite(self.velocity_covariance) else round(self.velocity_covariance,6),
+            covariance_ratio=None if not math.isfinite(self.covariance_ratio) else round(self.covariance_ratio,3),
+            angular_rate=round(self.imu_angular_rate,3),
+            acceleration=round(self.imu_acceleration,3),
+            velocity_change_rate=round(self.quality_acceleration,3),
+            quality_reasons=self.quality_reasons))))
 
     def reject(self, reason):
         self.reason = reason
@@ -168,6 +242,29 @@ class VioBridge(Node):
             self.reject('EXCESSIVE_SPEED'); return
         if max(pv)>self.p('max_position_variance') or max(ov)>self.p('max_orientation_variance') or max(vv)>self.p('max_velocity_variance'):
             self.reject('EXCESSIVE_VARIANCE'); return
+        if (self.quality_velocity_stamp is None or
+                stamp-self.quality_velocity_stamp >= float(self.p('quality_velocity_window'))):
+            dt_quality = (None if self.quality_velocity_stamp is None else
+                          stamp-self.quality_velocity_stamp)
+            self.quality_acceleration = (
+                0.0 if dt_quality is None or dt_quality <= 0 else
+                float(np.linalg.norm(vel-self.quality_velocity))/dt_quality)
+            self.quality_velocity = vel.copy()
+            self.quality_velocity_stamp = stamp
+        self.position_covariance = float(max(pv))
+        self.orientation_covariance = float(max(ov))
+        self.velocity_covariance = float(max(vv))
+        self.covariance_ratio = normalized_covariance(
+            pv, ov, vv, (self.p('max_position_variance'),
+                        self.p('max_orientation_variance'),
+                        self.p('max_velocity_variance')))
+        feature_count = (None if any(v is None for v in self.feature_counts)
+                         else min(self.feature_counts))
+        self.quality_confidence, self.quality_reasons = quality_state(
+            self.covariance_ratio, feature_count,
+            int(self.p('feature_bad_count')), int(self.p('feature_good_count')),
+            self.quality_acceleration, float(self.p('quality_acceleration_warn')),
+            float(np.linalg.norm(omega)), float(self.p('quality_angular_rate_warn')))
         if self.last_stamp is not None and not self.recovery.active:
             dt = stamp-self.last_stamp
             angle_residual = unexplained_rotation(

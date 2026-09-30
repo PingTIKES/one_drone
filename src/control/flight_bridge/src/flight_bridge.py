@@ -37,6 +37,8 @@ class FlightBridge(Node):
                         arrival_position_deadband=.15,
                         arrival_velocity_deadband=.10,
                         arrival_exit_scale=1.5,
+                        degraded_speed_scale=.4,
+                        degraded_max_yaw_rate=.10,
                         reaction_time=.5, assumed_braking_deceleration=.6,
                         safety_margin=.5, verified_forward_range=5.,
                         command_timeout=.2, pose_timeout=.5, vio_timeout=.5,
@@ -66,6 +68,9 @@ class FlightBridge(Node):
             float(self.p('arrival_position_deadband')),
             float(self.p('arrival_velocity_deadband')),
             float(self.p('arrival_exit_scale')))
+        if not (0 < float(self.p('degraded_speed_scale')) <= 1 and
+                0 < float(self.p('degraded_max_yaw_rate')) <= float(self.p('max_yaw_rate'))):
+            raise ValueError('degraded speed/yaw limits must be positive and no greater than normal limits')
         self.required_clearance = required_clearance
         self.state = 'IDLE'
         self.position = None
@@ -77,6 +82,7 @@ class FlightBridge(Node):
         self.vio_valid_since = None
         self.cmd = None
         self.ego_odom = None
+        self.ego_odom_at = -math.inf
         self.takeoff_target = self.hold_target = None
         self.takeoff_reached_since = None
         self.prestream_count = 0
@@ -154,6 +160,7 @@ class FlightBridge(Node):
                  f'required_clearance={self.required_clearance:.2f}m '
                  f'command_clamped={self.command_clamped} '
                  f'yaw_mode={self.yaw_mode} translation_scale={self.translation_scale:.2f} '
+                 f'vio_state={self.vio_state} '
                  f'hold_auto_recover={self.hold_auto_recover} '
                  f'vio_stable={self.vio_stable()} vio_age={vio_age:.3f}s '
                  f'depth_valid={self.depth_valid()} depth_age={depth_age:.3f}s'))
@@ -188,6 +195,7 @@ class FlightBridge(Node):
 
     def on_ego_odom(self, msg):
         self.ego_odom = msg
+        self.ego_odom_at = self.now()
 
     def on_vio(self, msg):
         valid = msg.data == 'VALID'
@@ -289,8 +297,9 @@ class FlightBridge(Node):
         return (c*vector[0] + s*vector[1],
                 -s*vector[0] + c*vector[1], vector[2])
 
-    def send_ego_command(self):
-        if self.cmd is None or self.ego_odom is None:
+    def send_ego_command(self, degraded=False):
+        if (self.cmd is None or self.ego_odom is None or
+                not 0 <= self.now() - self.ego_odom_at <= float(self.p('pose_timeout'))):
             return False
         actual = self.ego_odom.pose.pose.position
         gain = float(self.p('position_gain'))
@@ -311,7 +320,8 @@ class FlightBridge(Node):
             # direction. Do not turn that noise into a yaw-rate command.
             world[0] = world[1] = 0.0
         horizontal = math.hypot(world[0], world[1])
-        limit = float(self.p('max_horizontal_speed'))
+        speed_scale = float(self.p('degraded_speed_scale')) if degraded else 1.0
+        limit = float(self.p('max_horizontal_speed')) * speed_scale
         if horizontal > limit:
             world[0] *= limit / horizontal
             world[1] *= limit / horizontal
@@ -328,7 +338,8 @@ class FlightBridge(Node):
                 math.radians(float(self.p('yaw_hard_limit_deg'))),
                 math.radians(float(self.p('yaw_reverse_limit_deg'))),
                 float(self.p('yaw_min_speed_scale')),
-                float(self.p('max_yaw_rate')),
+                (float(self.p('degraded_max_yaw_rate')) if degraded else
+                 float(self.p('max_yaw_rate'))),
                 float(self.p('yaw_rate_gain')))
         # XYZ remains the planner's independent trajectory. Yaw is held for
         # small direction changes and blended in only as perception requires.
@@ -424,14 +435,16 @@ class FlightBridge(Node):
                 self.takeoff_reached_since = None
         elif self.state == 'CRUISE':
             if self.vio_degraded() and self.pose_valid():
-                # A brief VIO pause must not destroy the mission or require a
-                # manual resume. Stop translation at PX4's current estimate;
-                # normal EGO commands resume as soon as VIO returns VALID.
-                p = self.position
-                self.hold_target = (p.x, p.y, p.z)
-                self.yaw_mode = 'VIO_DEGRADED_HOLD'
-                self.translation_scale = 0.0
-                self.send_position(self.hold_target)
+                # With fresh but low-confidence VIO, keep the trajectory at a
+                # reduced translation and yaw rate. If odometry itself is
+                # stale, fall back to a PX4 local-position hold.
+                if (not self.depth_valid() or
+                        not self.send_ego_command(degraded=True)):
+                    p = self.position
+                    self.hold_target = (p.x, p.y, p.z)
+                    self.yaw_mode = 'VIO_DEGRADED_HOLD'
+                    self.translation_scale = 0.0
+                    self.send_position(self.hold_target)
             elif not self.depth_valid() and self.pose_valid():
                 # Fresh depth is required to follow a path, but not to hold altitude.
                 if self.velocity_active:

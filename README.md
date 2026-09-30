@@ -4,7 +4,7 @@
 
 当前仓库只保留单机定位、三维局部建图、轨迹规划和 PX4 控制。Nav2、PGM 地图服务器、2D 代价地图、行为树、`cmd_vel` 控制链、`map→odom` 人工调整及相关功能包已经移除。多机协同、目标识别和任务决策暂不在本阶段范围内。
 
-> 当前状态：所有 ROS 2 功能包和总启动文件已在 Ubuntu 22.04 / Humble 上完成干净编译，并在 PX4 1.14.3 SITL 与 3 m 墙体识别柱场景中完成起飞、EGO 规划、轨迹执行和降落闭环验证。2 m 前向目标的最终 VIO 水平位置误差约 7 cm。真机尚未试飞验证，因此默认速度限制为 0.5 m/s，真机验证稳定后再逐步提高。
+> 当前状态：所有 ROS 2 功能包和总启动文件已在 Ubuntu 22.04 / Humble 上完成干净编译，并在 PX4 1.14.3 SITL 与 3 m 墙体识别柱场景中完成起飞、EGO 规划和轨迹执行闭环验证。2 m 前向目标的最终 VIO 水平位置误差约 7 cm；暂停深度处理 3 秒的故障注入中，飞机停止轨迹，深度恢复后从当前位置重新规划并到达目标。真机尚未试飞验证，因此默认速度限制为 0.5 m/s，真机验证稳定后再逐步提高。
 
 ## 算法链路
 
@@ -15,12 +15,14 @@
       ├─ /vio_health
       └─ PX4 vehicle_visual_odometry
 
-/odom
+/odom + /vio_health + /vio_diagnostics
   └─ ego_odom_adapter（机体系速度转 odom 世界系速度）
       └─ /ego/odom
 
-双目深度图 + CameraInfo + T_body_depth + /ego/odom
-  └─ EGO GridMap（三维占用栅格和膨胀）
+双目深度图
+  └─ depth_filter（空间去噪、时间滤波、小空洞填补）
+      └─ CameraInfo + T_body_depth + /ego/odom
+          └─ EGO GridMap（三维占用栅格和膨胀）
       └─ B-spline 局部规划器
           └─ /ego/planning/bspline
               └─ traj_server
@@ -55,6 +57,7 @@ src/
 ├── perception/
 │   ├── camera_stream/               # 真机图像与 IMU 话题转发
 │   ├── stereo_depth/                # 仿真/软件双目深度
+│   ├── depth_filter/                # 深度时空滤波与小空洞填补
 │   └── obstacle_cloud/              # 调试用深度点云与自体掩膜
 ├── localization/
 │   └── vio_bridge/                  # OpenVINS 健康检查、/odom、TF、PX4 外部视觉
@@ -72,8 +75,9 @@ EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，�
 | --- | --- | --- | --- |
 | `camera_stream` | 真机驱动左右目、IMU | `/uav1/cam0/image_raw`、`cam1`、`imu0` | 包内 `config/params.yaml` |
 | `stereo_depth` | 左右红外灰度图、双目标定 | `/uav1/d435i/depth/image_raw`、CameraInfo | 包内 `config/params.yaml` |
-| `obstacle_cloud` | 深度、CameraInfo、相机外参 | `/uav1/obstacles`，仅调试显示 | 包内 `config/params.yaml` |
-| `vio_bridge` | `/uav1/odomimu`、双目时间戳 | `/odom`、`odom→base_link`、`/vio_health`、PX4 外部视觉 | 包内 `config/params.yaml` |
+| `depth_filter` | 软件或真机原始深度 | `/uav1/d435i/depth/image_filtered` | 包内 `config/params.yaml` |
+| `obstacle_cloud` | 滤波深度、CameraInfo、相机外参 | `/uav1/obstacles`，仅调试显示 | 包内 `config/params.yaml` |
+| `vio_bridge` | `/uav1/odomimu`、双目图像、IMU | `/odom`、`odom→base_link`、`/vio_health`、`/vio_diagnostics`、PX4 外部视觉 | 包内 `config/params.yaml` |
 | `ego_bridge` | `/odom`、深度图 | `/ego/odom`、`/ego/depth_fresh` | 包内 `config/params.yaml` |
 | `ego_planner` | `/ego/odom`、深度、CameraInfo、`/ego/goal` | 三维占用、B-spline、可视化 Marker | `bringup/params/ego_params.yaml` |
 | `goal_manager` | `/navigation_goal`、VIO、深度、飞行状态 | `/ego/goal`、`/navigation_state` | 包内 `config/params.yaml` |
@@ -103,6 +107,14 @@ EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，�
 先完成 0.5 m/s 的避障和 VIO 稳定验证，再提高到 1.0 m/s。达到 3 m/s 前必须实测深度有效距离、端到端延迟、制动距离、转弯半径和 RK3566 规划耗时；不能只修改速度数值。
 
 GridMap 不再使用上游硬编码相机安装关系。`startup.launch.py` 从仿真模型或真机 `body.yaml` 取得 `T_body_depth`，并传入 `grid_map/cam2body`；内参由对应深度 `CameraInfo` 动态更新。深度与里程计采用近似时间同步。
+
+第一阶段 VIO 可靠性增强不修改 OpenVINS 核心。`vio_bridge` 从相同的左右目输入低频统计可跟踪角点，同时检查图像、IMU、里程计新鲜度，位置/姿态/速度协方差、速度变化率和角速度。`/vio_diagnostics` 以 JSON 给出 `quality`、`confidence`、`feature_count`、协方差、数据年龄与降级原因。状态处理为：
+
+- `VALID/GOOD`：正常速度和 yaw 策略；
+- `DEGRADED`：轨迹仍有效时把最大水平速度限制为正常值的 40%，yaw 限制为 0.10 rad/s；里程计或深度已经陈旧时改为位置悬停；
+- `INVALID/BAD`：停止轨迹执行并进入可恢复 `HOLD`。
+
+起飞与 `INVALID` 后恢复要求 VIO 连续稳定 3 秒。特征阈值、协方差门限、软降级速度和 yaw 均可分别在 `vio_bridge/config/params.yaml` 与 `flight_bridge/config/params.yaml` 调整。
 
 ## 首次安装与构建
 
@@ -165,7 +177,7 @@ ros2 topic hz /ego/occupancy_inflate
 ros2 run tf2_ros tf2_echo odom base_link
 ```
 
-必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中短时数据缺口会显示 `DEGRADED`，控制器自动停止平移并保持当前位置；数据恢复且运动连续时自动回到 `VALID`。持续超过 2 秒的断流或真实位姿跳变会显示 `INVALID` 并进入 `HOLD`；VIO 连续稳定 1 秒，且 PX4 仍已解锁、处于 OFFBOARD、位置有效、没有 failsafe 后，系统自动回到原飞行阶段，并从恢复后的新位置重新规划保存的目标。当前软件双目实测约 3.5 Hz，因此深度心跳超时为 0.5 秒；若实际频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
+必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中低置信度会显示 `DEGRADED`，输入仍新鲜时控制器限速继续；里程计或深度陈旧时改为位置悬停。持续断流或真实位姿跳变会显示 `INVALID` 并进入 `HOLD`；VIO 连续稳定 3 秒，且 PX4 仍已解锁、处于 OFFBOARD、位置有效、没有 failsafe 后，系统自动回到原飞行阶段，并从恢复后的新位置重新规划保存的目标。当前过滤后的软件双目实测约 2.5–3 Hz、最大调度间隔接近 1 秒，因此控制层深度心跳超时为 1.2 秒，EGO 只在同步深度持续中断 1.5 秒后进入紧急停车；同步恢复后清除超时并从当前位置重新规划。若平均频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
 
 ### 4. 起飞、打点和降落
 
@@ -242,7 +254,7 @@ PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
 
 ## 安全状态与故障排查
 
-`flight_bridge` 保留显式 `/takeoff`、`/land` 和 `/resume_navigation` 服务。深度暂时中断或 VIO 为 `DEGRADED` 时停止执行轨迹并用 PX4 本地位置悬停，数据恢复后自动继续；VIO 为 `INVALID` 或 PX4 本地位置失效时进入 `HOLD`，满足上述稳定条件后自动退出。`goal_manager` 会保存最后一个合法目标以及恢复期间新打的目标，并在 `CRUISE` 恢复时要求 EGO 从新位姿重新规划。`/resume_navigation` 保留为自动恢复条件长期不满足时的人工备用入口。本节点不会主动发送故障降落命令，PX4 自身 estimator failsafe 仍然具有最终控制权。
+`flight_bridge` 保留显式 `/takeoff`、`/land` 和 `/resume_navigation` 服务。VIO 为 `DEGRADED` 且里程计、深度仍新鲜时限速继续执行；任一输入陈旧时用 PX4 本地位置悬停。VIO 为 `INVALID` 或 PX4 本地位置失效时进入 `HOLD`，满足上述稳定条件后自动退出。`goal_manager` 会保存最后一个合法目标以及恢复期间新打的目标，并在 `CRUISE` 恢复时要求 EGO 从新位姿重新规划。`/resume_navigation` 保留为自动恢复条件长期不满足时的人工备用入口。本节点不会主动发送故障降落命令，PX4 自身 estimator failsafe 仍然具有最终控制权。
 
 ```bash
 ros2 topic echo --once /flight_hold_reason std_msgs/msg/String --qos-durability transient_local

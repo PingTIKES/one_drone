@@ -12,6 +12,7 @@ stereo_depth_node:
     preserve_stamp: null
     frame_decimation: null
     self_mask_model: null
-    step: 2
+    # 640x480 / 4^2 is about 19k candidate points before range/self filtering.
+    step: 4
     min_range: 0.3
     max_range: 8.0

@@ -620,7 +620,11 @@ namespace ego_planner
       }
       else
       {
-        if (enable_fail_safe_ && odom_vel_.norm() < 0.1)
+        // Stay stopped while perception is stale. Once synchronized depth has
+        // recovered, use the existing target to generate a fresh trajectory.
+        if (enable_fail_safe_ &&
+            !planner_manager_->grid_map_->getOdomDepthTimeout() &&
+            odom_vel_.norm() < 0.1)
           changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
 
@@ -711,10 +715,12 @@ namespace ego_planner
     /* ---------- check lost of depth ---------- */
     if (map->getOdomDepthTimeout())
     {
-      RCLCPP_ERROR(node_->get_logger(), "Depth Lost! EMERGENCY_STOP");
-
-      enable_fail_safe_ = false;
-      changeFSMExecState(EMERGENCY_STOP, "SAFETY");
+      if (exec_state_ != EMERGENCY_STOP)
+      {
+        RCLCPP_ERROR(node_->get_logger(), "Depth Lost! EMERGENCY_STOP");
+        changeFSMExecState(EMERGENCY_STOP, "SAFETY");
+      }
+      return;
     }
 
     /* ---------- check trajectory ---------- */

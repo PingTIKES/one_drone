@@ -116,16 +116,18 @@ def setup(context):
                      't_body_imu': t_body_imu.ravel().tolist()}],
         remappings=[('odomimu', '/uav1/odomimu'),
                     ('cam0/image_raw', '/uav1/cam0/image_raw'),
-                    ('cam1/image_raw', '/uav1/cam1/image_raw')])
+                    ('cam1/image_raw', '/uav1/cam1/image_raw'),
+                    ('imu0', '/uav1/imu0')])
     if mode == 'software':
         matcher = StereoMatcher(ov_config, t_body_imu)
         t_body_camera = matcher.body_optical
-        depth_remaps = []
+        source_depth_topic = '/uav1/d435i/depth/image_raw'
+        depth_info_topic = '/uav1/d435i/depth/camera_info'
     else:
         matcher = None
         t_body_camera = transform(read_yaml(cfg_dir / 'body.yaml')['T_body_depth'])
-        depth_remaps = [('d435i/depth/image_raw', arg('depth_topic')),
-                        ('d435i/depth/camera_info', arg('depth_info_topic'))]
+        source_depth_topic = arg('depth_topic')
+        depth_info_topic = arg('depth_info_topic')
     software_stereo = Node(
         package='stereo_depth', executable='software_stereo',
         namespace='uav1', name='software_stereo', output='screen',
@@ -134,6 +136,15 @@ def setup(context):
                     {'config': ov_config,
                      't_body_imu': t_body_imu.ravel().tolist(),
                      'sync_slop': .015 if sim else .003}])
+    depth_filter = Node(
+        package='depth_filter', executable='depth_filter',
+        namespace='uav1', name='depth_filter', output='screen',
+        parameters=[common, node_config('depth_filter', 'depth_filter'),
+                    {'depth_scale': float(arg('depth_scale'))}],
+        remappings=[('depth/image_raw', source_depth_topic),
+                    ('depth/image_filtered', '/uav1/d435i/depth/image_filtered')])
+    depth_remaps = [('d435i/depth/image_raw', '/uav1/d435i/depth/image_filtered'),
+                    ('d435i/depth/camera_info', depth_info_topic)]
     stereo_depth_node = Node(
         package='obstacle_cloud', executable='stereo_depth_node',
         namespace='uav1', name='stereo_depth_node', output='screen',
@@ -150,10 +161,8 @@ def setup(context):
                      'self_mask_model': 'x500' if sim else 'none',
                      'frame_decimation': 1 if mode == 'software' else 3}],
         remappings=depth_remaps)
-    ego_depth_topic = ('/uav1/d435i/depth/image_raw' if mode == 'software'
-                       else arg('depth_topic'))
-    ego_info_topic = ('/uav1/d435i/depth/camera_info' if mode == 'software'
-                      else arg('depth_info_topic'))
+    ego_depth_topic = '/uav1/d435i/depth/image_filtered'
+    ego_info_topic = depth_info_topic
     ego_odom_adapter = Node(
         package='ego_bridge', executable='ego_odom_adapter',
         name='ego_odom_adapter', output='screen',
@@ -220,7 +229,8 @@ def setup(context):
         openvins,                    # stereo VIO
         vio_bridge,                  # VIO -> PX4 and odom TF
         software_stereo,             # sim/software depth
-        stereo_depth_node,           # depth -> obstacle cloud
+        depth_filter,                # temporal/spatial depth cleanup
+        stereo_depth_node,           # filtered depth -> obstacle cloud
         camera_optical_tf,           # measured base_link -> camera_optical
         ego_odom_adapter,            # body twist -> world twist + depth health
         ego_planner,                 # depth GridMap + local B-spline planning

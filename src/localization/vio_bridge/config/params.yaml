@@ -35,6 +35,14 @@ vio_bridge:
     recovery_max_source_gap: 3.0
     recovery_gap_max_correction: 2.5
     recovery_gap_max_angle_deg: 90.0
+    # Low-cost quality monitor around OpenVINS. Feature count is measured from
+    # the same stereo images without modifying the estimator core.
+    feature_check_period: 0.5
+    feature_bad_count: 15
+    feature_good_count: 40
+    quality_velocity_window: 0.1
+    quality_acceleration_warn: 6.0
+    quality_angular_rate_warn: 0.6
     expected_world: global
     expected_imu: imu
     match_tol: 0.1

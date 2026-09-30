@@ -12,6 +12,7 @@
   <exec_depend>vio_bridge</exec_depend>
   <exec_depend>camera_stream</exec_depend>
   <exec_depend>stereo_depth</exec_depend>
+  <exec_depend>depth_filter</exec_depend>
   <exec_depend>obstacle_cloud</exec_depend>
   <exec_depend>goal_manager</exec_depend>
   <exec_depend>flight_bridge</exec_depend>

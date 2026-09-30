@@ -46,7 +46,10 @@ ego_planner_node:
     grid_map/show_occ_time: false
     grid_map/pose_type: 2
     grid_map/frame_id: odom
-    grid_map/odom_depth_timeout: 0.5
+    # Filtered software stereo averages about 2.5-3 Hz and can have a measured
+    # scheduling gap close to 1 s. Require a persistent gap before EGO enters
+    # emergency stop; flight_bridge stops sending motion sooner at 1.2 s.
+    grid_map/odom_depth_timeout: 1.5
 
     manager/max_vel: 0.5
     manager/max_acc: 1.0

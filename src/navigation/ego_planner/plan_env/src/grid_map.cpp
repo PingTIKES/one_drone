@@ -735,7 +735,7 @@ void GridMap::updateOccupancyCallback()
 
   if (!md_.occ_need_update_)
   {
-    if (md_.flag_use_depth_fusion &&
+    if (md_.flag_use_depth_fusion && !md_.flag_depth_odom_timeout_ &&
         (node_->now() - md_.last_occ_update_time_).seconds() > mp_.odom_depth_timeout_)
     {
       RCLCPP_ERROR(node_->get_logger(),
@@ -748,6 +748,11 @@ void GridMap::updateOccupancyCallback()
     return;
   }
   md_.last_occ_update_time_ = node_->now();
+  if (md_.flag_depth_odom_timeout_)
+  {
+    RCLCPP_INFO(node_->get_logger(), "synchronized odometry/depth recovered");
+    md_.flag_depth_odom_timeout_ = false;
+  }
 
   /* update occupancy */
   // ros::Time t1, t2, t3, t4;

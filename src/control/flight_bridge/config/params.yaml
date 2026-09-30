@@ -21,20 +21,25 @@ flight_bridge:
     arrival_position_deadband: 0.15
     arrival_velocity_deadband: 0.10
     arrival_exit_scale: 1.5
-    reaction_time: 0.5
+    # Soft VIO degradation keeps the mission alive at conservative dynamics.
+    # INVALID still enters HOLD through the flight-state machine.
+    degraded_speed_scale: 0.4
+    degraded_max_yaw_rate: 0.10
+    reaction_time: 0.8
     assumed_braking_deceleration: 0.6
     safety_margin: 0.5
     verified_forward_range: 5.0
     command_timeout: 0.2
     pose_timeout: 0.5
     vio_timeout: 0.5
-    vio_stable_time: 1.0
+    # Require a settled estimator before arming or recovering from INVALID.
+    vio_stable_time: 3.0
     # After an INVALID event, resume only when VIO has remained VALID for
     # vio_stable_time and PX4 is armed, in OFFBOARD, position-valid and not in
     # failsafe. The retained navigation goal is replanned from the new pose.
     auto_recover_from_hold: true
     status_timeout: 1.5
-    depth_heartbeat_timeout: 0.5
-    depth_grace: 0.8
+    depth_heartbeat_timeout: 1.2
+    depth_grace: 1.5
     takeoff_tolerance: 0.2
     takeoff_stable_time: 1.0

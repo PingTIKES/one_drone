@@ -163,6 +163,8 @@ PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
 
 不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。
 
+`ego_planner_node` 与其他算法节点进程隔离；异常退出后由 launch 在 0.1 秒后自动拉起。规划输出中断期间 `flight_bridge` 依靠命令超时切换到 PX4 位置保持。重启后的规划器会重新接收决策节点或 RViz 发布的新目标。到点距离小于 0.2 m 时直接进入等待目标状态，不再无限重复生成短轨迹。
+
 ### 3. 起飞前检查
 
 ```bash

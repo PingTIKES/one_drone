@@ -171,6 +171,9 @@ def setup(context):
     ego_planner = Node(
         package='ego_planner', executable='ego_planner_node',
         name='ego_planner_node', output='screen',
+        # Keep the control bridge alive and restart only the planner process.
+        # A small non-zero delay prevents a tight fork/crash loop.
+        respawn=True, respawn_delay=0.1,
         parameters=[str(bringup / 'params/ego_params.yaml'), common,
                     {'grid_map/cam2body': t_body_camera.ravel().tolist()}],
         remappings=[

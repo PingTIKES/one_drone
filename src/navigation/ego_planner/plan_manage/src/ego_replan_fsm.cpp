@@ -209,12 +209,11 @@ namespace ego_planner
         changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
       else
       {
-        while (exec_state_ != EXEC_TRAJ)
-        {
-          rclcpp::spin_some(node_);
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        changeFSMExecState(REPLAN_TRAJ, "TRIG");
+        // This function runs inside the node's executor callback. Calling
+        // spin_some(node_) here attempts to add the same node to another
+        // executor and aborts the process. A new global goal can safely ask
+        // the normal FSM timer to generate a fresh trajectory instead.
+        changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
       }
 
       visualization_->displayGlobalPathList(gloabl_traj, 0.1, 0);
@@ -533,6 +532,17 @@ namespace ego_planner
 
     case GEN_NEW_TRAJ:
     {
+
+      // EGO's rebound optimizer intentionally rejects trajectories shorter
+      // than 0.2 m. Treat that condition as arrival instead of retrying at
+      // 100 Hz forever. A later decision/RViz goal starts a new trajectory.
+      if ((end_pt_ - odom_pos_).norm() < 0.2)
+      {
+        have_target_ = false;
+        have_trigger_ = false;
+        changeFSMExecState(WAIT_TARGET, "ARRIVAL");
+        break;
+      }
 
       bool success = planFromGlobalTraj(10); // zx-todo
       if (success)

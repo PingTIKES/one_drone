@@ -17,7 +17,7 @@ from std_srvs.srv import Trigger
 from px4_msgs.msg import (OffboardControlMode, TrajectorySetpoint,
                           VehicleCommand, VehicleLocalPosition, VehicleStatus)
 
-from flight_bridge.velocity_math import (body_flu_to_ned,
+from flight_bridge.velocity_math import (arrival_deadband_active, body_flu_to_ned,
                                          required_forward_clearance, yaw_policy)
 
 
@@ -34,6 +34,9 @@ class FlightBridge(Node):
                         yaw_soft_limit_deg=30., yaw_hard_limit_deg=100.,
                         yaw_reverse_limit_deg=150., yaw_min_speed_scale=.25,
                         yaw_rate_gain=.8,
+                        arrival_position_deadband=.15,
+                        arrival_velocity_deadband=.10,
+                        arrival_exit_scale=1.5,
                         reaction_time=.5, assumed_braking_deceleration=.6,
                         safety_margin=.5, verified_forward_range=5.,
                         command_timeout=.2, pose_timeout=.5, vio_timeout=.5,
@@ -58,6 +61,11 @@ class FlightBridge(Node):
             float(self.p('yaw_min_speed_scale')),
             float(self.p('max_yaw_rate')),
             float(self.p('yaw_rate_gain')))
+        arrival_deadband_active(
+            False, 0.0, 0.0,
+            float(self.p('arrival_position_deadband')),
+            float(self.p('arrival_velocity_deadband')),
+            float(self.p('arrival_exit_scale')))
         self.required_clearance = required_clearance
         self.state = 'IDLE'
         self.position = None
@@ -76,6 +84,7 @@ class FlightBridge(Node):
         self.velocity_active = False
         self.command_clamped = False
         self.yaw_mode = 'YAW_HOLD'
+        self.arrival_hold = False
         self.translation_scale = 1.0
         self.hold_auto_recover = False
         self.hold_resume_state = None
@@ -285,10 +294,22 @@ class FlightBridge(Node):
             return False
         actual = self.ego_odom.pose.pose.position
         gain = float(self.p('position_gain'))
+        position_error = math.hypot(self.cmd.position.x - actual.x,
+                                    self.cmd.position.y - actual.y)
+        planned_speed = math.hypot(self.cmd.velocity.x, self.cmd.velocity.y)
+        self.arrival_hold = arrival_deadband_active(
+            self.arrival_hold, position_error, planned_speed,
+            float(self.p('arrival_position_deadband')),
+            float(self.p('arrival_velocity_deadband')),
+            float(self.p('arrival_exit_scale')))
         world = [
             self.cmd.velocity.x + gain * (self.cmd.position.x - actual.x),
             self.cmd.velocity.y + gain * (self.cmd.position.y - actual.y),
             self.cmd.velocity.z + gain * (self.cmd.position.z - actual.z)]
+        if self.arrival_hold:
+            # Near the endpoint, a millimetre-scale correction has an unstable
+            # direction. Do not turn that noise into a yaw-rate command.
+            world[0] = world[1] = 0.0
         horizontal = math.hypot(world[0], world[1])
         limit = float(self.p('max_horizontal_speed'))
         if horizontal > limit:
@@ -297,21 +318,24 @@ class FlightBridge(Node):
         world[2] = max(-float(self.p('max_vertical_speed')),
                        min(float(self.p('max_vertical_speed')), world[2]))
         bx, by, bz = self.world_to_body(world, self.ego_odom.pose.pose.orientation)
-        angle = math.atan2(by, bx)
-        scale, yaw_flu, self.yaw_mode = yaw_policy(
-            angle,
-            math.radians(float(self.p('yaw_soft_limit_deg'))),
-            math.radians(float(self.p('yaw_hard_limit_deg'))),
-            math.radians(float(self.p('yaw_reverse_limit_deg'))),
-            float(self.p('yaw_min_speed_scale')),
-            float(self.p('max_yaw_rate')),
-            float(self.p('yaw_rate_gain')))
+        if self.arrival_hold:
+            scale, yaw_flu, self.yaw_mode = 0.0, 0.0, 'ARRIVAL_HOLD'
+        else:
+            angle = math.atan2(by, bx)
+            scale, yaw_flu, self.yaw_mode = yaw_policy(
+                angle,
+                math.radians(float(self.p('yaw_soft_limit_deg'))),
+                math.radians(float(self.p('yaw_hard_limit_deg'))),
+                math.radians(float(self.p('yaw_reverse_limit_deg'))),
+                float(self.p('yaw_min_speed_scale')),
+                float(self.p('max_yaw_rate')),
+                float(self.p('yaw_rate_gain')))
         # XYZ remains the planner's independent trajectory. Yaw is held for
         # small direction changes and blended in only as perception requires.
         bx, by = bx * scale, by * scale
         self.translation_scale = scale
         self.velocity_active = True
-        self.command_clamped = scale < .999 or horizontal > limit
+        self.command_clamped = self.arrival_hold or scale < .999 or horizontal > limit
         self.send_mode(True)
         north, east = body_flu_to_ned(bx, by, self.position.heading)
         msg = TrajectorySetpoint()

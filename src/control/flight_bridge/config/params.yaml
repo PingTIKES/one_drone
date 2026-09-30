@@ -15,6 +15,12 @@ flight_bridge:
     yaw_reverse_limit_deg: 150.0
     yaw_min_speed_scale: 0.25
     yaw_rate_gain: 0.8
+    # Endpoint hover deadband. Enter only when both the horizontal tracking
+    # error and EGO feed-forward speed are small. The larger exit threshold
+    # prevents VIO noise at the boundary from repeatedly enabling yaw control.
+    arrival_position_deadband: 0.15
+    arrival_velocity_deadband: 0.10
+    arrival_exit_scale: 1.5
     reaction_time: 0.5
     assumed_braking_deceleration: 0.6
     safety_margin: 0.5

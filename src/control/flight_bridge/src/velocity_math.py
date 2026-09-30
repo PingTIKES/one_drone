@@ -18,6 +18,21 @@ def required_forward_clearance(speed, reaction_time, deceleration, margin):
     return speed * reaction_time + speed * speed / (2.0 * deceleration) + margin
 
 
+def arrival_deadband_active(active, position_error, planned_speed,
+                            position_deadband, velocity_deadband, exit_scale):
+    """Latch an arrival deadband with hysteresis for quiet endpoint hover."""
+    values = (position_error, planned_speed, position_deadband,
+              velocity_deadband, exit_scale)
+    if not all(math.isfinite(v) for v in values):
+        raise ValueError('nonfinite arrival-deadband input')
+    if (position_error < 0 or planned_speed < 0 or position_deadband <= 0 or
+            velocity_deadband <= 0 or exit_scale < 1):
+        raise ValueError('invalid arrival-deadband input')
+    scale = exit_scale if active else 1.0
+    return (position_error <= position_deadband * scale and
+            planned_speed <= velocity_deadband * scale)
+
+
 def yaw_policy(angle, hold_angle, hard_angle, reverse_angle,
                minimum_speed_scale, max_yaw_rate, yaw_rate_gain):
     """Return translation scale, FLU yaw rate and the active yaw regime.

@@ -2,6 +2,7 @@
 """Guarded OpenVINS odomimu -> PX4 external vision. No ground-truth input."""
 import math
 import json
+import time
 import cv2
 import numpy as np
 import rclpy
@@ -10,7 +11,7 @@ from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, Du
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import Image, Imu
-from std_msgs.msg import String
+from std_msgs.msg import String, Header
 from std_srvs.srv import Trigger
 from px4_msgs.msg import VehicleOdometry
 from tf2_ros import TransformBroadcaster
@@ -77,6 +78,9 @@ class VioBridge(Node):
         px4_root = '/' + (px4_ns + '/' if px4_ns else '') + 'fmu/'
         self.pub = self.create_publisher(VehicleOdometry,px4_root + 'in/vehicle_visual_odometry',qos_profile_sensor_data)
         self.odom_pub = self.create_publisher(Odometry, 'odom', QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE))
+        self.reset_pub = self.create_publisher(Header, '/vio_reset_event',
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.tf_pub = TransformBroadcaster(self)
         self.health = self.create_publisher(String,'vio_health',1)
         self.diagnostics = self.create_publisher(String,'vio_diagnostics',1)
@@ -86,8 +90,14 @@ class VioBridge(Node):
         self.create_subscription(Imu, 'imu0', self.imu, qos_profile_sensor_data)
         self.create_service(Trigger,'reset_vio_bridge',self.reset)
         self.create_timer(.1,self.watchdog)
+        self.notify_reset('BRIDGE_START')
 
     def now(self): return self.get_clock().now().nanoseconds*1e-9
+
+    def notify_reset(self, reason):
+        # The unique epoch is independent of the 8-bit PX4 reset counter.
+        self.reset_pub.publish(Header(stamp=self.get_clock().now().to_msg(),
+                                      frame_id=f'{time.time_ns()}:{reason}'))
 
     def new_recovery(self):
         return VioRecovery(*(float(self.p(k)) for k in (
@@ -175,6 +185,7 @@ class VioBridge(Node):
         self.last_quat = self.last_velocity = self.last_omega = None
         self.recovery = self.new_recovery()
         self.reset_count = (self.reset_count+1)%256
+        self.notify_reset('MANUAL_RESET')
         self.latched = False
         self.reason = 'MANUAL_RESET'
         self.last_good = -math.inf
@@ -287,6 +298,7 @@ class VioBridge(Node):
                 self.recovery.begin(now,self.last_stamp,self.last_position,self.last_quat,
                                     self.last_velocity,self.last_omega,source_gap=source_gap)
                 self.reason = 'DATA_GAP' if source_gap else ('ORIENTATION_DISCONTINUITY' if angle_residual>math.radians(self.p('recovery_max_angle_deg')) else 'POSITION_DISCONTINUITY')
+                self.notify_reset(self.reason)
                 self.health.publish(String(data='INVALID'))
                 self.get_logger().warn(f'VIO quarantine: {self.reason}; dt={dt:.4f}s jump={position_jump:.3f}m')
         if self.recovery.active:
@@ -296,6 +308,7 @@ class VioBridge(Node):
             self.reset_count = (self.reset_count+1)%256
             self.recovery = self.new_recovery()
             self.reason = 'RECOVERED_WITH_RESET'
+            self.notify_reset(self.reason)
             self.get_logger().info('VIO stable again; publishing EV reset_counter')
         out = VehicleOdometry()
         # Hardware uses XRCE clock conversion. Algorithm SITL uses /clock on

@@ -1,5 +1,6 @@
 #ifndef _GRID_MAP_H
 #define _GRID_MAP_H
+#include "std_msgs/msg/header.hpp"
 
 #include <Eigen/Eigen>
 #include <Eigen/StdVector>
@@ -160,6 +161,7 @@ public:
   };
 
   // occupancy map management
+  bool resetReady() const { return !reset_pending_; }
   void resetBuffer();
   void resetBuffer(Eigen::Vector3d min, Eigen::Vector3d max);
 
@@ -202,6 +204,15 @@ public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
+  rclcpp::Subscription<std_msgs::msg::Header>::SharedPtr reset_sub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr reset_ready_pub_;
+  std_msgs::msg::Header reset_epoch_;
+  double reset_stamp_ = -1.0, last_depth_stamp_ = -1.0;
+  double depth_max_age_, depth_sync_tolerance_, future_tolerance_;
+  int reset_depth_frames_, integrated_frames_ = 0;
+  bool reset_pending_ = false;
+  bool acceptDepthStamp(const std_msgs::msg::Header &image, const std_msgs::msg::Header &pose);
+  void resetForVio(const std_msgs::msg::Header &event);
   MappingParameters mp_;
   MappingData md_;
 

@@ -47,6 +47,10 @@ ego_planner_node:
     grid_map/show_occ_time: false # 上游融合耗时打印开关；当前计时代码被注释
     grid_map/pose_type: 2 # 同步位姿输入：1 PoseStamped，2 Odometry
     grid_map/frame_id: odom # 地图输出坐标系
+    grid_map/depth_max_age: 0.5 # 深度源时间戳最大年龄（s），延迟旧帧不参与建图
+    grid_map/depth_odom_sync_tolerance: 0.05 # 深度与里程计时间差上限（s）
+    grid_map/future_tolerance: 0.02 # 允许深度时间戳超前节点时钟的容差（s）
+    grid_map/reset_depth_frames: 3 # VIO 重置后至少融合多少帧有效深度才确认地图重建
     grid_map/odom_depth_timeout: 1.5 # 同步深度/里程计融合持续中断阈值（s）
 
     manager/max_vel: 0.5 # 规划最大速度（m/s）；同步修改优化器、样条和控制上限

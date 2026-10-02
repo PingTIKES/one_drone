@@ -5,5 +5,6 @@ ego_odom_adapter:
     output_odom: /ego/odom # 输出世界系速度里程计话题
     depth_topic: /uav1/d435i/depth/image_raw # 深度输入话题；startup 中指定为过滤后的深度
     depth_fresh_topic: /ego/depth_fresh # 输出深度新鲜度布尔话题
-    depth_timeout: 0.5 # 深度接收间隔超时（s）；超过发布 false
+    depth_timeout: 0.5 # 深度源时间戳最大年龄（s）；延迟旧帧不能刷新健康状态
+    future_tolerance: 0.02 # 允许源时间戳略超前于节点时钟的容差（s）
     expected_frame: odom # 输入里程计要求的世界坐标系

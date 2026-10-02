@@ -179,7 +179,7 @@ ros2 topic hz /ego/occupancy_inflate
 ros2 run tf2_ros tf2_echo odom base_link
 ```
 
-必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中低置信度会显示 `DEGRADED`，输入仍新鲜时控制器限速继续；里程计或深度陈旧时改为位置悬停。持续断流或真实位姿跳变会显示 `INVALID` 并进入 `HOLD`；VIO 连续稳定 3 秒，且 PX4 仍已解锁、处于 OFFBOARD、位置有效、没有 failsafe 后，系统自动回到原飞行阶段，并从恢复后的新位置重新规划保存的目标。当前过滤后的软件双目实测约 2.5–3 Hz、最大调度间隔接近 1 秒，因此控制层深度心跳超时为 1.2 秒，EGO 只在同步深度持续中断 1.5 秒后进入紧急停车；同步恢复后清除超时并从当前位置重新规划。若平均频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
+必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中低置信度会显示 `DEGRADED`，输入仍新鲜时控制器限速继续；里程计或深度陈旧时改为位置悬停。持续断流或真实位姿跳变会显示 `INVALID` 并进入 `HOLD`；VIO 连续稳定 3 秒，且 PX4 仍已解锁、处于 OFFBOARD、位置有效、没有 failsafe 后，未发生坐标重置时，系统自动回到原飞行阶段，并从恢复后的新位置重新规划保存的目标；发生 VIO 重置时会清图、停旧轨迹、丢弃旧目标，等待地图重建后恢复，必须重新打点。当前过滤后的软件双目实测约 2.5–3 Hz、最大调度间隔接近 1 秒，因此控制层深度心跳超时为 1.2 秒，EGO 只在同步深度持续中断 1.5 秒后进入紧急停车；同步恢复后清除超时并从当前位置重新规划。若平均频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
 
 ### 4. 起飞、打点和降落
 
@@ -256,7 +256,7 @@ PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
 
 ## 安全状态与故障排查
 
-`flight_bridge` 保留显式 `/takeoff`、`/land` 和 `/resume_navigation` 服务。VIO 为 `DEGRADED` 且里程计、深度仍新鲜时限速继续执行；任一输入陈旧时用 PX4 本地位置悬停。VIO 为 `INVALID` 或 PX4 本地位置失效时进入 `HOLD`，满足上述稳定条件后自动退出。`goal_manager` 会保存最后一个合法目标以及恢复期间新打的目标，并在 `CRUISE` 恢复时要求 EGO 从新位姿重新规划。`/resume_navigation` 保留为自动恢复条件长期不满足时的人工备用入口。本节点不会主动发送故障降落命令，PX4 自身 estimator failsafe 仍然具有最终控制权。
+`flight_bridge` 保留显式 `/takeoff`、`/land` 和 `/resume_navigation` 服务。VIO 为 `DEGRADED` 且里程计、深度仍新鲜时限速继续执行；任一输入陈旧时用 PX4 本地位置悬停。VIO 为 `INVALID` 或 PX4 本地位置失效时进入 `HOLD`，满足上述稳定条件后自动退出。`goal_manager` 在普通短时降级期间保存目标，恢复 `CRUISE` 后重新规划；VIO 重置事件会丢弃旧目标和恢复完成前保存的目标，需在重置完成后重新打点。`/resume_navigation` 保留为自动恢复条件长期不满足时的人工备用入口。本节点不会主动发送故障降落命令，PX4 自身 estimator failsafe 仍然具有最终控制权。
 
 ```bash
 ros2 topic echo --once /flight_hold_reason std_msgs/msg/String --qos-durability transient_local
@@ -292,7 +292,7 @@ ros2 bag record -o flight_bags/vio_fault_$(date +%Y%m%d_%H%M%S) \
 
 - 当前是单机 EGO 模式，不做 EGO-Swarm 多机轨迹广播与碰撞协调。
 - 当前目标高度固定为 2 m，EGO 内部已是三维规划，但 RViz 2D Goal Pose 不提供目标高度；可在 `goal_manager/config/params.yaml` 修改。
-- 只有前视深度。目标落在后方时会先以低速转入视场，无法感知的后方区域不会被假定为安全。
+- 只有前视深度。目标落在后方时会先以低速转入视场，未知区域仍按用户选择不作为障碍，当前没有“未知区域禁止通行”的门控；这并不意味着未观测区域实际无障碍。
 - 无独立定位备份时，OpenVINS 完全失效不能保证继续自主飞行。
 - 仿真通过只证明软件链与当前模型兼容，不能替代真机标定、台架测试和受控场地试飞。
 
@@ -303,3 +303,42 @@ ros2 bag record -o flight_bags/vio_fault_$(date +%Y%m%d_%H%M%S) \
 新增可调项包括：VIO 质量检测图像缩小比例、角点数量/质量/间距/窗口；软件双目的视差搜索范围、匹配窗口、唯一性及斑块过滤、OpenCV 线程数和同步队列；规划器到点容差；进程 respawn 延迟。角点统计属于外围质量检测，与 OpenVINS 的 `num_pts` 不同。
 
 OpenVINS 前端与估计器参数在 `src/localization/vio_bridge/config/openvins_sim/estimator_config.yaml`（真机为自己的 `calibration_dir/estimator_config.yaml`）；启动入口不再强制覆盖日志级别、计时记录、线程数。标定几何和飞控身份仍以标定文件及启动参数为准，相关 YAML 项注明了覆盖来源。`sync_slop` 和 `frame_decimation` 留为 null 时自动选择仿真/真机默认值，填数值即可覆盖。
+
+
+## 深度有效性、VIO 重置和时间同步
+
+- 零深度、NaN、Inf、超出有效量程的像素不生成射线，不以最远量程替代，因此不能靠无效帧清除旧障碍。真实有效射线仍能更新空闲空间和清除旧占用。未知体素仍不阻止规划。
+- `depth_filter/config/params.yaml` 的 `fill_holes` 默认 `false`，保留原始深度空洞；如主动开启插值，补出的深度会参与建图。VIO 重置会清掉时间滤波历史。
+- `/vio_reset_event` 使用可靠、持久化的 `std_msgs/msg/Header`：`stamp` 是 ROS 时钟下的重置界限，`frame_id` 是唯一事件编号及原因，**不是 TF 坐标名**。桥接启动/重启、人工 reset、检测到不连续、接受恢复后的坐标时都会发布事件。
+- 收到事件后：飞控桥接进入 HOLD；目标管理丢弃旧目标；EGO 清原始占用、膨胀层、射线计数和深度历史，取消规划状态；轨迹服务器停发旧 `PositionCommand` 并拒绝重放旧样条。排队的重置前深度、里程计及目标不能重新激活旧任务。
+- `/ego/trajectory_reset_ready` 确认旧轨迹已停用；`/ego/map_reset_ready` 确认当前事件之后至少融合了 `reset_depth_frames` 帧有效且同步的深度。两者都使用同一个事件 Header；只有编号匹配、VIO 连续稳定、深度和 PX4 状态有效时才允许恢复。恢复 CRUISE 表示可接受新目标，不会继续旧任务。无需人工 map–odom 确认。
+- 外部决策节点发 `/navigation_goal` 时必须使用当前 ROS 时间填写 `header.stamp`，不能重放重置前目标；仿真节点需要共同使用 `/clock`。整套仿真时钟重启时请同时重启算法节点。
+
+可调参数（修改后重启节点）：
+
+| 文件 | 参数 | 默认值及含义 |
+|---|---|---|
+| `src/navigation/ego_bridge/config/params.yaml` | `depth_timeout` | 0.5 s；根据图像源时间戳计算年龄，不是消息到达时间 |
+| 同上 | `future_tolerance` | 0.02 s；允许源时间戳超前的容差 |
+| `src/bringup/params/ego_params.yaml` | `grid_map/depth_max_age` | 0.5 s；建图允许的深度源时间戳年龄 |
+| 同上 | `grid_map/depth_odom_sync_tolerance` | 0.05 s；深度与对应里程计的最大时间差 |
+| 同上 | `grid_map/future_tolerance` | 0.02 s；深度超前时钟容差 |
+| 同上 | `grid_map/reset_depth_frames` | 3；重置后有效建图帧数，空深度不计数 |
+
+重复、倒退、过期、超前或不同步的深度会被拒绝；节点节流输出拒绝原因。源时间戳年龄与帧间隔不同：2.5 Hz 的新帧可以有效，但延迟 1 秒才送达的图不能刷新深度健康状态。
+
+排错时查看：
+
+```bash
+ros2 topic echo /vio_reset_event --qos-durability transient_local
+ros2 topic echo /ego/map_reset_ready --qos-durability transient_local
+ros2 topic echo /ego/trajectory_reset_ready --qos-durability transient_local
+ros2 topic echo /navigation_state
+```
+
+回归验证（先 source 工作空间，独立 ROS domain，不连接 PX4）：
+
+```bash
+ROS_DOMAIN_ID=83 PYTHONNOUSERSITE=1 python3 -m unittest discover -s tests -v
+ROS_DOMAIN_ID=83 PYTHONNOUSERSITE=1 python3 tests/integration_depth_reset.py
+```

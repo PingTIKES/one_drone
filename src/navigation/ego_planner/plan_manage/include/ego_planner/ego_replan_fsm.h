@@ -30,6 +30,8 @@ namespace ego_planner
   {
 
   private:
+    rclcpp::Subscription<std_msgs::msg::Header>::SharedPtr reset_sub_;
+    double reset_stamp_ = -1.0;
     /* ---------- flag ---------- */
     enum FSM_EXEC_STATE
     {

@@ -5,6 +5,8 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
+from std_msgs.msg import Header
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 from depth_filter.depth_filters import DepthFilters
 
@@ -14,10 +16,15 @@ class DepthFilterNode(Node):
         super().__init__('depth_filter')
         defaults = dict(depth_scale=.001, min_range=.3, max_range=8.,
                         spatial_kernel=3, temporal_alpha=.65,
-                        temporal_max_delta=.4, hole_min_neighbors=5)
+                        temporal_max_delta=.4, hole_min_neighbors=5, fill_holes=False)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         p = lambda key: self.get_parameter(key).value
+        self.fill_holes = bool(p('fill_holes'))
+        self.reset_stamp = -float('inf')
+        self.create_subscription(Header, '/vio_reset_event', self.on_reset,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=ReliabilityPolicy.RELIABLE))
         self.depth_scale = float(p('depth_scale'))
         self.min_range, self.max_range = float(p('min_range')), float(p('max_range'))
         if self.depth_scale <= 0 or not 0 < self.min_range < self.max_range:
@@ -32,7 +39,14 @@ class DepthFilterNode(Node):
         self.create_subscription(
             Image, 'depth/image_raw', self.callback, qos_profile_sensor_data)
 
+    def on_reset(self, msg):
+        self.filters.previous = None
+        self.reset_stamp = msg.stamp.sec + msg.stamp.nanosec * 1e-9
+
     def callback(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if stamp <= self.reset_stamp:
+            return
         try:
             image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
             if msg.encoding in ('16UC1', 'mono16'):
@@ -44,6 +58,9 @@ class DepthFilterNode(Node):
                 raise ValueError(f'unsupported depth encoding {msg.encoding}')
             depth[(depth < self.min_range) | (depth > self.max_range)] = np.nan
             filtered = self.filters.apply(depth)
+            if not self.fill_holes:
+                filtered[~np.isfinite(depth) | (depth <= 0)] = np.nan
+                self.filters.previous = filtered.copy()
         except (ValueError, TypeError) as exc:
             self.get_logger().warn(f'depth frame rejected: {exc}')
             return

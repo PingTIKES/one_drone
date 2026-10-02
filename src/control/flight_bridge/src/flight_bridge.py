@@ -5,6 +5,7 @@ estimator interruption holds PX4's current local position, then resumes after
 VIO and PX4 are stable. PX4's own failsafe remains authoritative.
 """
 import math
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -12,7 +13,7 @@ from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
 from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Header
 from std_srvs.srv import Trigger
 from px4_msgs.msg import (OffboardControlMode, TrajectorySetpoint,
                           VehicleCommand, VehicleLocalPosition, VehicleStatus)
@@ -87,6 +88,16 @@ class FlightBridge(Node):
         self.takeoff_reached_since = None
         self.prestream_count = 0
         self.last_reset = None
+        self.reset_epoch = None
+        self.map_epoch = None
+        self.traj_epoch = None
+        self.reset_command_cutoff = -math.inf
+        self.reset_sensor_stamp = -math.inf
+        reset_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                               durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(Header, '/vio_reset_event', self.on_vio_reset, reset_qos)
+        self.create_subscription(Header, '/ego/map_reset_ready', self.on_map_ready, reset_qos)
+        self.create_subscription(Header, '/ego/trajectory_reset_ready', self.on_traj_ready, reset_qos)
         self.velocity_active = False
         self.command_clamped = False
         self.yaw_mode = 'YAW_HOLD'
@@ -168,13 +179,16 @@ class FlightBridge(Node):
     def on_position(self, msg):
         resets = (msg.xy_reset_counter, msg.z_reset_counter, msg.heading_reset_counter)
         reset_changed = (self.last_reset is not None and resets != self.last_reset and
-                         self.state in ('TAKEOFF', 'CRUISE'))
+                         self.state in ('TAKEOFF', 'CRUISE', 'HOLD'))
         self.last_reset = resets
         self.position = msg
         # PX4 publishes its boot-relative uORB timestamp. Freshness must use
         # ROS callback arrival time in both SITL and hardware deployments.
         self.pose_at = self.now()
         if reset_changed:
+            self.hold_target = (msg.x, msg.y, msg.z)
+            if self.state == 'HOLD':
+                self.hold_resume_state = 'CRUISE'
             self.enter_hold('PX4 local estimate reset; waiting for stable automatic recovery',
                             auto_recover=True)
 
@@ -182,7 +196,37 @@ class FlightBridge(Node):
         self.status = msg
         self.status_at = self.now()
 
+    def on_vio_reset(self, msg):
+        self.reset_epoch = msg.frame_id
+        self.reset_sensor_stamp = msg.stamp.sec + msg.stamp.nanosec * 1e-9
+        self.ego_odom = None
+        self.ego_odom_at = -math.inf
+        self.vio_ok = False
+        self.vio_state = "INVALID"
+        self.vio_at = -math.inf
+        self.reset_command_cutoff = time.time()
+        self.cmd = None
+        self.cmd_at = -math.inf
+        self.vio_valid_since = None
+        if self.state in ('TAKEOFF', 'CRUISE'):
+            self.enter_hold('VIO reset: rebuilding map; old goal discarded', auto_recover=True)
+        if self.state == 'HOLD' and self.hold_auto_recover:
+            self.hold_resume_state = 'CRUISE'
+
+    def on_map_ready(self, msg):
+        self.map_epoch = msg.frame_id
+
+    def on_traj_ready(self, msg):
+        self.traj_epoch = msg.frame_id
+
+    def reset_map_ready(self):
+        return self.reset_epoch is None or (self.map_epoch == self.reset_epoch and
+                                           self.traj_epoch == self.reset_epoch)
+
     def on_position_command(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if not self.reset_map_ready() or stamp <= self.reset_command_cutoff:
+            return
         values = (msg.position.x, msg.position.y, msg.position.z,
                   msg.velocity.x, msg.velocity.y, msg.velocity.z)
         if not all(math.isfinite(v) for v in values):
@@ -194,6 +238,8 @@ class FlightBridge(Node):
         self.cmd_at = self.now()
 
     def on_ego_odom(self, msg):
+        if msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 <= self.reset_sensor_stamp:
+            return
         self.ego_odom = msg
         self.ego_odom_at = self.now()
 
@@ -221,6 +267,8 @@ class FlightBridge(Node):
             missing.append('fresh PX4 local position')
         if not self.vio_stable():
             missing.append('stable VALID OpenVINS')
+        if not self.reset_map_ready():
+            missing.append('rebuilt map after VIO reset')
         response.success = not missing
         response.message = ('Starting PX4 Offboard takeoff' if response.success else
                             'Takeoff blocked: ' + ', '.join(missing))
@@ -233,10 +281,10 @@ class FlightBridge(Node):
         return response
 
     def resume(self, _request, response):
-        response.success = (self.state == 'HOLD' and self.pose_valid() and self.vio_stable() and
+        response.success = (self.state == 'HOLD' and self.reset_map_ready() and self.depth_valid() and self.pose_valid() and self.vio_stable() and
                             self.status is not None and
                             self.status.nav_state == NAV_OFFBOARD)
-        response.message = ('Flight control resumed; retained goal will be replanned' if response.success else
+        response.message = ('Flight control resumed; submit a new goal after VIO reset' if response.success else
                             'Waiting for stable VIO, PX4 position and Offboard')
         if response.success:
             self.state = 'CRUISE'
@@ -298,7 +346,9 @@ class FlightBridge(Node):
                 -s*vector[0] + c*vector[1], vector[2])
 
     def send_ego_command(self, degraded=False):
-        if (self.cmd is None or self.ego_odom is None or
+        if (not self.reset_map_ready() or
+                not 0 <= self.now() - self.cmd_at <= float(self.p("command_timeout")) or
+                self.cmd is None or self.ego_odom is None or
                 not 0 <= self.now() - self.ego_odom_at <= float(self.p('pose_timeout'))):
             return False
         actual = self.ego_odom.pose.pose.position
@@ -375,6 +425,7 @@ class FlightBridge(Node):
 
     def can_auto_recover(self):
         return (self.state == 'HOLD' and self.hold_auto_recover and
+                self.reset_map_ready() and self.depth_valid() and
                 self.hold_resume_state in ('TAKEOFF', 'CRUISE') and
                 self.pose_valid() and self.vio_stable() and
                 self.status is not None and

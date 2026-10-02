@@ -15,6 +15,7 @@ class EgoOdomAdapter(Node):
         defaults = dict(source_odom='/odom', output_odom='/ego/odom',
                         depth_topic='/uav1/d435i/depth/image_raw',
                         depth_fresh_topic='/ego/depth_fresh', depth_timeout=.5,
+                        future_tolerance=.02,
                         expected_frame='odom')
         for key, value in defaults.items():
             self.declare_parameter(key, value)
@@ -22,6 +23,10 @@ class EgoOdomAdapter(Node):
         self.expected_frame = str(p('expected_frame'))
         self.depth_timeout = float(p('depth_timeout'))
         self.last_depth = -math.inf
+        self.last_clock = -math.inf
+        self.future_tolerance = float(p('future_tolerance'))
+        if self.depth_timeout <= 0 or self.future_tolerance < 0:
+            raise ValueError('invalid depth timestamp limits')
         self.odom_pub = self.create_publisher(Odometry, str(p('output_odom')), 20)
         self.depth_pub = self.create_publisher(Bool, str(p('depth_fresh_topic')), 10)
         self.create_subscription(Odometry, str(p('source_odom')), self.on_odom, 20)
@@ -32,12 +37,21 @@ class EgoOdomAdapter(Node):
     def now(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
-    def on_depth(self, _msg):
-        self.last_depth = self.now()
+    def on_depth(self, msg):
+        now = self.now()
+        if now < self.last_clock:
+            self.last_depth = -math.inf
+        self.last_clock = now
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if stamp <= self.last_depth or not -self.future_tolerance <= now - stamp <= self.depth_timeout:
+            self.get_logger().warn('Rejected stale, future, duplicate or regressed depth stamp',
+                                   throttle_duration_sec=2.)
+            return
+        self.last_depth = stamp
 
     def publish_depth_health(self):
         age = self.now() - self.last_depth
-        self.depth_pub.publish(Bool(data=0.0 <= age <= self.depth_timeout))
+        self.depth_pub.publish(Bool(data=-self.future_tolerance <= age <= self.depth_timeout))
 
     def on_odom(self, msg):
         if msg.header.frame_id != self.expected_frame:

@@ -6,6 +6,17 @@
 void GridMap::initMap(rclcpp::Node::SharedPtr node)
 {
   node_ = node;
+  depth_max_age_ = node_->declare_parameter("grid_map/depth_max_age", 0.5);
+  depth_sync_tolerance_ = node_->declare_parameter("grid_map/depth_odom_sync_tolerance", 0.05);
+  future_tolerance_ = node_->declare_parameter("grid_map/future_tolerance", 0.02);
+  reset_depth_frames_ = node_->declare_parameter("grid_map/reset_depth_frames", 3);
+  if (!(depth_max_age_ > 0.0) || !(depth_sync_tolerance_ > 0.0) ||
+      !(future_tolerance_ >= 0.0) || reset_depth_frames_ < 1)
+    throw std::invalid_argument("invalid depth timestamp/reset limits");
+  auto reset_qos = rclcpp::QoS(1).reliable().transient_local();
+  reset_ready_pub_ = node_->create_publisher<std_msgs::msg::Header>("/ego/map_reset_ready", reset_qos);
+  reset_sub_ = node_->create_subscription<std_msgs::msg::Header>("/vio_reset_event", reset_qos,
+      [this](std_msgs::msg::Header::ConstSharedPtr msg) { resetForVio(*msg); });
 
   /* get parameter */
   double x_size, y_size, z_size;
@@ -221,6 +232,54 @@ void GridMap::initMap(rclcpp::Node::SharedPtr node)
   // eng_ = default_random_engine(rd());
 }
 
+bool GridMap::acceptDepthStamp(const std_msgs::msg::Header &image,
+                               const std_msgs::msg::Header &pose)
+{
+  const double stamp = rclcpp::Time(image.stamp).seconds();
+  const double pose_stamp = rclcpp::Time(pose.stamp).seconds();
+  const double age = node_->now().seconds() - stamp;
+  if (stamp <= reset_stamp_ || pose_stamp <= reset_stamp_ || stamp <= last_depth_stamp_ ||
+      age < -future_tolerance_ || age > depth_max_age_ ||
+      std::abs(stamp - pose_stamp) > depth_sync_tolerance_)
+  {
+    integrated_frames_ = 0;
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+        "depth rejected: age=%.3f sync_error=%.3f (stale/future/duplicate/pre-reset/unsynchronized)",
+        age, std::abs(stamp - pose_stamp));
+    return false;
+  }
+  if (stamp - last_depth_stamp_ > depth_max_age_) integrated_frames_ = 0;
+  last_depth_stamp_ = stamp;
+  return true;
+}
+
+void GridMap::resetForVio(const std_msgs::msg::Header &event)
+{
+  reset_epoch_ = event;
+  reset_stamp_ = rclcpp::Time(event.stamp).seconds();
+  last_depth_stamp_ = reset_stamp_;
+  reset_pending_ = true;
+  integrated_frames_ = 0;
+  std::fill(md_.occupancy_buffer_.begin(), md_.occupancy_buffer_.end(), mp_.clamp_min_log_ - mp_.unknown_flag_);
+  std::fill(md_.occupancy_buffer_inflate_.begin(), md_.occupancy_buffer_inflate_.end(), 0);
+  std::fill(md_.count_hit_.begin(), md_.count_hit_.end(), 0);
+  std::fill(md_.count_hit_and_miss_.begin(), md_.count_hit_and_miss_.end(), 0);
+  std::fill(md_.flag_traverse_.begin(), md_.flag_traverse_.end(), -1);
+  std::fill(md_.flag_rayend_.begin(), md_.flag_rayend_.end(), -1);
+  while (!md_.cache_voxel_.empty()) md_.cache_voxel_.pop();
+  md_.raycast_num_ = 0;
+  md_.proj_points_cnt = 0;
+  md_.occ_need_update_ = md_.local_updated_ = md_.has_first_depth_ = false;
+  md_.has_odom_ = md_.has_cloud_ = false;
+  md_.depth_image_.release();
+  md_.last_depth_image_.release();
+  md_.flag_depth_odom_timeout_ = true;
+  resetBuffer();
+  publishMap();
+  publishMapInflate(true);
+  RCLCPP_WARN(node_->get_logger(), "VIO reset: cleared occupancy and depth history");
+}
+
 void GridMap::resetBuffer()
 {
   Eigen::Vector3d min_pos = mp_.map_min_boundary_;
@@ -303,7 +362,9 @@ void GridMap::projectDepthImage()
       {
 
         Eigen::Vector3d proj_pt;
-        depth = (*row_ptr++) / mp_.k_depth_scaling_factor_;
+        depth = row_ptr[u] / mp_.k_depth_scaling_factor_;
+        if (depth <= 0 || depth < mp_.depth_filter_mindist_ || depth > mp_.depth_filter_maxdist_)
+          continue;
         proj_pt(0) = (u - mp_.cx_) * depth / mp_.fx_;
         proj_pt(1) = (v - mp_.cy_) * depth / mp_.fy_;
         proj_pt(2) = depth;
@@ -346,18 +407,11 @@ void GridMap::projectDepthImage()
           // depth += rand_noise_(eng_);
           // if (depth > 0.01) depth += rand_noise2_(eng_);
 
-          if (raw_depth == 0)
-          {
-            depth = mp_.max_ray_length_ + 0.1;
-          }
-          else if (depth < mp_.depth_filter_mindist_)
-          {
+          // Invalid or out-of-range depth is not evidence of free space.
+          // Unknown occupancy remains traversable by the existing planner policy.
+          if (raw_depth == 0 || depth < mp_.depth_filter_mindist_ ||
+              depth > mp_.depth_filter_maxdist_)
             continue;
-          }
-          else if (depth > mp_.depth_filter_maxdist_)
-          {
-            depth = mp_.max_ray_length_ + 0.1;
-          }
 
           // project to world frame
           pt_cur(0) = (u - mp_.cx_) * depth / mp_.fx_;
@@ -747,12 +801,6 @@ void GridMap::updateOccupancyCallback()
     }
     return;
   }
-  md_.last_occ_update_time_ = node_->now();
-  if (md_.flag_depth_odom_timeout_)
-  {
-    RCLCPP_INFO(node_->get_logger(), "synchronized odometry/depth recovered");
-    md_.flag_depth_odom_timeout_ = false;
-  }
 
   /* update occupancy */
   // ros::Time t1, t2, t3, t4;
@@ -760,6 +808,20 @@ void GridMap::updateOccupancyCallback()
 
   projectDepthImage();
   // t2 = ros::Time::now();
+  if (md_.proj_points_cnt == 0)
+  {
+    integrated_frames_ = 0;
+    md_.occ_need_update_ = md_.local_updated_ = false;
+    if ((node_->now() - md_.last_occ_update_time_).seconds() > mp_.odom_depth_timeout_)
+      md_.flag_depth_odom_timeout_ = true;
+    return;
+  }
+  md_.last_occ_update_time_ = node_->now();
+  if (md_.flag_depth_odom_timeout_)
+  {
+    RCLCPP_INFO(node_->get_logger(), "synchronized odometry/depth recovered");
+    md_.flag_depth_odom_timeout_ = false;
+  }
   raycastProcess();
   // t3 = ros::Time::now();
 
@@ -778,6 +840,12 @@ void GridMap::updateOccupancyCallback()
   //   ROS_WARN("Fusion: cur t = %lf, avg t = %lf, max t = %lf", (t2 - t1).toSec(),
   //            md_.fuse_time_ / md_.update_num_, md_.max_fuse_time_);
 
+  if (reset_pending_ && ++integrated_frames_ >= reset_depth_frames_)
+  {
+    reset_pending_ = false;
+    reset_ready_pub_->publish(reset_epoch_);
+    RCLCPP_INFO(node_->get_logger(), "VIO reset: fresh depth map ready");
+  }
   md_.occ_need_update_ = false;
   md_.local_updated_ = false;
 }
@@ -785,12 +853,21 @@ void GridMap::updateOccupancyCallback()
 void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstPtr &img,
                                 const geometry_msgs::msg::PoseStamped::ConstPtr &pose)
 {
+  if (img->encoding != "32FC1" && img->encoding != "16UC1" && img->encoding != "mono16") return;
+  if (!acceptDepthStamp(img->header, pose->header)) return;
   /* get depth image */
   cv_bridge::CvImagePtr cv_ptr;
   cv_ptr = cv_bridge::toCvCopy(img, img->encoding);
 
   if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1)
   {
+    for (int v = 0; v < cv_ptr->image.rows; ++v)
+      for (int u = 0; u < cv_ptr->image.cols; ++u)
+      {
+        float &d = cv_ptr->image.at<float>(v, u);
+        if (!std::isfinite(d) || d < mp_.depth_filter_mindist_ || d > mp_.depth_filter_maxdist_)
+          d = 0.0f;
+      }
     (cv_ptr->image).convertTo(cv_ptr->image, CV_16UC1, mp_.k_depth_scaling_factor_);
   }
   cv_ptr->image.copyTo(md_.depth_image_);
@@ -1088,6 +1165,8 @@ void GridMap::depthOdomCallback(const sensor_msgs::msg::Image::ConstPtr &img,
                          "waiting for valid depth CameraInfo");
     return;
   }
+  if (img->encoding != "32FC1" && img->encoding != "16UC1" && img->encoding != "mono16") return;
+  if (!acceptDepthStamp(img->header, odom->header)) return;
   /* get pose */
   Eigen::Quaterniond body_q = Eigen::Quaterniond(odom->pose.pose.orientation.w,
                                                  odom->pose.pose.orientation.x,
@@ -1112,6 +1191,13 @@ void GridMap::depthOdomCallback(const sensor_msgs::msg::Image::ConstPtr &img,
   cv_ptr = cv_bridge::toCvCopy(img, img->encoding);
   if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1)
   {
+    for (int v = 0; v < cv_ptr->image.rows; ++v)
+      for (int u = 0; u < cv_ptr->image.cols; ++u)
+      {
+        float &d = cv_ptr->image.at<float>(v, u);
+        if (!std::isfinite(d) || d < mp_.depth_filter_mindist_ || d > mp_.depth_filter_maxdist_)
+          d = 0.0f;
+      }
     (cv_ptr->image).convertTo(cv_ptr->image, CV_16UC1, mp_.k_depth_scaling_factor_);
   }
   cv_ptr->image.copyTo(md_.depth_image_);

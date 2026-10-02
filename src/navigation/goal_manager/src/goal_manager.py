@@ -5,7 +5,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Header
 
 
 class GoalManager(Node):
@@ -27,6 +27,8 @@ class GoalManager(Node):
         self.create_subscription(Bool, '/ego/depth_fresh', self.on_depth, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
         self.create_subscription(String, 'flight_state', self.on_flight, 10)
+        self.reset_stamp = -math.inf
+        self.create_subscription(Header, '/vio_reset_event', self.on_reset, latched)
         self.state('WAITING_FOR_GOAL')
 
     def now(self):
@@ -35,7 +37,17 @@ class GoalManager(Node):
     def state(self, text):
         self.state_pub.publish(String(data=text))
 
+    def on_reset(self, msg):
+        self.reset_stamp = msg.stamp.sec + msg.stamp.nanosec * 1e-9
+        self.pending_goal = None
+        self.last_depth_good = -math.inf
+        self.state('VIO_RESET_NEW_GOAL_REQUIRED')
+
     def on_goal(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if stamp <= self.reset_stamp:
+            self.state('REJECTED_PRE_RESET_GOAL')
+            return
         p = msg.pose.position
         if msg.header.frame_id != self.goal_frame or not all(math.isfinite(v) for v in (p.x, p.y)):
             self.state('REJECTED_FRAME_OR_POSITION')

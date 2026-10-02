@@ -61,6 +61,16 @@ namespace ego_planner
     planner_manager_->deliverTrajToOptimizer(); // store trajectories
     planner_manager_->setDroneIdtoOpt();
 
+    reset_sub_ = node_->create_subscription<std_msgs::msg::Header>("/vio_reset_event",
+        rclcpp::QoS(1).reliable().transient_local(),
+        [this](std_msgs::msg::Header::ConstSharedPtr msg) {
+          reset_stamp_ = rclcpp::Time(msg->stamp).seconds();
+          have_target_ = have_trigger_ = have_odom_ = false;
+          have_new_target_ = false;
+          planner_manager_->local_data_.duration_ = 0.0;
+          changeFSMExecState(INIT, "VIO_RESET");
+        });
+
     /* callback*/
     exec_timer_ = node_->create_wall_timer(std::chrono::milliseconds(10),
                                            std::bind(&EGOReplanFSM::execFSMCallback, this));
@@ -236,6 +246,8 @@ namespace ego_planner
 
   void EGOReplanFSM::waypointCallback(const std::shared_ptr<const geometry_msgs::msg::PoseStamped> &msg)
   {
+    if (!have_odom_ || !planner_manager_->grid_map_->resetReady() ||
+        rclcpp::Time(msg->header.stamp).seconds() <= reset_stamp_) return;
     if (msg->pose.position.z < -0.1)
       return;
 
@@ -253,6 +265,7 @@ namespace ego_planner
 
   void EGOReplanFSM::odometryCallback(const std::shared_ptr<const nav_msgs::msg::Odometry> &msg)
   {
+    if (rclcpp::Time(msg->header.stamp).seconds() <= reset_stamp_) return;
     odom_pos_(0) = msg->pose.pose.position.x;
     odom_pos_(1) = msg->pose.pose.position.y;
     odom_pos_(2) = msg->pose.pose.position.z;
@@ -722,7 +735,7 @@ namespace ego_planner
     LocalTrajData *info = &planner_manager_->local_data_;
     auto map = planner_manager_->grid_map_;
 
-    if (exec_state_ == WAIT_TARGET || info->start_time_.seconds() < 1e-5)
+    if (!have_target_ || !have_odom_ || exec_state_ == INIT || exec_state_ == WAIT_TARGET || info->start_time_.seconds() < 1e-5)
       return;
 
     /* ---------- check lost of depth ---------- */

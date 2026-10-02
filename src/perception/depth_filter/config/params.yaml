@@ -7,4 +7,5 @@ depth_filter:
     spatial_kernel: 3 # 小空洞邻域窗口（像素，正奇数；1 关闭空间处理）
     temporal_alpha: 0.65 # 时间滤波中新帧权重（0～1）；1 不混合历史帧
     temporal_max_delta: 0.4 # 允许混合历史深度的最大差值（m）；避免大跳变拖影
+    fill_holes: false # 默认保留无效像素，避免插值产生虚假清障射线；true 才允许小孔插值
     hole_min_neighbors: 5 # 填补空洞所需有效邻域像素数量

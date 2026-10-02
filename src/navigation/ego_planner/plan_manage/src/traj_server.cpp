@@ -3,6 +3,7 @@
 #include "traj_utils/msg/bspline.hpp"
 #include "quadrotor_msgs/msg/position_command.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/header.hpp"
 #include "visualization_msgs/msg/marker.hpp"
 #include <rclcpp/rclcpp.hpp>
 
@@ -15,6 +16,7 @@ double vel_gain[3] = {0, 0, 0};
 using ego_planner::UniformBspline;
 
 bool receive_traj_ = false;
+double reset_cutoff_ = -1.0;
 vector<UniformBspline> traj_;
 double traj_duration_;
 rclcpp::Time start_time_;
@@ -25,6 +27,7 @@ double last_yaw_;
 
 void bsplineCallback(traj_utils::msg::Bspline::ConstSharedPtr msg)
 {
+  if (rclcpp::Time(msg->start_time).seconds() <= reset_cutoff_) return;
   // parse pos traj
 
   Eigen::MatrixXd pos_pts(3, msg->pos_pts.size());
@@ -131,6 +134,18 @@ int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
   auto node = rclcpp::Node::make_shared("traj_server");
+
+  auto reset_ready = node->create_publisher<std_msgs::msg::Header>("/ego/trajectory_reset_ready",
+      rclcpp::QoS(1).reliable().transient_local());
+  auto reset_sub = node->create_subscription<std_msgs::msg::Header>("/vio_reset_event",
+      rclcpp::QoS(1).reliable().transient_local(),
+      [reset_ready](std_msgs::msg::Header::ConstSharedPtr event) {
+        // EGO B-spline start_time currently uses system time, not sensor time.
+        reset_cutoff_ = rclcpp::Clock().now().seconds();
+        receive_traj_ = false;
+        traj_.clear();
+        reset_ready->publish(*event);
+      });
 
   auto bspline_sub = node->create_subscription<traj_utils::msg::Bspline>(
       "planning/bspline",

@@ -17,6 +17,22 @@ using ego_planner::UniformBspline;
 
 bool receive_traj_ = false;
 double reset_cutoff_ = -1.0;
+rclcpp::Node::SharedPtr node_;
+rclcpp::Time heartbeat_at_(0, 0, RCL_STEADY_TIME);
+double map_stamp_ = -1.0, heartbeat_timeout_, map_timeout_;
+std::string planner_instance_;
+bool mapHealthy()
+{
+  double age = node_->now().seconds() - map_stamp_;
+  return !planner_instance_.empty() && map_stamp_ > 0.0 && age >= -0.02 && age <= map_timeout_ &&
+    (rclcpp::Clock(RCL_STEADY_TIME).now() - heartbeat_at_).seconds() <= heartbeat_timeout_;
+}
+void invalidateTrajectory()
+{
+  reset_cutoff_ = node_->now().seconds();
+  receive_traj_ = false;
+}
+
 vector<UniformBspline> traj_;
 double traj_duration_;
 rclcpp::Time start_time_;
@@ -27,7 +43,7 @@ double last_yaw_;
 
 void bsplineCallback(traj_utils::msg::Bspline::ConstSharedPtr msg)
 {
-  if (rclcpp::Time(msg->start_time).seconds() <= reset_cutoff_) return;
+  if (!mapHealthy() || rclcpp::Time(msg->start_time).seconds() <= reset_cutoff_) return;
   // parse pos traj
 
   Eigen::MatrixXd pos_pts(3, msg->pos_pts.size());
@@ -72,13 +88,17 @@ void bsplineCallback(traj_utils::msg::Bspline::ConstSharedPtr msg)
 
 void cmdCallback()
 {
+  if (!mapHealthy())
+  {
+    invalidateTrajectory();
+    return;
+  }
   /* no publishing before receive traj_ */
   if (!receive_traj_)
     return;
 
   // 统一时间源
-  rclcpp::Clock clock(RCL_ROS_TIME);
-  rclcpp::Time time_now = clock.now();
+  rclcpp::Time time_now = node_->now();
   double t_cur = (time_now - start_time_).seconds();
 
   Eigen::Vector3d pos(Eigen::Vector3d::Zero()), vel(Eigen::Vector3d::Zero()), acc(Eigen::Vector3d::Zero());
@@ -103,7 +123,7 @@ void cmdCallback()
   }
   else
   {
-    cout << "[Traj server]: invalid time." << endl;
+    return; // Do not publish a zero-position command before trajectory start.
   }
   cmd.header.stamp = time_now;
   cmd.header.frame_id = "odom";
@@ -134,15 +154,24 @@ int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
   auto node = rclcpp::Node::make_shared("traj_server");
+  node_ = node;
+  heartbeat_timeout_ = node->declare_parameter("planner_heartbeat_timeout", 0.75);
+  map_timeout_ = node->declare_parameter("map_timeout", 0.75);
+  if (!(heartbeat_timeout_ > 0) || !(map_timeout_ > 0)) throw std::invalid_argument("invalid watchdog timeout");
+  auto heartbeat_sub = node->create_subscription<std_msgs::msg::Header>("/ego/map_heartbeat", 1,
+      [](std_msgs::msg::Header::ConstSharedPtr msg) {
+        if (planner_instance_ != msg->frame_id) invalidateTrajectory();
+        planner_instance_ = msg->frame_id;
+        heartbeat_at_ = rclcpp::Clock(RCL_STEADY_TIME).now();
+        map_stamp_ = rclcpp::Time(msg->stamp).seconds();
+      });
 
   auto reset_ready = node->create_publisher<std_msgs::msg::Header>("/ego/trajectory_reset_ready",
       rclcpp::QoS(1).reliable().transient_local());
   auto reset_sub = node->create_subscription<std_msgs::msg::Header>("/vio_reset_event",
       rclcpp::QoS(1).reliable().transient_local(),
       [reset_ready](std_msgs::msg::Header::ConstSharedPtr event) {
-        // EGO B-spline start_time currently uses system time, not sensor time.
-        reset_cutoff_ = rclcpp::Clock().now().seconds();
-        receive_traj_ = false;
+        invalidateTrajectory();
         traj_.clear();
         reset_ready->publish(*event);
       });

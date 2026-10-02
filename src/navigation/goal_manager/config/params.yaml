@@ -4,3 +4,5 @@ goal_manager:
     depth_grace: 0.8 # 距最近一次深度健康为 true 的容忍时间（s）
     goal_frame: odom # 目标坐标系；当前启动入口固定为 odom
     goal_altitude: 2.0 # RViz 二维目标采用的飞行高度（odom 中的 m）
+    map_timeout: 0.75 # 已融合深度最大年龄（ROS 秒），地图过期时目标排队
+    planner_heartbeat_timeout: 0.75 # 规划器心跳超时（真实秒），恢复后只重发待处理目标

@@ -163,7 +163,7 @@ PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
 
 不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。
 
-`ego_planner_node` 与其他算法节点进程隔离；异常退出后由 launch 在 0.1 秒后自动拉起。只有 `/ego/position_cmd` 停止发布才会触发控制桥的命令超时；单独重启 EGO 时，仍存活的 `traj_server` 可能继续发布旧轨迹，因此 respawn 本身不保证立即悬停。重启后的规划器会重新接收决策节点或 RViz 发布的新目标。到点距离小于 0.2 m 时直接进入等待目标状态，不再无限重复生成短轨迹。
+`ego_planner_node` 与其他算法节点进程隔离；异常退出后由 launch 在 0.1 秒后自动拉起。`/ego/map_heartbeat` 同时提供规划器实例编号和最近成功融合的深度时间戳；轨迹服务器与控制桥独立监控。心跳断流超过 0.75 个真实秒、地图超过 0.75 个 ROS 秒未更新，或检测到实例更换，都会停用旧轨迹，控制桥进入 HOLD。地图与定位恢复后，保留的目标从当前位置重新规划；VIO 坐标重置则仍丢弃旧目标。0.1 秒是重启等待，不代表检测、初始化和建图总耗时。到点距离小于 0.2 m 时直接等待目标，不再无限生成短轨迹。
 
 ### 3. 起飞前检查
 
@@ -179,7 +179,7 @@ ros2 topic hz /ego/occupancy_inflate
 ros2 run tf2_ros tf2_echo odom base_link
 ```
 
-必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中低置信度会显示 `DEGRADED`，输入仍新鲜时控制器限速继续；里程计或深度陈旧时改为位置悬停。持续断流或真实位姿跳变会显示 `INVALID` 并进入 `HOLD`；VIO 连续稳定 3 秒，且 PX4 仍已解锁、处于 OFFBOARD、位置有效、没有 failsafe 后，未发生坐标重置时，系统自动回到原飞行阶段，并从恢复后的新位置重新规划保存的目标；发生 VIO 重置时会清图、停旧轨迹、丢弃旧目标，等待地图重建后恢复，必须重新打点。当前过滤后的软件双目实测约 2.5–3 Hz、最大调度间隔接近 1 秒，因此控制层深度心跳超时为 1.2 秒，EGO 只在同步深度持续中断 1.5 秒后进入紧急停车；同步恢复后清除超时并从当前位置重新规划。若平均频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
+必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中低置信度会显示 `DEGRADED`，输入仍新鲜时控制器限速继续；里程计或深度陈旧时改为位置悬停。持续断流或真实位姿跳变会显示 `INVALID` 并进入 `HOLD`；VIO 连续稳定 3 秒，且 PX4 仍已解锁、处于 OFFBOARD、位置有效、没有 failsafe 后，未发生坐标重置时，系统自动回到原飞行阶段，并从恢复后的新位置重新规划保存的目标；发生 VIO 重置时会清图、停旧轨迹、丢弃旧目标，等待地图重建后恢复，必须重新打点。当前过滤后的软件双目实测约 2.5–3 Hz、最大调度间隔接近 1 秒，因此控制层深度心跳超时为 1.2 秒，新增地图执行检查在最后成功融合的深度超过 0.75 个 ROS 秒时先停止执行，EGO 内部原有 1.5 秒深度超时仍保留；同步恢复后清除超时并从当前位置重新规划。若平均频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
 
 ### 4. 起飞、打点和降落
 
@@ -341,4 +341,19 @@ ros2 topic echo /navigation_state
 ```bash
 ROS_DOMAIN_ID=83 PYTHONNOUSERSITE=1 python3 -m unittest discover -s tests -v
 ROS_DOMAIN_ID=83 PYTHONNOUSERSITE=1 python3 tests/integration_depth_reset.py
+```
+
+
+### 轨迹时钟与运行恢复
+
+- 轨迹生成、采样和重规划使用节点 ROS 时钟：仿真随 `/clock` 推进，暂停时轨迹不会继续走。计算耗时、规划器心跳失联检测使用单调时钟，避免暂停掩盖进程卡死。
+- `/ego/map_heartbeat` 的 `frame_id` 是规划器实例标识；`stamp` 是最后成功融合的深度源时间。心跳仍在发但 stamp 不更新，表示进程存活但没有有效新地图。初始化/重置重建期间 stamp 为零。全无效深度、过期帧和不同步帧不会刷新地图时间。
+- `DEGRADED` 下不能执行轨迹时只在进入悬停时记录位置，后续保持该位置，避免目标跟随漂移。
+- 数据未准备好时目标排队；VIO、深度或地图恢复会重试尚未发送的目标，正常重复心跳不会反复下发同一目标。HOLD 恢复和规划器实例更换时允许重规划保留的目标。
+- `planner_heartbeat_timeout` 和 `map_timeout` 分别位于 `flight_bridge/config/params.yaml`、`goal_manager/config/params.yaml` 及 `bringup/params/ego_params.yaml` 的 `traj_server` 段，默认均为 0.75 s；应保持三处一致。地图超时按 ROS 时间计算，不能用消息到达频率替代。
+
+额外时钟回归测试：
+
+```bash
+ROS_DOMAIN_ID=84 PYTHONNOUSERSITE=1 python3 tests/integration_sim_clock.py
 ```

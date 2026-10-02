@@ -6,6 +6,8 @@
 void GridMap::initMap(rclcpp::Node::SharedPtr node)
 {
   node_ = node;
+  planner_instance_ = std::to_string(rclcpp::Clock(RCL_STEADY_TIME).now().nanoseconds());
+  map_health_pub_ = node_->create_publisher<std_msgs::msg::Header>("/ego/map_heartbeat", 1);
   depth_max_age_ = node_->declare_parameter("grid_map/depth_max_age", 0.5);
   depth_sync_tolerance_ = node_->declare_parameter("grid_map/depth_odom_sync_tolerance", 0.05);
   future_tolerance_ = node_->declare_parameter("grid_map/future_tolerance", 0.02);
@@ -259,6 +261,7 @@ void GridMap::resetForVio(const std_msgs::msg::Header &event)
   reset_stamp_ = rclcpp::Time(event.stamp).seconds();
   last_depth_stamp_ = reset_stamp_;
   reset_pending_ = true;
+  last_fused_stamp_ = -1.0;
   integrated_frames_ = 0;
   std::fill(md_.occupancy_buffer_.begin(), md_.occupancy_buffer_.end(), mp_.clamp_min_log_ - mp_.unknown_flag_);
   std::fill(md_.occupancy_buffer_inflate_.begin(), md_.occupancy_buffer_inflate_.end(), 0);
@@ -778,6 +781,11 @@ void GridMap::clearAndInflateLocalMap()
 
 void GridMap::visCallback()
 {
+  std_msgs::msg::Header health;
+  health.frame_id = planner_instance_;
+  if (!reset_pending_ && last_fused_stamp_ >= 0.0)
+    health.stamp = rclcpp::Time(static_cast<int64_t>(last_fused_stamp_ * 1e9), RCL_ROS_TIME);
+  map_health_pub_->publish(health);
   publishMapInflate(true);
   publishMap();
 }
@@ -823,6 +831,7 @@ void GridMap::updateOccupancyCallback()
     md_.flag_depth_odom_timeout_ = false;
   }
   raycastProcess();
+  last_fused_stamp_ = last_depth_stamp_;
   // t3 = ros::Time::now();
 
   if (md_.local_updated_)

@@ -10,7 +10,7 @@ import time
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image, PointCloud2
 from sensor_msgs_py.point_cloud2 import read_points
@@ -45,6 +45,7 @@ def spin(seconds):
 try:
     run('ego_planner', 'ego_planner_node', [
         '--params-file', str(ROOT / 'src/bringup/params/ego_params.yaml'),
+        '-r', 'odom_world:=/grid_map/odom',
         '-p', 'grid_map/cam2body:=[0.0,0.0,1.0,0.0,-1.0,0.0,0.0,0.0,0.0,-1.0,0.0,0.0,0.0,0.0,0.0,1.0]',
         '-p', 'grid_map/require_camera_info:=false', '-p', 'grid_map/fx:=20.0',
         '-p', 'grid_map/fy:=20.0', '-p', 'grid_map/cx:=8.0', '-p', 'grid_map/cy:=8.0'])
@@ -96,12 +97,29 @@ try:
     assert ready[-1] == reset.frame_id and cloud[0].width > 0
     print('PASS: reset clears map; only fresh synchronized valid frames rebuild it', flush=True)
 
+    planned = []
+    subscriptions.append(n.create_subscription(Bspline, '/planning/bspline', planned.append, 10))
+    goal_pub = n.create_publisher(PoseStamped, '/ego/goal', 10)
+    frames(2., 3)
+    goal = PoseStamped()
+    goal.header.stamp = n.get_clock().now().to_msg()
+    goal.header.frame_id = 'odom'
+    goal.pose.position.x, goal.pose.position.z = .5, 1.
+    goal_pub.publish(goal)
+    frames(2., 5)
+    assert planned, 'planner failed to produce a trajectory using node clock'
+    print('PASS: EGO generates a trajectory using node clock', flush=True)
+    reset_pub.publish(Header(stamp=n.get_clock().now().to_msg(), frame_id='after-planning'))
+    spin(.2)
+    frames(2., 5)
+
     run('ego_planner', 'traj_server', ['-r', 'position_cmd:=/test_position_cmd'])
     bspline_pub = n.create_publisher(Bspline, '/planning/bspline', 10)
     commands = []
     subscriptions.append(n.create_subscription(PositionCommand, '/test_position_cmd',
                                               lambda m: commands.append(m), 10))
     spin(1.5)
+    frames(2., 5)
     trajectory = Bspline()
     trajectory.order = 3
     trajectory.traj_id = 1
@@ -117,15 +135,27 @@ try:
     bspline_pub.publish(trajectory)  # A queued old spline must not reactivate.
     spin(.3)
     assert len(commands) == after_reset, 'old trajectory still produces commands after reset'
+    frames(2., 8)
     trajectory.start_time = n.get_clock().now().to_msg()
     trajectory.traj_id = 2
     bspline_pub.publish(trajectory)
     spin(.3)
     assert len(commands) > after_reset
     print('PASS: reset stops old PositionCommand and rejects replayed spline; new spline works', flush=True)
+    frames(2., 4)
+    processes[0].send_signal(signal.SIGSTOP)
+    spin(1.0)
+    stopped_count = len(commands)
+    spin(.2)
+    assert len(commands) == stopped_count, 'planner freeze did not stop old commands'
+    processes[0].send_signal(signal.SIGCONT)
+    frames(2., 6)
+    assert len(commands) == stopped_count, 'old trajectory resumed after watchdog recovery'
+    print('PASS: frozen planner stops commands; recovery cannot revive old spline', flush=True)
 finally:
     for p in processes:
         if p.poll() is None:
+            p.send_signal(signal.SIGCONT)
             p.send_signal(signal.SIGINT)
     for p in processes:
         try:

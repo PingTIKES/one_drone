@@ -32,3 +32,5 @@ flight_bridge:
     depth_grace: 1.5 # 距最近一次深度健康为 true 的容忍时间（s）
     takeoff_tolerance: 0.2 # 起飞位置允许误差（m）
     takeoff_stable_time: 1.0 # 进入巡航前需持续满足起飞误差的时间（s）
+    planner_heartbeat_timeout: 0.75 # 规划器心跳最大真实时间间隔（s），失联进入 HOLD
+    map_timeout: 0.75 # 最近成功融合的深度源时间戳最大年龄（s）

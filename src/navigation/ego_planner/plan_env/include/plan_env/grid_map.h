@@ -213,6 +213,9 @@ private:
   bool reset_pending_ = false;
   bool acceptDepthStamp(const std_msgs::msg::Header &image, const std_msgs::msg::Header &pose);
   void resetForVio(const std_msgs::msg::Header &event);
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr map_health_pub_;
+  std::string planner_instance_;
+  double last_fused_stamp_ = -1.0;
   MappingParameters mp_;
   MappingData md_;
 

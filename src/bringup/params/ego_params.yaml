@@ -80,3 +80,8 @@ ego_planner_node:
     prediction/lambda: 1.0 # 物体预测正则化权重
     prediction/predict_rate: 1.0 # 物体预测频率（Hz）
     fsm/goal_tolerance: 0.2 # 规划器到点容差（m）；不得小于优化器短轨迹下限 0.2
+
+traj_server:
+  ros__parameters:
+    planner_heartbeat_timeout: 0.75 # 规划器失联超时（真实秒），丢弃旧轨迹
+    map_timeout: 0.75 # 已融合深度最大年龄（ROS 秒），过期停止轨迹输出

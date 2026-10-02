@@ -12,6 +12,7 @@ namespace ego_planner
 
   void EGOPlannerManager::initPlanModules(rclcpp::Node::SharedPtr &node, PlanningVisualization::Ptr vis)
   {
+    node_ = node;
     node->declare_parameter("manager/max_vel", -1.0);
     node->declare_parameter("manager/max_acc", -1.0);
     node->declare_parameter("manager/max_jerk", -1.0);
@@ -61,7 +62,7 @@ namespace ego_planner
 
     bspline_optimizer_->setLocalTargetPt(local_target_pt);
 
-    rclcpp::Time t_start = rclcpp::Clock().now();
+    rclcpp::Time t_start = rclcpp::Clock(RCL_STEADY_TIME).now();
     rclcpp::Duration t_init(0, 0), t_opt(0, 0), t_refine(0, 0);
 
     /*** STEP 1: INIT
@@ -141,7 +142,7 @@ namespace ego_planner
       {
 
         double t;
-        double t_cur = (rclcpp::Clock().now() - local_data_.start_time_).seconds();
+        double t_cur = (node_->now() - local_data_.start_time_).seconds();
 
         vector<double> pseudo_arc_length;
         vector<Eigen::Vector3d> segment_point;
@@ -223,7 +224,7 @@ namespace ego_planner
     vector<std::pair<int, int>> segments;
     segments = bspline_optimizer_->initControlPoints(ctrl_pts, true);
     // 计算时间差并更新时间
-    auto now = rclcpp::Clock().now();
+    auto now = rclcpp::Clock(RCL_STEADY_TIME).now();
     t_init = now - t_start;
     t_start = now;
 
@@ -267,14 +268,14 @@ namespace ego_planner
         }
       }
 
-      t_opt = rclcpp::Clock().now() - t_start;
+      t_opt = rclcpp::Clock(RCL_STEADY_TIME).now() - t_start;
 
       visualization_->displayMultiInitPathList(vis_trajs, 0.2);
     }
     else
     {
       flag_step_1_success = bspline_optimizer_->BsplineOptimizeTrajRebound(ctrl_pts, ts);
-      t_opt = rclcpp::Clock().now() - t_start;
+      t_opt = rclcpp::Clock(RCL_STEADY_TIME).now() - t_start;
       // static int vis_id = 0;
       visualization_->displayInitPathList(point_set, 0.2, 0);
     }
@@ -287,7 +288,7 @@ namespace ego_planner
       return false;
     }
 
-    t_start = rclcpp::Clock().now();
+    t_start = rclcpp::Clock(RCL_STEADY_TIME).now();
 
     UniformBspline pos = UniformBspline(ctrl_pts, 3, ts);
     pos.setPhysicalLimits(pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
@@ -327,10 +328,10 @@ namespace ego_planner
     }
 
     // t_refine = ros::Time::now() - t_start;
-    t_refine = rclcpp::Clock().now() - t_start;
+    t_refine = rclcpp::Clock(RCL_STEADY_TIME).now() - t_start;
 
     // save planned results
-    updateTrajInfo(pos, rclcpp::Clock().now());
+    updateTrajInfo(pos, node_->now());
 
     static double sum_time = 0;
     static int count_success = 0;
@@ -355,7 +356,7 @@ namespace ego_planner
       control_points.col(i) = stop_pos;
     }
 
-    updateTrajInfo(UniformBspline(control_points, 3, 1.0), rclcpp::Clock().now());
+    updateTrajInfo(UniformBspline(control_points, 3, 1.0), node_->now());
 
     return true;
   }
@@ -453,7 +454,7 @@ namespace ego_planner
     else
       return false;
 
-    auto time_now = rclcpp::Clock().now();
+    auto time_now = node_->now();
 
     global_data_.setGlobalTraj(gl_traj, time_now);
 
@@ -520,7 +521,7 @@ namespace ego_planner
     else
       return false;
 
-    auto time_now = rclcpp::Clock().now();
+    auto time_now = node_->now();
 
     global_data_.setGlobalTraj(gl_traj, time_now);
 

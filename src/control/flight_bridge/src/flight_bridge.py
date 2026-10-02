@@ -45,7 +45,8 @@ class FlightBridge(Node):
                         command_timeout=.2, pose_timeout=.5, vio_timeout=.5,
                         vio_stable_time=1., depth_heartbeat_timeout=.5, depth_grace=.8,
                         takeoff_tolerance=.2, takeoff_stable_time=1.,
-                        auto_recover_from_hold=True, status_timeout=1.5)
+                        auto_recover_from_hold=True, status_timeout=1.5,
+                        planner_heartbeat_timeout=.75, map_timeout=.75)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         self.p = lambda key: self.get_parameter(key).value
@@ -88,6 +89,10 @@ class FlightBridge(Node):
         self.takeoff_reached_since = None
         self.prestream_count = 0
         self.last_reset = None
+        self.planner_instance = None
+        self.map_stamp = -math.inf
+        self.planner_at = -math.inf
+        self.create_subscription(Header, '/ego/map_heartbeat', self.on_map_heartbeat, 1)
         self.reset_epoch = None
         self.map_epoch = None
         self.traj_epoch = None
@@ -204,7 +209,7 @@ class FlightBridge(Node):
         self.vio_ok = False
         self.vio_state = "INVALID"
         self.vio_at = -math.inf
-        self.reset_command_cutoff = time.time()
+        self.reset_command_cutoff = self.now()
         self.cmd = None
         self.cmd_at = -math.inf
         self.vio_valid_since = None
@@ -212,6 +217,22 @@ class FlightBridge(Node):
             self.enter_hold('VIO reset: rebuilding map; old goal discarded', auto_recover=True)
         if self.state == 'HOLD' and self.hold_auto_recover:
             self.hold_resume_state = 'CRUISE'
+
+    def map_valid(self):
+        return (self.map_stamp > 0 and -0.02 <= self.now() - self.map_stamp <= float(self.p('map_timeout')) and
+                time.monotonic() - self.planner_at <= float(self.p('planner_heartbeat_timeout')))
+
+    def on_map_heartbeat(self, msg):
+        changed = self.planner_instance is not None and self.planner_instance != msg.frame_id
+        self.planner_instance = msg.frame_id
+        self.map_stamp = msg.stamp.sec + msg.stamp.nanosec * 1e-9
+        self.planner_at = time.monotonic()
+        if changed:
+            self.cmd = None
+            self.cmd_at = -math.inf
+            self.reset_command_cutoff = self.now()
+            if self.state == 'CRUISE':
+                self.enter_hold('Planner restarted; waiting for rebuilt map', auto_recover=True)
 
     def on_map_ready(self, msg):
         self.map_epoch = msg.frame_id
@@ -225,7 +246,7 @@ class FlightBridge(Node):
 
     def on_position_command(self, msg):
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        if not self.reset_map_ready() or stamp <= self.reset_command_cutoff:
+        if not self.reset_map_ready() or not self.map_valid() or stamp <= self.reset_command_cutoff:
             return
         values = (msg.position.x, msg.position.y, msg.position.z,
                   msg.velocity.x, msg.velocity.y, msg.velocity.z)
@@ -267,7 +288,7 @@ class FlightBridge(Node):
             missing.append('fresh PX4 local position')
         if not self.vio_stable():
             missing.append('stable VALID OpenVINS')
-        if not self.reset_map_ready():
+        if not self.reset_map_ready() or not self.map_valid():
             missing.append('rebuilt map after VIO reset')
         response.success = not missing
         response.message = ('Starting PX4 Offboard takeoff' if response.success else
@@ -281,7 +302,7 @@ class FlightBridge(Node):
         return response
 
     def resume(self, _request, response):
-        response.success = (self.state == 'HOLD' and self.reset_map_ready() and self.depth_valid() and self.pose_valid() and self.vio_stable() and
+        response.success = (self.state == 'HOLD' and self.reset_map_ready() and self.map_valid() and self.depth_valid() and self.pose_valid() and self.vio_stable() and
                             self.status is not None and
                             self.status.nav_state == NAV_OFFBOARD)
         response.message = ('Flight control resumed; submit a new goal after VIO reset' if response.success else
@@ -346,7 +367,7 @@ class FlightBridge(Node):
                 -s*vector[0] + c*vector[1], vector[2])
 
     def send_ego_command(self, degraded=False):
-        if (not self.reset_map_ready() or
+        if (not self.reset_map_ready() or not self.map_valid() or
                 not 0 <= self.now() - self.cmd_at <= float(self.p("command_timeout")) or
                 self.cmd is None or self.ego_odom is None or
                 not 0 <= self.now() - self.ego_odom_at <= float(self.p('pose_timeout'))):
@@ -425,7 +446,7 @@ class FlightBridge(Node):
 
     def can_auto_recover(self):
         return (self.state == 'HOLD' and self.hold_auto_recover and
-                self.reset_map_ready() and self.depth_valid() and
+                self.reset_map_ready() and self.map_valid() and self.depth_valid() and
                 self.hold_resume_state in ('TAKEOFF', 'CRUISE') and
                 self.pose_valid() and self.vio_stable() and
                 self.status is not None and
@@ -450,6 +471,10 @@ class FlightBridge(Node):
                                                     (not self.vio_valid() and not self.vio_degraded())):
             self.enter_hold('Position or OpenVINS invalid; waiting for stable automatic recovery',
                             auto_recover=True)
+        if self.state == 'CRUISE' and not self.map_valid():
+            self.cmd = None
+            self.cmd_at = -math.inf
+            self.enter_hold('Planner heartbeat or fused map stale; waiting for recovery', auto_recover=True)
         if self.can_auto_recover():
             self.finish_auto_recovery()
         if self.state == 'PRESTREAM':
@@ -491,8 +516,9 @@ class FlightBridge(Node):
                 # stale, fall back to a PX4 local-position hold.
                 if (not self.depth_valid() or
                         not self.send_ego_command(degraded=True)):
-                    p = self.position
-                    self.hold_target = (p.x, p.y, p.z)
+                    if self.yaw_mode != 'VIO_DEGRADED_HOLD' or self.hold_target is None:
+                        p = self.position
+                        self.hold_target = (p.x, p.y, p.z)
                     self.yaw_mode = 'VIO_DEGRADED_HOLD'
                     self.translation_scale = 0.0
                     self.send_position(self.hold_target)

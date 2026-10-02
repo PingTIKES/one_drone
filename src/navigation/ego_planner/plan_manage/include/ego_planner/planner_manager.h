@@ -55,6 +55,7 @@ namespace ego_planner
     SwarmTrajData swarm_trajs_buf_;
 
   private:
+    rclcpp::Node::SharedPtr node_;
     /* main planning algorithms & modules */
     PlanningVisualization::Ptr visualization_;
 

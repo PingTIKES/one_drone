@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import numpy as np
 import rclpy
 from sensor_msgs.msg import Image
-from std_msgs.msg import Header, String
+from std_msgs.msg import Header, String, Bool
 from geometry_msgs.msg import PoseStamped
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +106,62 @@ class ResetPipelineTest(unittest.TestCase):
             self.assertIn('POSITION_DISCONTINUITY', epochs[0])
             self.assertIn('RECOVERED_WITH_RESET', epochs[1])
             self.assertNotEqual(epochs[0], epochs[1])
+        finally:
+            n.destroy_node()
+
+    def test_queued_goal_retries_once_after_recovery(self):
+        n = Goal()
+        try:
+            n.goal_pub = Mock()
+            n.now = lambda: 100.
+            n.flight_state = 'CRUISE'
+            n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
+            n.on_depth(Bool(data=True))
+            goal = PoseStamped()
+            goal.header.frame_id = 'odom'
+            n.on_goal(goal)
+            n.goal_pub.publish.assert_not_called()
+            n.on_vio(String(data='VALID'))
+            n.on_depth(Bool(data=True))
+            n.on_vio(String(data='VALID'))
+            self.assertEqual(n.goal_pub.publish.call_count, 1)
+        finally:
+            n.destroy_node()
+
+    def test_degraded_hold_does_not_chase_position(self):
+        from px4_msgs.msg import VehicleLocalPosition
+        n = FlightBridge()
+        try:
+            n.state = 'CRUISE'
+            n.pose_valid = lambda: True
+            n.vio_valid = lambda: False
+            n.vio_degraded = lambda: True
+            n.map_valid = lambda: True
+            n.can_auto_recover = lambda: False
+            n.depth_valid = lambda: False
+            n.send_position = Mock()
+            n.position = VehicleLocalPosition(x=0., y=0., z=-2.)
+            n.tick()
+            n.position.x = 1.
+            n.tick()
+            self.assertEqual(n.send_position.call_args_list[0].args,
+                             n.send_position.call_args_list[1].args)
+        finally:
+            n.destroy_node()
+
+    def test_map_freshness_is_based_on_fused_stamp(self):
+        n = FlightBridge()
+        try:
+            n.now = lambda: 100.
+            n.on_map_heartbeat(Header(stamp=stamp(99.9), frame_id='planner1'))
+            self.assertTrue(n.map_valid())
+            # Fresh heartbeat with old fusion timestamp must still be invalid.
+            n.now = lambda: 102.
+            n.on_map_heartbeat(Header(stamp=stamp(99.9), frame_id='planner1'))
+            self.assertFalse(n.map_valid())
+            n.on_map_heartbeat(Header(stamp=stamp(102.), frame_id='planner1'))
+            n.planner_at -= 2.
+            self.assertFalse(n.map_valid())
         finally:
             n.destroy_node()
 

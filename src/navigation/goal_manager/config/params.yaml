@@ -1,5 +1,6 @@
+# 修改后重启对应节点生效。null 表示由启动入口/标定生成；不要用猜测值替代外参。
 goal_manager:
   ros__parameters:
-    depth_grace: 0.8
-    goal_frame: odom
-    goal_altitude: 2.0
+    depth_grace: 0.8 # 距最近一次深度健康为 true 的容忍时间（s）
+    goal_frame: odom # 目标坐标系；当前启动入口固定为 odom
+    goal_altitude: 2.0 # RViz 二维目标采用的飞行高度（odom 中的 m）

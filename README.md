@@ -163,7 +163,7 @@ PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
 
 不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。
 
-`ego_planner_node` 与其他算法节点进程隔离；异常退出后由 launch 在 0.1 秒后自动拉起。规划输出中断期间 `flight_bridge` 依靠命令超时切换到 PX4 位置保持。重启后的规划器会重新接收决策节点或 RViz 发布的新目标。到点距离小于 0.2 m 时直接进入等待目标状态，不再无限重复生成短轨迹。
+`ego_planner_node` 与其他算法节点进程隔离；异常退出后由 launch 在 0.1 秒后自动拉起。只有 `/ego/position_cmd` 停止发布才会触发控制桥的命令超时；单独重启 EGO 时，仍存活的 `traj_server` 可能继续发布旧轨迹，因此 respawn 本身不保证立即悬停。重启后的规划器会重新接收决策节点或 RViz 发布的新目标。到点距离小于 0.2 m 时直接进入等待目标状态，不再无限重复生成短轨迹。
 
 ### 3. 起飞前检查
 
@@ -295,3 +295,11 @@ ros2 bag record -o flight_bags/vio_fault_$(date +%Y%m%d_%H%M%S) \
 - 只有前视深度。目标落在后方时会先以低速转入视场，无法感知的后方区域不会被假定为安全。
 - 无独立定位备份时，OpenVINS 完全失效不能保证继续自主飞行。
 - 仿真通过只证明软件链与当前模型兼容，不能替代真机标定、台架测试和受控场地试飞。
+
+## 参数修改与生效
+
+常用 ROS 参数位于各功能包 `config/params.yaml`，EGO 参数在 `src/bringup/params/ego_params.yaml`，进程重启设置在 `src/bringup/params/launch.yaml`。这些文件逐项提供中文含义、单位和覆盖来源。修改后执行 `colcon build --symlink-install` 并重启启动入口；多数参数在节点初始化时读取，不能假设 `ros2 param set` 后立即生效。
+
+新增可调项包括：VIO 质量检测图像缩小比例、角点数量/质量/间距/窗口；软件双目的视差搜索范围、匹配窗口、唯一性及斑块过滤、OpenCV 线程数和同步队列；规划器到点容差；进程 respawn 延迟。角点统计属于外围质量检测，与 OpenVINS 的 `num_pts` 不同。
+
+OpenVINS 前端与估计器参数在 `src/localization/vio_bridge/config/openvins_sim/estimator_config.yaml`（真机为自己的 `calibration_dir/estimator_config.yaml`）；启动入口不再强制覆盖日志级别、计时记录、线程数。标定几何和飞控身份仍以标定文件及启动参数为准，相关 YAML 项注明了覆盖来源。`sync_slop` 和 `frame_decimation` 留为 null 时自动选择仿真/真机默认值，填数值即可覆盖。

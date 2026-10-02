@@ -1,7 +1,15 @@
+# 修改后重启对应节点生效。null 表示由启动入口/标定生成；不要用猜测值替代外参。
 software_stereo:
   ros__parameters:
-    config: null
-    t_body_imu: null
-    sync_slop: null
-    rate: 5.0
-    texture_std_min: 1.0
+    config: null # 双目标定文件；由启动入口生成
+    t_body_imu: null # body←IMU 的 4×4 外参；由启动入口根据标定生成
+    sync_slop: null # 左右目同步容差（s）；null 自动选仿真 0.015、真机 0.003
+    rate: 5.0 # 软件双目最大处理频率（Hz），实际频率受算力限制
+    texture_std_min: 1.0 # 水平纹理标准差下限（灰度值）；过滤无纹理伪视差，0 关闭
+    disparities: 96 # SGBM 视差搜索范围（像素，正数且为 16 的倍数）
+    block_size: 5 # SGBM 匹配窗口（像素，正奇数）；越大细节越少
+    uniqueness_ratio: 15 # SGBM 唯一性阈值（百分比）；越大匹配越严格
+    speckle_window_size: 80 # SGBM 孤立斑块过滤窗口（像素数）；0 关闭
+    speckle_range: 2 # 斑块内允许的视差变化（像素）
+    opencv_threads: 2 # 软件双目 OpenCV 线程数；RK3566 避免过多线程抢占 VIO
+    sync_queue_size: 5 # 左右目同步缓存帧数；增大可能增加延迟

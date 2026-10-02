@@ -5,7 +5,8 @@ from vio_bridge.calibration import validate_config, transform
 
 
 class StereoMatcher:
-    def __init__(self, config, t_body_imu, disparities=96, texture_std_min=1.0):
+    def __init__(self, config, t_body_imu, disparities=96, texture_std_min=1.0, block_size=5,
+                 uniqueness_ratio=15, speckle_window_size=80, speckle_range=2):
         _, cams, _ = validate_config(config)
         t0,t1 = (transform(cams[c]['T_imu_cam']) for c in ('cam0','cam1'))
         # Choose left camera geometrically, not by an assumed device stream name.
@@ -29,10 +30,13 @@ class StereoMatcher:
         self.maps = [cv2.initUndistortRectifyMap(k,d,r,p,self.size,cv2.CV_32FC1) for k,d,r,p in ((kl,dl,r1,p1),(kr,dr,r2,p2))]
         if disparities<=0 or disparities%16: raise ValueError('disparities must be positive multiple of 16')
         if texture_std_min < 0: raise ValueError('texture_std_min must be nonnegative')
+        if block_size < 1 or block_size % 2 == 0:
+            raise ValueError("block_size must be positive and odd")
         self.texture_std_min = float(texture_std_min)
-        self.matcher = cv2.StereoSGBM_create(minDisparity=0,numDisparities=disparities,blockSize=5,
-                  P1=8*25,P2=32*25,disp12MaxDiff=1,uniquenessRatio=15,speckleWindowSize=80,
-                  speckleRange=2,mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY)
+        self.matcher = cv2.StereoSGBM_create(minDisparity=0,numDisparities=disparities,blockSize=block_size,
+                  P1=8*block_size**2,P2=32*block_size**2,disp12MaxDiff=1,
+                  uniquenessRatio=uniqueness_ratio,speckleWindowSize=speckle_window_size,
+                  speckleRange=speckle_range,mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY)
 
     def depth(self, image0,image1):
         images = {'cam0':image0,'cam1':image1}

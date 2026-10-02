@@ -1,48 +1,42 @@
-# null: keep launch-time values derived from the vehicle and camera/IMU calibration.
+# 修改后重启对应节点生效。null 表示由启动入口/标定生成；不要用猜测值替代外参。
 openvins:
   ros__parameters:
-    config_path: null
-    publish_global_to_imu_tf: false
-    publish_calibration_tf: false
+    config_path: null # OpenVINS 配置路径；null 表示使用 launch 生成的标定配置
+    publish_global_to_imu_tf: false # OpenVINS 自身 TF 开关；启动入口固定关闭，由 vio_bridge 统一发布
+    publish_calibration_tf: false # OpenVINS 标定 TF 开关；启动入口固定关闭以避免重复 TF
 vio_bridge:
   ros__parameters:
-    uav_id: null
-    px4_ns: null
-    t_body_imu: null
-    # Freshness has two levels. A short scheduling/feature-tracking pause asks
-    # control to hold position and recover automatically; only a sustained
-    # outage becomes INVALID.
-    max_age: 0.5
-    invalid_age: 2.0
-    max_position_variance: 1.0
-    max_orientation_variance: 0.25
-    max_velocity_variance: 1.0
-    max_speed: 4.0
-    max_jump: 0.4
-    # Do not call an otherwise plausible displacement a jump merely because
-    # one second of OpenVINS output was skipped.
-    max_continuous_gap: 2.0
-    # Quarantine a discontinuity; resume real measurements only after a stable
-    # sequence inside the prediction envelope. Persistent failure stays latched.
-    recovery_stable_time: 0.5
-    recovery_timeout: 2.0
-    recovery_max_correction: 0.75
-    recovery_max_angle_deg: 35.0
-    recovery_sample_gap: 0.1
-    recovery_residual: 0.15
-    # A data gap is checked separately from recovery time: the first new VIO
-    # sample may arrive >2 s after the last accepted one.
-    recovery_max_source_gap: 3.0
-    recovery_gap_max_correction: 2.5
-    recovery_gap_max_angle_deg: 90.0
-    # Low-cost quality monitor around OpenVINS. Feature count is measured from
-    # the same stereo images without modifying the estimator core.
-    feature_check_period: 0.5
-    feature_bad_count: 15
-    feature_good_count: 40
-    quality_velocity_window: 0.1
-    quality_acceleration_warn: 6.0
-    quality_angular_rate_warn: 0.6
-    expected_world: global
-    expected_imu: imu
-    match_tol: 0.1
+    uav_id: null # 预留无人机编号；当前单机坐标框架固定，不用于多机隔离
+    px4_ns: null # PX4 DDS 命名空间；启动时由 px4_ns 参数确定
+    t_body_imu: null # body←IMU 的 4×4 外参；由启动入口根据标定生成
+    max_age: 0.5 # 图像、IMU、VIO 新鲜度阈值（s）；超过后软降级或拒收
+    invalid_age: 2.0 # 持续数据缺口判为 INVALID 的时间阈值（s），应大于 max_age
+    max_position_variance: 1.0 # 位置方差硬上限（m²）；超过拒收
+    max_orientation_variance: 0.25 # 姿态方差硬上限（rad²）；超过拒收
+    max_velocity_variance: 1.0 # 速度方差硬上限（m²/s²）；超过拒收
+    max_speed: 4.0 # VIO 速度合理性上限（m/s）；超过拒收
+    max_jump: 0.4 # 位置跳变基础容差（m）；实际判据还加 max_speed×时间差
+    max_continuous_gap: 2.0 # 连续估计允许的最大源时间间隔（s）
+    recovery_stable_time: 0.5 # 跳变隔离后恢复需要的稳定时间（s）
+    recovery_timeout: 2.0 # 跳变恢复最长等待时间（s）；超过会锁定失效
+    recovery_max_correction: 0.75 # 常规跳变恢复允许的位置修正（m）
+    recovery_max_angle_deg: 35.0 # 常规跳变恢复允许的角度修正（度）
+    recovery_sample_gap: 0.1 # 恢复稳定样本允许的最大间隔（s）
+    recovery_residual: 0.15 # 恢复期间位置预测残差容差（m）
+    recovery_max_source_gap: 3.0 # 可恢复的最大源数据断流间隔（s）
+    recovery_gap_max_correction: 2.5 # 断流恢复允许的位置修正（m）
+    recovery_gap_max_angle_deg: 90.0 # 断流恢复允许的角度修正（度）
+    feature_check_period: 0.5 # 图像角点质量统计周期（s）；不改变 OpenVINS 跟踪频率
+    feature_bad_count: 15 # 角点置信度降到 0 的数量；低于此值也只触发软降级
+    feature_good_count: 40 # 角点数小于此值触发 FEATURES_LOW；统计左右目较小值
+    quality_velocity_window: 0.1 # 速度变化率的计算时间窗口（s）
+    quality_acceleration_warn: 6.0 # 速度变化率软降级阈值（m/s²）
+    quality_angular_rate_warn: 0.6 # 里程计角速度模长软降级阈值（rad/s）
+    expected_world: global # 接受的 OpenVINS 世界坐标 frame_id
+    expected_imu: imu # 接受的 OpenVINS IMU child_frame_id
+    match_tol: 0.1 # 保留兼容参数；当前节点未使用，修改不生效
+    feature_downsample: 2 # 质量统计图像缩小步长（正整数）；改变后应重调角点阈值
+    feature_max_corners: 200 # 质量统计最多检测的角点数；不是 OpenVINS 的 num_pts
+    feature_quality_level: 0.01 # 角点相对质量阈值（0～1）；降低可检测更多弱角点
+    feature_min_distance: 4.0 # 质量统计角点最小距离（缩小后图像的像素）
+    feature_block_size: 3 # 质量统计角点检测窗口（像素，正奇数）

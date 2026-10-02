@@ -1,79 +1,78 @@
+# 修改后重启对应节点生效。null 表示由启动入口/标定生成；不要用猜测值替代外参。
 ego_planner_node:
   ros__parameters:
-    fsm/flight_type: 1
-    fsm/thresh_replan_time: 1.0
-    fsm/thresh_no_replan_meter: 1.0
-    fsm/planning_horizon: 4.5
-    fsm/planning_horizen_time: 3.0
-    fsm/emergency_time: 1.0
-    fsm/realworld_experiment: true
-    fsm/fail_safe: true
-    fsm/waypoint_num: 0
+    fsm/flight_type: 1 # 目标类型：1 外部目标，2 预设航点
+    fsm/thresh_replan_time: 1.0 # 轨迹执行多久后允许重规划（s）
+    fsm/thresh_no_replan_meter: 1.0 # 接近全局终点时停止周期重规划的距离（m）
+    fsm/planning_horizon: 4.5 # 局部目标搜索距离（m）
+    fsm/planning_horizen_time: 3.0 # 上游保留的规划时间参数（s）
+    fsm/emergency_time: 1.0 # 预测碰撞时间小于此值时紧急停车（s）
+    fsm/realworld_experiment: true # 是否使用外部触发模式；当前通过外部目标驱动
+    fsm/fail_safe: true # 紧急停车后感知恢复且速度低时允许重新规划
+    fsm/waypoint_num: 0 # 预设航点数量；外部目标模式为 0
 
-    grid_map/resolution: 0.15
-    grid_map/map_size_x: 32.0
-    grid_map/map_size_y: 36.0
-    grid_map/map_size_z: 3.0
-    grid_map/local_update_range_x: 4.5
-    grid_map/local_update_range_y: 4.5
-    grid_map/local_update_range_z: 2.0
-    grid_map/obstacles_inflation: 0.30
-    grid_map/local_map_margin: 5
-    grid_map/ground_height: 0.0
-    grid_map/cx: -1.0
-    grid_map/cy: -1.0
-    grid_map/fx: -1.0
-    grid_map/fy: -1.0
-    grid_map/require_camera_info: true
-    grid_map/use_depth_filter: true
-    grid_map/depth_filter_tolerance: 0.15
-    grid_map/depth_filter_maxdist: 5.0
-    grid_map/depth_filter_mindist: 0.30
-    grid_map/depth_filter_margin: 2
-    grid_map/k_depth_scaling_factor: 1000.0
-    grid_map/skip_pixel: 4
-    grid_map/p_hit: 0.65
-    grid_map/p_miss: 0.35
-    grid_map/p_min: 0.12
-    grid_map/p_max: 0.90
-    grid_map/p_occ: 0.80
-    grid_map/min_ray_length: 0.30
-    grid_map/max_ray_length: 4.5
-    grid_map/virtual_ceil_height: -1.0
-    grid_map/virtual_ceil_yp: -0.1
-    grid_map/virtual_ceil_yn: -0.1
-    grid_map/visualization_truncate_height: 2.9
-    grid_map/show_occ_time: false
-    grid_map/pose_type: 2
-    grid_map/frame_id: odom
-    # Filtered software stereo averages about 2.5-3 Hz and can have a measured
-    # scheduling gap close to 1 s. Require a persistent gap before EGO enters
-    # emergency stop; flight_bridge stops sending motion sooner at 1.2 s.
-    grid_map/odom_depth_timeout: 1.5
+    grid_map/resolution: 0.15 # 体素边长（m）；越小内存和计算量越大
+    grid_map/map_size_x: 32.0 # 地图 X 方向总尺寸（m）
+    grid_map/map_size_y: 36.0 # 地图 Y 方向总尺寸（m）
+    grid_map/map_size_z: 3.0 # 地图 Z 方向总尺寸（m）
+    grid_map/local_update_range_x: 4.5 # 局部更新 X 半范围（m）
+    grid_map/local_update_range_y: 4.5 # 局部更新 Y 半范围（m）
+    grid_map/local_update_range_z: 2.0 # 局部更新 Z 半范围（m）
+    grid_map/obstacles_inflation: 0.30 # 障碍物膨胀距离（m）
+    grid_map/local_map_margin: 5 # 局部地图额外边界（体素数）
+    grid_map/ground_height: 0.0 # 地图地面高度（m，odom 坐标）
+    grid_map/cx: -1.0 # 主点横坐标（像素）；启动时读取标定或 CameraInfo；-1 表示等待 CameraInfo
+    grid_map/cy: -1.0 # 主点纵坐标（像素）；启动时读取标定或 CameraInfo；-1 表示等待 CameraInfo
+    grid_map/fx: -1.0 # 水平焦距（像素）；启动时读取标定或 CameraInfo；-1 表示等待 CameraInfo
+    grid_map/fy: -1.0 # 垂直焦距（像素）；启动时读取标定或 CameraInfo；-1 表示等待 CameraInfo
+    grid_map/require_camera_info: true # 必须收到有效 CameraInfo 后才融合深度
+    grid_map/use_depth_filter: true # 启用 GridMap 内部深度处理
+    grid_map/depth_filter_tolerance: 0.15 # 上游深度一致性容差（m）；当前一致性分支被禁用，修改不生效
+    grid_map/depth_filter_maxdist: 5.0 # 参与深度处理的最大距离（m）
+    grid_map/depth_filter_mindist: 0.30 # 参与深度处理的最小距离（m）
+    grid_map/depth_filter_margin: 2 # 忽略深度图边缘宽度（像素）
+    grid_map/k_depth_scaling_factor: 1000.0 # 米转内部整数深度倍率；1000 对应毫米
+    grid_map/skip_pixel: 4 # GridMap 深度像素抽样步长
+    grid_map/p_hit: 0.65 # 射线命中后的占用概率更新参数（0～1）
+    grid_map/p_miss: 0.35 # 射线经过后的空闲概率更新参数（0～1）
+    grid_map/p_min: 0.12 # 占用概率累积下限（0～1）
+    grid_map/p_max: 0.90 # 占用概率累积上限（0～1）
+    grid_map/p_occ: 0.80 # 判为占用的概率阈值（0～1）
+    grid_map/min_ray_length: 0.30 # 最短射线长度（m）
+    grid_map/max_ray_length: 4.5 # 最长射线长度（m）
+    grid_map/virtual_ceil_height: -1.0 # 虚拟天花板高度（m）；-1 关闭
+    grid_map/virtual_ceil_yp: -0.1 # 上游虚拟 Y 正边界参数；当前实现未使用
+    grid_map/virtual_ceil_yn: -0.1 # 上游虚拟 Y 负边界参数；当前实现未使用
+    grid_map/visualization_truncate_height: 2.9 # 占用点云显示的最高高度（m）；只影响显示
+    grid_map/show_occ_time: false # 上游融合耗时打印开关；当前计时代码被注释
+    grid_map/pose_type: 2 # 同步位姿输入：1 PoseStamped，2 Odometry
+    grid_map/frame_id: odom # 地图输出坐标系
+    grid_map/odom_depth_timeout: 1.5 # 同步深度/里程计融合持续中断阈值（s）
 
-    manager/max_vel: 0.5
-    manager/max_acc: 1.0
-    manager/max_jerk: 4.0
-    manager/control_points_distance: 0.30
-    manager/feasibility_tolerance: 0.05
-    manager/planning_horizon: 4.5
-    manager/use_distinctive_trajs: false
-    manager/drone_id: 0
+    manager/max_vel: 0.5 # 规划最大速度（m/s）；同步修改优化器、样条和控制上限
+    manager/max_acc: 1.0 # 规划最大加速度（m/s²）
+    manager/max_jerk: 4.0 # 规划 jerk 限值配置（m/s³）；需结合上游实际约束使用
+    manager/control_points_distance: 0.30 # 样条控制点间距（m）
+    manager/feasibility_tolerance: 0.05 # 轨迹动力学约束容差比例
+    manager/planning_horizon: 4.5 # 管理器规划视距（m）
+    manager/use_distinctive_trajs: false # 是否生成多条候选轨迹；开启增加计算量
+    manager/drone_id: 0 # EGO 编号；当前单机使用 0
 
-    optimization/lambda_smooth: 1.0
-    optimization/lambda_collision: 0.5
-    optimization/lambda_feasibility: 0.1
-    optimization/lambda_fitness: 1.0
-    optimization/dist0: 0.45
-    optimization/swarm_clearance: 0.5
-    optimization/max_vel: 0.5
-    optimization/max_acc: 1.0
-    optimization/order: 3
+    optimization/lambda_smooth: 1.0 # 轨迹平滑代价权重
+    optimization/lambda_collision: 0.5 # 障碍碰撞代价权重
+    optimization/lambda_feasibility: 0.1 # 速度加速度约束代价权重
+    optimization/lambda_fitness: 1.0 # 轨迹拟合代价权重
+    optimization/dist0: 0.45 # 优化器障碍安全距离（m）
+    optimization/swarm_clearance: 0.5 # 多机轨迹间距参数（m）；当前单机不做协同
+    optimization/max_vel: 0.5 # 优化器最大速度（m/s）
+    optimization/max_acc: 1.0 # 优化器最大加速度（m/s²）
+    optimization/order: 3 # 样条优化阶数；当前三阶，请勿单独改变
 
-    bspline/limit_vel: 0.5
-    bspline/limit_acc: 1.0
-    bspline/limit_ratio: 1.1
+    bspline/limit_vel: 0.5 # 样条速度可行性上限（m/s）
+    bspline/limit_acc: 1.0 # 样条加速度可行性上限（m/s²）
+    bspline/limit_ratio: 1.1 # 样条约束允许倍率
 
-    prediction/obj_num: 0
-    prediction/lambda: 1.0
-    prediction/predict_rate: 1.0
+    prediction/obj_num: 0 # 预测移动物体数；0 表示关闭
+    prediction/lambda: 1.0 # 物体预测正则化权重
+    prediction/predict_rate: 1.0 # 物体预测频率（Hz）
+    fsm/goal_tolerance: 0.2 # 规划器到点容差（m）；不得小于优化器短轨迹下限 0.2

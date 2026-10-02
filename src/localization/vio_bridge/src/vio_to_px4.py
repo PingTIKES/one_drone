@@ -34,10 +34,19 @@ class VioBridge(Node):
                         recovery_max_source_gap=3.,recovery_gap_max_correction=2.5,
                         recovery_gap_max_angle_deg=90.,
                         feature_check_period=.5,feature_bad_count=15,feature_good_count=40,
+                        feature_downsample=2,feature_max_corners=200,
+                        feature_quality_level=.01,feature_min_distance=4.,feature_block_size=3,
                         quality_velocity_window=.1,quality_acceleration_warn=6.,
                         quality_angular_rate_warn=.6,
                         t_body_imu=np.eye(4).ravel().tolist()).items(): self.declare_parameter(k,v)
         self.p = lambda k: self.get_parameter(k).value
+        if (int(self.p('feature_downsample')) < 1 or int(self.p('feature_max_corners')) < 1
+                or not 0 < self.p('feature_quality_level') <= 1
+                or self.p('feature_min_distance') < 0
+                or int(self.p('feature_block_size')) < 1
+                or int(self.p('feature_block_size')) % 2 == 0
+                or not 0 <= self.p('feature_bad_count') < self.p('feature_good_count')):
+            raise ValueError('invalid feature quality parameters')
         if not 0 < self.p('max_age') < self.p('invalid_age'):
             raise ValueError('VIO freshness requires 0 < max_age < invalid_age')
         if self.p('max_continuous_gap') <= self.p('max_age'):
@@ -95,10 +104,13 @@ class VioBridge(Node):
         self.feature_checked_at[index] = stamp
         try:
             image = self.gray_image(msg)
-            image = image[::2, ::2]
+            step = int(self.p("feature_downsample"))
+            image = image[::step, ::step]
             points = cv2.goodFeaturesToTrack(
-                image, maxCorners=200, qualityLevel=.01, minDistance=4,
-                blockSize=3, useHarrisDetector=False)
+                image, maxCorners=int(self.p("feature_max_corners")),
+                qualityLevel=float(self.p("feature_quality_level")),
+                minDistance=float(self.p("feature_min_distance")),
+                blockSize=int(self.p("feature_block_size")), useHarrisDetector=False)
             self.feature_counts[index] = 0 if points is None else len(points)
         except ValueError:
             self.feature_counts[index] = None

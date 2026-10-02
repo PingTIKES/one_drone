@@ -22,6 +22,9 @@ namespace ego_planner
     node_->declare_parameter("fsm/emergency_time", 1.0);
     node_->declare_parameter("fsm/realworld_experiment", false);
     node_->declare_parameter("fsm/fail_safe", true);
+    goal_tolerance_ = node_->declare_parameter("fsm/goal_tolerance", 0.2);
+    if (!std::isfinite(goal_tolerance_) || goal_tolerance_ < 0.2)
+      throw std::invalid_argument("fsm/goal_tolerance must be >= 0.2 m (optimizer minimum)");
 
     node_->get_parameter("fsm/flight_type", target_type_);
     node_->get_parameter("fsm/thresh_replan_time", replan_thresh_);
@@ -536,7 +539,7 @@ namespace ego_planner
       // EGO's rebound optimizer intentionally rejects trajectories shorter
       // than 0.2 m. Treat that condition as arrival instead of retrying at
       // 100 Hz forever. A later decision/RViz goal starts a new trajectory.
-      if ((end_pt_ - odom_pos_).norm() < 0.2)
+      if ((end_pt_ - odom_pos_).norm() < goal_tolerance_)
       {
         have_target_ = false;
         have_trigger_ = false;

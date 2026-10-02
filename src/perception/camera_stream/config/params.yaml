@@ -1,5 +1,6 @@
+# 修改后重启对应节点生效。null 表示由启动入口/标定生成；不要用猜测值替代外参。
 sensor_relay:
   ros__parameters:
-    cam0: null
-    cam1: null
-    imu: null
+    cam0: null # 左目输入话题；由 cam0_topic 启动参数指定
+    cam1: null # 右目输入话题；由 cam1_topic 启动参数指定
+    imu: null # IMU 输入话题；由 imu_topic 启动参数指定

@@ -1,45 +1,34 @@
+# 修改后重启对应节点生效。null 表示由启动入口/标定生成；不要用猜测值替代外参。
 flight_bridge:
   ros__parameters:
-    px4_ns: px4_1
-    target_system: 2
-    takeoff_altitude: 2.0
-    max_horizontal_speed: 0.5
-    max_vertical_speed: 0.3
-    # Yaw is a perception policy, independent from EGO's XYZ trajectory.
-    # Up to the soft limit the vehicle translates laterally with fixed yaw.
-    # It then translates and turns together; only almost-reverse motion stops.
-    max_yaw_rate: 0.35
-    position_gain: 0.8
-    yaw_soft_limit_deg: 30.0
-    yaw_hard_limit_deg: 100.0
-    yaw_reverse_limit_deg: 150.0
-    yaw_min_speed_scale: 0.25
-    yaw_rate_gain: 0.8
-    # Endpoint hover deadband. Enter only when both the horizontal tracking
-    # error and EGO feed-forward speed are small. The larger exit threshold
-    # prevents VIO noise at the boundary from repeatedly enabling yaw control.
-    arrival_position_deadband: 0.15
-    arrival_velocity_deadband: 0.10
-    arrival_exit_scale: 1.5
-    # Soft VIO degradation keeps the mission alive at conservative dynamics.
-    # INVALID still enters HOLD through the flight-state machine.
-    degraded_speed_scale: 0.4
-    degraded_max_yaw_rate: 0.10
-    reaction_time: 0.8
-    assumed_braking_deceleration: 0.6
-    safety_margin: 0.5
-    verified_forward_range: 5.0
-    command_timeout: 0.2
-    pose_timeout: 0.5
-    vio_timeout: 0.5
-    # Require a settled estimator before arming or recovering from INVALID.
-    vio_stable_time: 3.0
-    # After an INVALID event, resume only when VIO has remained VALID for
-    # vio_stable_time and PX4 is armed, in OFFBOARD, position-valid and not in
-    # failsafe. The retained navigation goal is replanned from the new pose.
-    auto_recover_from_hold: true
-    status_timeout: 1.5
-    depth_heartbeat_timeout: 1.2
-    depth_grace: 1.5
-    takeoff_tolerance: 0.2
-    takeoff_stable_time: 1.0
+    px4_ns: px4_1 # PX4 DDS 命名空间；启动时由 px4_ns 参数确定
+    target_system: 2 # 飞控 MAVLink 系统编号；启动参数优先，真机必须显式指定
+    takeoff_altitude: 2.0 # 相对起飞高度（m）
+    max_horizontal_speed: 0.5 # 最大水平速度（m/s）；须与 EGO 三处速度上限一起调整
+    max_vertical_speed: 0.3 # 最大升降速度（m/s）
+    max_yaw_rate: 0.35 # 正常偏航角速度上限（rad/s）
+    position_gain: 0.8 # 位置误差转速度的比例增益（1/s）
+    yaw_soft_limit_deg: 30.0 # 目标方向偏差小于此角度时保持航向（度）
+    yaw_hard_limit_deg: 100.0 # 进入最小平移速度比例的方向偏差（度）
+    yaw_reverse_limit_deg: 150.0 # 超过此方向偏差停止平移（度）
+    yaw_min_speed_scale: 0.25 # 大角度转向时的最小平移速度比例（0～1）
+    yaw_rate_gain: 0.8 # 方向误差转角速度的比例增益（1/s）
+    arrival_position_deadband: 0.15 # 到点水平位置死区（m），同时满足速度条件才生效
+    arrival_velocity_deadband: 0.10 # 到点轨迹水平速度阈值（m/s）
+    arrival_exit_scale: 1.5 # 到点死区退出阈值倍率；大于 1 可防止边界抖动
+    degraded_speed_scale: 0.4 # VIO 降级时水平速度上限比例（0～1）
+    degraded_max_yaw_rate: 0.10 # VIO 降级时偏航角速度上限（rad/s）
+    reaction_time: 0.8 # 制动距离估算中的反应延迟（s），不是深度超时
+    assumed_braking_deceleration: 0.6 # 制动距离估算采用的减速度（m/s²）
+    safety_margin: 0.5 # 制动距离之外的额外安全距离（m）
+    verified_forward_range: 5.0 # 经过验证的前向可感知距离（m）
+    command_timeout: 0.2 # 轨迹指令接收超时（s）；轨迹服务器继续发布旧轨迹时不会触发
+    pose_timeout: 0.5 # 位置或里程计接收超时（s）
+    vio_timeout: 0.5 # VIO 健康消息接收超时（s）
+    vio_stable_time: 3.0 # 起飞及 INVALID 恢复所需连续 VALID 时间（s）
+    auto_recover_from_hold: true # 满足 VIO 与 PX4 状态条件后是否自动退出 HOLD
+    status_timeout: 1.5 # PX4 状态消息接收超时（s）
+    depth_heartbeat_timeout: 1.2 # 深度健康消息接收超时（s），不是深度图时间戳超时
+    depth_grace: 1.5 # 距最近一次深度健康为 true 的容忍时间（s）
+    takeoff_tolerance: 0.2 # 起飞位置允许误差（m）
+    takeoff_stable_time: 1.0 # 进入巡航前需持续满足起飞误差的时间（s）

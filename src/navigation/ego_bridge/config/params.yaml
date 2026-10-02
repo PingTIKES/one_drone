@@ -1,8 +1,9 @@
+# 修改后重启对应节点生效。null 表示由启动入口/标定生成；不要用猜测值替代外参。
 ego_odom_adapter:
   ros__parameters:
-    source_odom: /odom
-    output_odom: /ego/odom
-    depth_topic: /uav1/d435i/depth/image_raw
-    depth_fresh_topic: /ego/depth_fresh
-    depth_timeout: 0.5
-    expected_frame: odom
+    source_odom: /odom # 输入里程计话题
+    output_odom: /ego/odom # 输出世界系速度里程计话题
+    depth_topic: /uav1/d435i/depth/image_raw # 深度输入话题；startup 中指定为过滤后的深度
+    depth_fresh_topic: /ego/depth_fresh # 输出深度新鲜度布尔话题
+    depth_timeout: 0.5 # 深度接收间隔超时（s）；超过发布 false
+    expected_frame: odom # 输入里程计要求的世界坐标系

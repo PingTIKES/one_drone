@@ -1,18 +1,18 @@
+# 修改后重启对应节点生效。null 表示由启动入口/标定生成；不要用猜测值替代外参。
 stereo_depth_node:
   ros__parameters:
-    uav_id: null
-    fx: null
-    fy: null
-    cx: null
-    cy: null
-    cam_xyz: null
-    cam_rotation: null
-    depth_scale: null
-    require_camera_info: null
-    preserve_stamp: null
-    frame_decimation: null
-    self_mask_model: null
-    # 640x480 / 4^2 is about 19k candidate points before range/self filtering.
-    step: 4
-    min_range: 0.3
-    max_range: 8.0
+    uav_id: null # 预留无人机编号；当前单机坐标框架固定，不用于多机隔离
+    fx: null # 水平焦距（像素）；启动时读取标定或 CameraInfo
+    fy: null # 垂直焦距（像素）；启动时读取标定或 CameraInfo
+    cx: null # 主点横坐标（像素）；启动时读取标定或 CameraInfo
+    cy: null # 主点纵坐标（像素）；启动时读取标定或 CameraInfo
+    cam_xyz: null # 相机在机体系的位置（m）；启动时根据外参生成
+    cam_rotation: null # body←相机光学系旋转矩阵，行优先；启动时根据外参生成
+    depth_scale: null # 16 位深度数值到米的倍率；由 depth_scale 启动参数指定，32FC1 已为米
+    require_camera_info: null # 是否等待有效相机内参；启动入口按深度来源确定
+    preserve_stamp: null # 保留深度采集时间戳；启动入口固定为 true
+    frame_decimation: null # 每 N 帧处理一次；null 自动选软件 1、硬件 3，可填正整数覆盖
+    self_mask_model: null # 自体过滤模型；启动入口选仿真 x500、真机 none
+    step: 4 # 点云像素抽样步长；4 对 640×480 约产生 19200 个候选点
+    min_range: 0.3 # 最小有效深度距离（m）
+    max_range: 8.0 # 最大有效深度距离（m）

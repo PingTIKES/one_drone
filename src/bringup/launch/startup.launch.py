@@ -55,6 +55,9 @@ def setup(context):
     target_system = int(arg('target_system') or '2')
     px4_ns = arg('px4_ns') or ('px4_1' if sim else '/')
     bringup = Path(get_package_share_directory('bringup'))
+    process_config = yaml.safe_load((bringup / 'params/launch.yaml').read_text())['ego_planner']
+    if float(process_config['respawn_delay']) < 0:
+        raise ValueError('respawn_delay must be nonnegative')
     if sim:
         cfg_dir = Path(get_package_share_directory('vio_bridge')) / 'config/openvins_sim'
         config, cameras, imu = validate_config(cfg_dir / 'estimator_config.yaml')
@@ -69,9 +72,7 @@ def setup(context):
         cfg_dir = Path(arg('calibration_dir'))
         config, cameras, imu = validate_config(cfg_dir / 'estimator_config.yaml')
         t_body_imu = transform(read_yaml(cfg_dir / 'body.yaml')['T_body_imu'])
-    config.update(verbosity='WARNING', record_timing_information=True,
-                  record_timing_filepath='/tmp/one_drone_openvins_timing.txt',
-                  num_opencv_threads=2, use_multi_threading_subs=False)
+    # Estimator tuning is read from calibration_dir/estimator_config.yaml.
     for i in range(2):
         cameras[f'cam{i}']['rostopic'] = f'/uav1/cam{i}/image_raw'
     imu['rostopic'] = '/uav1/imu0'
@@ -135,7 +136,7 @@ def setup(context):
         parameters=[common, node_config('stereo_depth', 'software_stereo'),
                     {'config': ov_config,
                      't_body_imu': t_body_imu.ravel().tolist(),
-                     'sync_slop': .015 if sim else .003}])
+                     'sync_slop': node_config('stereo_depth', 'software_stereo').get('sync_slop', .015 if sim else .003)}])
     depth_filter = Node(
         package='depth_filter', executable='depth_filter',
         namespace='uav1', name='depth_filter', output='screen',
@@ -159,7 +160,7 @@ def setup(context):
                      'preserve_stamp': True,
                      'depth_scale': float(arg('depth_scale')),
                      'self_mask_model': 'x500' if sim else 'none',
-                     'frame_decimation': 1 if mode == 'software' else 3}],
+                     'frame_decimation': node_config('obstacle_cloud', 'stereo_depth_node').get('frame_decimation', 1 if mode == 'software' else 3)}],
         remappings=depth_remaps)
     ego_depth_topic = '/uav1/d435i/depth/image_filtered'
     ego_info_topic = depth_info_topic
@@ -173,7 +174,8 @@ def setup(context):
         name='ego_planner_node', output='screen',
         # Keep the control bridge alive and restart only the planner process.
         # A small non-zero delay prevents a tight fork/crash loop.
-        respawn=True, respawn_delay=0.1,
+        respawn=bool(process_config['respawn']),
+        respawn_delay=float(process_config['respawn_delay']),
         parameters=[str(bringup / 'params/ego_params.yaml'), common,
                     {'grid_map/cam2body': t_body_camera.ravel().tolist()}],
         remappings=[

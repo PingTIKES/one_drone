@@ -15,11 +15,17 @@ class SoftwareStereo(Node):
     def __init__(self):
         super().__init__('software_stereo')
         for k,v in dict(config='',t_body_imu=np.eye(4).ravel().tolist(),rate=5.,sync_slop=.003,
-                        texture_std_min=1.0).items(): self.declare_parameter(k,v)
+                        texture_std_min=1.0, disparities=96, block_size=5,
+                        uniqueness_ratio=15, speckle_window_size=80, speckle_range=2,
+                        opencv_threads=2, sync_queue_size=5).items(): self.declare_parameter(k,v)
         p = lambda k:self.get_parameter(k).value
         self.matcher = StereoMatcher(p('config'),np.array(p('t_body_imu')).reshape(4,4),
-                                     texture_std_min=p('texture_std_min'))
-        cv2.setNumThreads(2)
+                                     texture_std_min=p('texture_std_min'), disparities=p('disparities'),
+                                     block_size=p('block_size'), uniqueness_ratio=p('uniqueness_ratio'),
+                                     speckle_window_size=p('speckle_window_size'), speckle_range=p('speckle_range'))
+        cv2.setNumThreads(int(p('opencv_threads')))
+        if p('rate') <= 0 or p('sync_queue_size') < 1 or p('sync_slop') < 0:
+            raise ValueError('rate/queue must be positive and sync_slop nonnegative')
         self.period,self.last = 1/p('rate'),-float('inf')
         self.bridge = CvBridge()
         self.pub = self.create_publisher(Image,'d435i/depth/image_raw',qos_profile_sensor_data)
@@ -30,7 +36,7 @@ class SoftwareStereo(Node):
         self.depth_count = 0
         for i, sub in enumerate(self.subs):
             sub.registerCallback(lambda _msg, index=i: self._count_image(index))
-        self.sync = message_filters.ApproximateTimeSynchronizer(self.subs,5,p('sync_slop'))
+        self.sync = message_filters.ApproximateTimeSynchronizer(self.subs,int(p('sync_queue_size')),p('sync_slop'))
         self.sync.registerCallback(self.callback)
         self.create_timer(5., self.report_status)
 

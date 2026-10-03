@@ -1,4 +1,4 @@
-"""Validate RViz goals and publish odom-frame targets to EGO-Planner."""
+"""Accept RViz map goals and publish odom-frame targets to EGO-Planner."""
 import math
 import time
 
@@ -6,7 +6,10 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import PoseStamped
+from rclpy.time import Time
 from std_msgs.msg import Bool, String, Header
+from tf2_geometry_msgs import do_transform_pose
+from tf2_ros import Buffer, TransformException, TransformListener
 
 
 class GoalManager(Node):
@@ -19,6 +22,8 @@ class GoalManager(Node):
         self.declare_parameter('goal_frame', 'odom')
         self.declare_parameter('goal_altitude', 2.0)
         self.goal_frame = str(self.get_parameter('goal_frame').value)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.vio_valid = False
         self.last_depth_good = -math.inf
         self.flight_state = 'IDLE'
@@ -57,12 +62,13 @@ class GoalManager(Node):
             self.state('REJECTED_PRE_RESET_GOAL')
             return
         p = msg.pose.position
-        if msg.header.frame_id != self.goal_frame or not all(math.isfinite(v) for v in (p.x, p.y)):
+        if msg.header.frame_id not in (self.goal_frame, 'map') or not all(
+                math.isfinite(v) for v in (p.x, p.y)):
             self.state('REJECTED_FRAME_OR_POSITION')
             return
         goal = PoseStamped()
         goal.header.stamp = self.get_clock().now().to_msg()
-        goal.header.frame_id = self.goal_frame
+        goal.header.frame_id = msg.header.frame_id
         goal.pose = msg.pose
         goal.pose.position.z = float(self.get_parameter('goal_altitude').value)
         self.pending_goal = goal
@@ -85,8 +91,21 @@ class GoalManager(Node):
         if not 0 <= self.now() - self.last_depth_good <= float(self.get_parameter('depth_grace').value):
             self.state('GOAL_QUEUED_DEPTH_NOT_READY')
             return False
-        self.pending_goal.header.stamp = self.get_clock().now().to_msg()
-        self.goal_pub.publish(self.pending_goal)
+        goal = PoseStamped()
+        goal.header.frame_id = self.goal_frame
+        goal.header.stamp = self.get_clock().now().to_msg()
+        if self.pending_goal.header.frame_id == self.goal_frame:
+            goal.pose = self.pending_goal.pose
+        else:
+            try:
+                # Use the current manual map→odom alignment when dispatching.
+                tf = self.tf_buffer.lookup_transform(
+                    self.goal_frame, self.pending_goal.header.frame_id, Time())
+                goal.pose = do_transform_pose(self.pending_goal.pose, tf)
+            except TransformException:
+                self.state('GOAL_QUEUED_TF_NOT_READY')
+                return False
+        self.goal_pub.publish(goal)
         self.goal_unsent = False
         self.state(success_state)
         return True

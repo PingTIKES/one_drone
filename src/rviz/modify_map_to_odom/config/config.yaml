@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    parent_frame: map # 先验地图坐标系
+    target_frame: odom # OpenVINS 里程计坐标系
+    X: -6.0 # map→odom 初始 X 平移，单位 m；按场地修改
+    Y: 6.0 # map→odom 初始 Y 平移，单位 m；按场地修改
+    Rotation: 3.57 # map→odom 初始 yaw，单位 rad；按场地修改

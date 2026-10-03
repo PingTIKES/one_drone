@@ -1,0 +1,17 @@
+{
+  "source": "rmuc_2025_3m.stl",
+  "source_sha256": "f2cd3ed13481413a9dc6df15f58dc281483144d34f0a749c5b2d65280e447d16",
+  "world": "rmuc_2025_3m_vio_columns.sdf",
+  "world_sha256": "f256ac993fa27c7b497b1d0f6c0bd42747065ac23cd0187c814374b50a8155cf",
+  "vio_columns": 6,
+  "layer_m": [
+    1.5,
+    2.5
+  ],
+  "frame": "world_enu",
+  "resolution": 0.1,
+  "origin": [
+    -10.0,
+    -16.0
+  ]
+}

@@ -10,7 +10,7 @@ import numpy as np
 import rclpy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Header, String, Bool
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 
 ROOT = Path(__file__).resolve().parents[1]
 def module(name, relative):
@@ -125,6 +125,37 @@ class ResetPipelineTest(unittest.TestCase):
             n.on_depth(Bool(data=True))
             n.on_vio(String(data='VALID'))
             self.assertEqual(n.goal_pub.publish.call_count, 1)
+        finally:
+            n.destroy_node()
+
+    def test_map_goal_uses_map_to_odom_tf_before_ego(self):
+        n = Goal()
+        try:
+            n.goal_pub = Mock()
+            n.now = lambda: 100.
+            n.flight_state = 'CRUISE'
+            n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
+            n.on_depth(Bool(data=True))
+            n.on_vio(String(data='VALID'))
+            goal = PoseStamped()
+            goal.header.frame_id = 'map'
+            goal.pose.position.x = 11.
+            goal.pose.position.y = 2.
+            goal.pose.orientation.w = 1.
+            n.on_goal(goal)
+            n.goal_pub.publish.assert_not_called()  # TF can start after RViz.
+            tf = TransformStamped()
+            tf.header.frame_id = 'map'
+            tf.child_frame_id = 'odom'
+            tf.transform.translation.x = 10.
+            tf.transform.rotation.w = 1.
+            n.tf_buffer.set_transform_static(tf, 'test')
+            n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
+            sent = n.goal_pub.publish.call_args.args[0]
+            self.assertEqual(sent.header.frame_id, 'odom')
+            self.assertAlmostEqual(sent.pose.position.x, 1.)
+            self.assertAlmostEqual(sent.pose.position.y, 2.)
+            self.assertAlmostEqual(sent.pose.position.z, 2.)
         finally:
             n.destroy_node()
 

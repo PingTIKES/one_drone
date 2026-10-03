@@ -9,6 +9,8 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
+from launch_ros.descriptions import ComposableNode
 
 from vio_bridge.calibration import read_yaml, transform, validate_config, write_opencv_yaml
 from vio_bridge.vio_geometry import quaternion
@@ -21,11 +23,27 @@ def node_config(package_name, node_name):
     return {key: value for key, value in values.items() if value is not None}
 
 
+def selected_map_file(bringup, override):
+    # The YAML is selected here; its image: field selects the matching PGM.
+    choice = override or (yaml.safe_load(
+        (bringup / 'params/global_config.yaml').read_text()) or {}).get('map')
+    if not isinstance(choice, str) or not choice.strip():
+        raise ValueError('set map in bringup/params/global_config.yaml or pass map_file:=...')
+    path = Path(choice).expanduser()
+    if not path.is_absolute():
+        path = bringup / 'map' / path
+    path = path.resolve()
+    if not path.is_file() or path.suffix.lower() not in ('.yaml', '.yml'):
+        raise FileNotFoundError(f'prior map YAML does not exist: {path}')
+    return str(path)
+
+
 def generate_launch_description():
     # Runtime calibration depends on launch arguments. setup() builds the named
     # node list below after those arguments have been resolved.
     arguments = [('sim', 'true'), ('rviz', 'true'), ('depth_source', 'software'),
                  ('calibration_dir', ''), ('target_system', ''), ('px4_ns', ''),
+                 ('map_file', ''),
                  ('cam0_topic', ''), ('cam1_topic', ''),
                  ('imu_topic', ''), ('depth_topic', ''),
                  ('depth_info_topic', ''), ('depth_scale', '0.001'),
@@ -61,6 +79,7 @@ def setup(context):
             f'OpenVINS resolves outside this workspace: {ov_prefix}; '
             'source one_drone/install/setup.bash after any old ROS overlays')
     bringup = Path(get_package_share_directory('bringup'))
+    map_file = selected_map_file(bringup, arg('map_file'))
     process_config = yaml.safe_load((bringup / 'params/launch.yaml').read_text())['ego_planner']
     if float(process_config['respawn_delay']) < 0:
         raise ValueError('respawn_delay must be nonnegative')
@@ -222,6 +241,27 @@ def setup(context):
         name='goal_manager', output='screen',
         parameters=[common, node_config('goal_manager', 'goal_manager'),
                     {'goal_frame': 'odom'}])
+    modify_map_to_odom = Node(
+        package='modify_map_to_odom', executable='modify_map_to_odom_node',
+        name='modify_map_to_odom', output='screen',
+        parameters=[str(Path(get_package_share_directory('modify_map_to_odom')) /
+                        'config/config.yaml'), common])
+    map_container = ComposableNodeContainer(
+        name='map_container', namespace='', package='rclcpp_components',
+        executable='component_container', output='screen', parameters=[common])
+    load_map_server = LoadComposableNodes(
+        target_container='map_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='nav2_map_server', plugin='nav2_map_server::MapServer',
+                name='map_server', parameters=[common, {'yaml_filename': map_file}]),
+            ComposableNode(
+                package='nav2_lifecycle_manager',
+                plugin='nav2_lifecycle_manager::LifecycleManager',
+                name='lifecycle_manager_localization',
+                parameters=[common, {'autostart': True,
+                                     'node_names': ['map_server']}]),
+        ])
     flight_bridge = Node(
         package='flight_bridge', executable='flight_bridge',
         name='flight_bridge', output='screen',
@@ -243,6 +283,9 @@ def setup(context):
         depth_filter,                # temporal/spatial depth cleanup
         stereo_depth_node,           # filtered depth -> obstacle cloud
         camera_optical_tf,           # measured base_link -> camera_optical
+        modify_map_to_odom,          # adjustable map -> odom TF
+        map_container,               # composable prior PGM map server
+        load_map_server,             # map server + lifecycle activation
         ego_odom_adapter,            # body twist -> world twist + depth health
         ego_planner,                 # depth GridMap + local B-spline planning
         ego_traj_server,             # B-spline -> PositionCommand

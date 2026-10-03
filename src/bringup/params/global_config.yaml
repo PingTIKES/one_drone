@@ -1,0 +1,4 @@
+# RViz 先验地图：只供 map 坐标打点和定位显示；EGO 仍使用深度局部地图避障。
+# 选择 bringup/map 下的 YAML 文件；也可填绝对 YAML 路径。
+# 启动参数 map_file:=... 可以临时覆盖本配置。
+map: 0928.yaml

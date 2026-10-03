@@ -15,6 +15,11 @@
   <exec_depend>depth_filter</exec_depend>
   <exec_depend>obstacle_cloud</exec_depend>
   <exec_depend>goal_manager</exec_depend>
+  <exec_depend>modify_map_to_odom</exec_depend>
+  <exec_depend>rviz_tf_shift</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>flight_bridge</exec_depend>
   <exec_depend>ego_bridge</exec_depend>
   <exec_depend>ego_planner</exec_depend>

@@ -1,13 +1,26 @@
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
+  - Class: tf_shift_panel/Rviz2Panel
+    Name: MapOdomModify
 Visualization Manager:
   Class: ""
   Global Options:
     Background Color: 255; 255; 255
-    Fixed Frame: odom
+    Fixed Frame: map
     Frame Rate: 20
   Displays:
+    - Class: rviz_default_plugins/Map
+      Name: PriorMap
+      Enabled: true
+      Alpha: 1
+      Color Scheme: map
+      Draw Behind: true
+      Topic:
+        Value: /map
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Depth: 1
     - Class: rviz_default_plugins/Grid
       Name: Grid
       Enabled: true

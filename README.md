@@ -2,7 +2,7 @@
 
 `one_drone` 是一台无人机的三维局部自主导航工程，运行环境为 **Ubuntu 22.04、ROS 2 Humble、OpenVINS、EGO-Planner / EGO-Swarm 单机模式和 MicoAir PX4 1.14.3**。仿真与真机使用同一套算法节点；Gazebo 只提供环境、相机、IMU 和飞行动力学，算法不读取仿真真值位姿。
 
-当前仓库只保留单机定位、三维局部建图、轨迹规划和 PX4 控制。Nav2、PGM 地图服务器、2D 代价地图、行为树、`cmd_vel` 控制链、`map→odom` 人工调整及相关功能包已经移除。多机协同、目标识别和任务决策暂不在本阶段范围内。
+当前仓库只保留单机定位、先验 PGM 地图显示、三维局部建图、轨迹规划和 PX4 控制。先验地图及手动 `map→odom` 调整用于 RViz 定位和打点；EGO 的避障仍只使用深度观测。Nav2 规划器、2D 代价地图、行为树和 `cmd_vel` 控制链已移除。多机协同、目标识别和任务决策暂不在本阶段范围内。
 
 > 当前状态：所有 ROS 2 功能包和总启动文件已在 Ubuntu 22.04 / Humble 上完成干净编译，并在 PX4 1.14.3 SITL 与 3 m 墙体识别柱场景中完成起飞、EGO 规划和轨迹执行闭环验证。2 m 前向目标的最终 VIO 水平位置误差约 7 cm；暂停深度处理 3 秒的故障注入中，飞机停止轨迹，深度恢复后从当前位置重新规划并到达目标。真机尚未试飞验证，因此默认速度限制为 0.5 m/s，真机验证稳定后再逐步提高。
 
@@ -31,12 +31,12 @@
                           └─ PX4 Offboard 速度和偏航角速度设定值
 
 RViz 2D Goal Pose
-  └─ /navigation_goal
-      └─ goal_manager（VIO、飞行状态、深度门控）
-          └─ /ego/goal
+  └─ /navigation_goal（map）
+      └─ goal_manager（按当前 map→odom 转换目标；检查 VIO、飞行状态和深度）
+          └─ /ego/goal（odom）
 ```
 
-全链使用 `odom` 作为规划世界坐标。OpenVINS 启动位置就是 `(0,0,0)` 附近，起飞后 RViz 中的 `odom→base_link` 决定飞机位置；无需 PGM、`map` 坐标或人工对齐。EGO 的局部地图只由实际深度观测生成，未知区域不直接写成障碍。地图采用三维体素，能够在后续阶段扩展升降绕障。
+TF 链为 `map→odom→base_link`：modify 节点按配置和 RViz 面板调整发布 `map→odom`，OpenVINS 发布 `odom→base_link`。先验 PGM 在 `map` 下显示，RViz 以 `map` 为 Fixed Frame，打点在 `map` 下；`goal_manager` 把目标变换到 `odom`，EGO 仍在 `odom` 下规划与控制。手动对齐不会触发起飞门控，但打点位置是否正确取决于当前 `map→odom`。EGO 的局部地图只由实际深度观测生成，未知区域不直接写成障碍；PGM **不参与** EGO 碰撞检测。
 
 `flight_bridge` 执行
 
@@ -53,7 +53,9 @@ src/
 ├── bringup/
 │   ├── launch/startup.launch.py     # 唯一算法启动入口
 │   ├── params/ego_params.yaml       # EGO GridMap、规划和优化参数
-│   └── rviz/ego_navigation.rviz     # odom、TF、三维占用和轨迹显示
+│   ├── params/global_config.yaml   # 选择要加载的先验 PGM 地图 YAML
+│   ├── map/                        # PGM 与配套 YAML
+│   └── rviz/ego_navigation.rviz     # 先验地图、TF、三维占用和轨迹显示
 ├── perception/
 │   ├── camera_stream/               # 真机图像与 IMU 话题转发
 │   ├── stereo_depth/                # 仿真/软件双目深度
@@ -66,8 +68,11 @@ src/
 │   ├── ego_bridge/                  # /odom 与深度健康适配
 │   ├── ego_planner/                 # EGO-Swarm ROS 2 单机规划核心
 │   └── goal_manager/                # RViz 目标门控与 /ego/goal 发布
-└── control/
-    └── flight_bridge/               # PositionCommand 到 PX4 Offboard
+├── control/
+│   └── flight_bridge/               # PositionCommand 到 PX4 Offboard
+└── rviz/
+    ├── modify_map_to_odom/          # 可调 map→odom TF 发布
+    └── rviz_tf_shift/               # RViz 手动平移/旋转面板
 ```
 
 EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，固定来源提交写在 `src/navigation/ego_planner/UPSTREAM.md`，许可证保留在同目录 `LICENSE`。仓库只引入单机运行必需的 `plan_env`、`path_searching`、`bspline_opt`、`traj_utils`、`ego_planner` 和 `quadrotor_msgs`。
@@ -84,7 +89,9 @@ EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，�
 | `vio_bridge` | `/uav1/odomimu`、双目图像、IMU | `/odom`、`odom→base_link`、`/vio_health`、`/vio_diagnostics`、PX4 外部视觉 | 包内 `config/params.yaml` |
 | `ego_bridge` | `/odom`、深度图 | `/ego/odom`、`/ego/depth_fresh` | 包内 `config/params.yaml` |
 | `ego_planner` | `/ego/odom`、深度、CameraInfo、`/ego/goal` | 三维占用、B-spline、可视化 Marker | `bringup/params/ego_params.yaml` |
-| `goal_manager` | `/navigation_goal`、VIO、深度、飞行状态 | `/ego/goal`、`/navigation_state` | 包内 `config/params.yaml` |
+| `modify_map_to_odom` | 配置中的 X/Y/Rotation、RViz 面板调整 | TF `map→odom` | 包内 `config/config.yaml` |
+| `nav2_map_server` | `bringup/map` 中选定的 YAML/PGM | `/map`，只供显示与打点 | `bringup/params/global_config.yaml` |
+| `goal_manager` | `map` 或 `odom` 下的 `/navigation_goal`、TF、VIO、深度、飞行状态 | `odom` 下的 `/ego/goal`、`/navigation_state` | 包内 `config/params.yaml` |
 | `flight_bridge` | `/ego/position_cmd`、`/ego/odom`、PX4 状态 | PX4 Offboard 设定值、飞行状态与安全状态 | 包内 `config/params.yaml` |
 
 ## 关键参数
@@ -166,7 +173,9 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
 ```
 
-不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。
+不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、先验地图服务器、modify、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。默认地图由 `src/bringup/params/global_config.yaml` 的 `map:` 指定，可填 `src/bringup/map` 内的其他 YAML 文件名；临时切换可在启动命令后加 `map_file:=0928.yaml` 或绝对 YAML 路径。改完参数或地图后运行 `colcon build --symlink-install` 并重启 launch。
+
+RViz 左侧 **MapOdomModify** 面板可手动平移/旋转 `map→odom`，初值在 `src/rviz/modify_map_to_odom/config/config.yaml`。先观察 `base_link` 在先验地图上的位置，再调整面板。该调整不更改 OpenVINS 的 `odom→base_link` 或 EGO 局部占用，也不需要人工确认才能起飞。
 
 `ego_planner_node` 与其他算法节点进程隔离；异常退出后由 launch 在 0.1 秒后自动拉起。`/ego/map_heartbeat` 同时提供规划器实例编号和最近成功融合的深度时间戳；轨迹服务器与控制桥独立监控。心跳断流超过 0.75 个真实秒、地图超过 0.75 个 ROS 秒未更新，或检测到实例更换，都会停用旧轨迹，控制桥进入 HOLD。地图与定位恢复后，保留的目标从当前位置重新规划；VIO 坐标重置则仍丢弃旧目标。0.1 秒是重启等待，不代表检测、初始化和建图总耗时。到点距离小于 0.2 m 时直接等待目标，不再无限生成短轨迹。
 
@@ -181,10 +190,12 @@ ros2 topic hz /ego/odom
 ros2 topic echo --once /vio_health
 ros2 topic echo --once /ego/depth_fresh
 ros2 topic hz /ego/occupancy_inflate
+ros2 topic echo --once /map --qos-durability transient_local
+ros2 run tf2_ros tf2_echo map odom
 ros2 run tf2_ros tf2_echo odom base_link
 ```
 
-必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中低置信度会显示 `DEGRADED`，输入仍新鲜时控制器限速继续；里程计或深度陈旧时改为位置悬停。持续断流或真实位姿跳变会显示 `INVALID` 并进入 `HOLD`；VIO 连续稳定 3 秒，且 PX4 仍已解锁、处于 OFFBOARD、位置有效、没有 failsafe 后，未发生坐标重置时，系统自动回到原飞行阶段，并从恢复后的新位置重新规划保存的目标；发生 VIO 重置时会清图、停旧轨迹、丢弃旧目标，等待地图重建后恢复，必须重新打点。当前过滤后的软件双目实测约 2.5–3 Hz、最大调度间隔接近 1 秒，因此控制层深度心跳超时为 1.2 秒，新增地图执行检查在最后成功融合的深度超过 0.75 个 ROS 秒时先停止执行，EGO 内部原有 1.5 秒深度超时仍保留；同步恢复后清除超时并从当前位置重新规划。若平均频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `odom`，白色背景，TF Marker Scale 为 2.5。
+必须满足：起飞前 `/vio_health` 为 `VALID`、`/ego/odom` 连续、深度为 `true`、三维膨胀占用持续发布、TF 方向与 Gazebo 中的移动一致。飞行中低置信度会显示 `DEGRADED`，输入仍新鲜时控制器限速继续；里程计或深度陈旧时改为位置悬停。持续断流或真实位姿跳变会显示 `INVALID` 并进入 `HOLD`；VIO 连续稳定 3 秒，且 PX4 仍已解锁、处于 OFFBOARD、位置有效、没有 failsafe 后，未发生坐标重置时，系统自动回到原飞行阶段，并从恢复后的新位置重新规划保存的目标；发生 VIO 重置时会清图、停旧轨迹、丢弃旧目标，等待地图重建后恢复，必须重新打点。当前过滤后的软件双目实测约 2.5–3 Hz、最大调度间隔接近 1 秒，因此控制层深度心跳超时为 1.2 秒，新增地图执行检查在最后成功融合的深度超过 0.75 个 ROS 秒时先停止执行，EGO 内部原有 1.5 秒深度超时仍保留；同步恢复后清除超时并从当前位置重新规划。若平均频率低于 2.5 Hz，应先解决算力或图像同步问题。RViz Fixed Frame 默认为 `map`，白色背景，TF Marker Scale 为 2.5。
 
 ### 4. 起飞、打点和降落
 
@@ -193,7 +204,7 @@ ros2 service call /takeoff std_srvs/srv/Trigger '{}'
 ros2 topic echo /flight_state
 ```
 
-`flight_state` 依次经过 `PRESTREAM → ARMING → TAKEOFF → CRUISE`。进入 `CRUISE` 后使用 RViz 的 **2D Goal Pose** 打点。工具发布 `/navigation_goal`，`goal_manager` 将高度设为默认 2 m 后发布 `/ego/goal`。观察：
+`flight_state` 依次经过 `PRESTREAM → ARMING → TAKEOFF → CRUISE`。进入 `CRUISE` 后使用 RViz 的 **2D Goal Pose** 在先验地图上打点。工具以 `map` 坐标发布 `/navigation_goal`，`goal_manager` 读取当前 TF、转换为 `odom` 目标，并将高度设为默认 2 m 后发布 `/ego/goal`。如果 TF 尚未出现，目标暂存并在 TF 可用后发送。观察：
 
 ```bash
 ros2 topic echo /navigation_state
@@ -202,7 +213,7 @@ ros2 topic hz /ego/position_cmd
 ros2 topic echo /flight_safety_status --qos-durability transient_local
 ```
 
-RViz 默认以 `odom` 为 Fixed Frame，`EGOGlobalPath`（青色）和 `EGOOptimalPath`（红色）分别显示全局参考路径与局部优化控制点连线。两者是 Marker 话题；若打点后仍无路径，检查 `/ego/visualization/global_path`、`/ego/visualization/optimal_path` 的消息及 `header.frame_id`，并确认 `/ego/planning/bspline` 是否在规划成功后发布：
+RViz 默认以 `map` 为 Fixed Frame，`EGOGlobalPath`（青色）和 `EGOOptimalPath`（红色）分别显示全局参考路径与局部优化控制点连线。路径 Marker 仍在 `odom` 坐标系，由 TF 显示在先验地图上；若打点后无路径，检查 `map→odom`、`/ego/visualization/global_path`、`/ego/visualization/optimal_path` 的消息及 `/ego/planning/bspline` 是否在规划成功后发布：
 
 ```bash
 ros2 topic echo --once /ego/visualization/global_path --qos-durability transient_local

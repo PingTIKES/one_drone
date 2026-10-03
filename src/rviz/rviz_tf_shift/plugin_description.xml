@@ -1,0 +1,13 @@
+<!-- rviz中panel名称，与工作空间名称一致 -->
+<library path="rviz_tf_shift">
+    <!-- 定义库中的类 -->
+
+   <class name="tf_shift_panel/Rviz2Panel"
+          type="tf_shift_panel::Rviz2Panel"
+          base_class_type="rviz_common::Panel">
+      <!-- 类的描述 -->
+     <description>
+       Rviz2 Panel
+     </description>
+   </class>
+  </library>

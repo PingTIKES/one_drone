@@ -202,6 +202,13 @@ ros2 topic hz /ego/position_cmd
 ros2 topic echo /flight_safety_status --qos-durability transient_local
 ```
 
+RViz 默认以 `odom` 为 Fixed Frame，`EGOGlobalPath`（青色）和 `EGOOptimalPath`（红色）分别显示全局参考路径与局部优化控制点连线。两者是 Marker 话题；若打点后仍无路径，检查 `/ego/visualization/global_path`、`/ego/visualization/optimal_path` 的消息及 `header.frame_id`，并确认 `/ego/planning/bspline` 是否在规划成功后发布：
+
+```bash
+ros2 topic echo --once /ego/visualization/global_path --qos-durability transient_local
+ros2 topic echo --once /ego/visualization/optimal_path --qos-durability transient_local
+```
+
 任务结束主动降落：
 
 ```bash

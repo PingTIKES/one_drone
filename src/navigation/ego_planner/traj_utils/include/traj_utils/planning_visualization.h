@@ -34,10 +34,11 @@ namespace ego_planner
       : node_(node)
     {
       // 初始化发布者，调整消息类型和队列大小
-      goal_point_pub = node_->create_publisher<visualization_msgs::msg::Marker>("goal_point", 2);
-      global_list_pub = node_->create_publisher<visualization_msgs::msg::Marker>("global_list", 2);
+      const auto path_qos = rclcpp::QoS(10).reliable().transient_local();
+      goal_point_pub = node_->create_publisher<visualization_msgs::msg::Marker>("goal_point", path_qos);
+      global_list_pub = node_->create_publisher<visualization_msgs::msg::Marker>("global_list", path_qos);
       init_list_pub = node_->create_publisher<visualization_msgs::msg::Marker>("init_list", 2);
-      optimal_list_pub = node_->create_publisher<visualization_msgs::msg::Marker>("optimal_list", 2);
+      optimal_list_pub = node_->create_publisher<visualization_msgs::msg::Marker>("optimal_list", path_qos);
       a_star_list_pub = node_->create_publisher<visualization_msgs::msg::Marker>("a_star_list", 20);
     }
 
@@ -50,6 +51,7 @@ namespace ego_planner
     void generateArrowDisplayArray(visualization_msgs::msg::MarkerArray &array,
                                    const std::vector<Eigen::Vector3d> &list, double scale, Eigen::Vector4d color, int id);
     void displayGoalPoint(Eigen::Vector3d goal_point, Eigen::Vector4d color, const double scale, int id);
+    void clearPaths();
     void displayGlobalPathList(std::vector<Eigen::Vector3d> global_pts, const double scale, int id);
     void displayInitPathList(std::vector<Eigen::Vector3d> init_pts, const double scale, int id);
     void displayMultiInitPathList(std::vector<std::vector<Eigen::Vector3d>> init_trajs, const double scale);

@@ -11,8 +11,8 @@ namespace ego_planner
                                                 Eigen::Vector4d color, int id, bool show_sphere /* = true */)
   {
     visualization_msgs::msg::Marker sphere, line_strip;
-    sphere.header.frame_id = line_strip.header.frame_id = "world";
-    sphere.header.stamp = line_strip.header.stamp = rclcpp::Clock().now();
+    sphere.header.frame_id = line_strip.header.frame_id = "odom";
+    sphere.header.stamp = line_strip.header.stamp = node_->now();
     sphere.type = visualization_msgs::msg::Marker::SPHERE_LIST;
     line_strip.type = visualization_msgs::msg::Marker::LINE_STRIP;
     sphere.action = line_strip.action = visualization_msgs::msg::Marker::ADD;
@@ -46,8 +46,8 @@ namespace ego_planner
                                                        const vector<Eigen::Vector3d> &list, double scale, Eigen::Vector4d color, int id)
   {
     visualization_msgs::msg::Marker sphere, line_strip;
-    sphere.header.frame_id = line_strip.header.frame_id = "map";
-    sphere.header.stamp = line_strip.header.stamp = rclcpp::Clock().now();
+    sphere.header.frame_id = line_strip.header.frame_id = "odom";
+    sphere.header.stamp = line_strip.header.stamp = node_->now();
     sphere.type = visualization_msgs::msg::Marker::SPHERE_LIST;
     line_strip.type = visualization_msgs::msg::Marker::LINE_STRIP;
     sphere.action = line_strip.action = visualization_msgs::msg::Marker::ADD;
@@ -81,8 +81,8 @@ namespace ego_planner
                                                         const vector<Eigen::Vector3d> &list, double scale, Eigen::Vector4d color, int id)
   {
     visualization_msgs::msg::Marker arrow;
-    arrow.header.frame_id = "map";
-    arrow.header.stamp = rclcpp::Clock().now();
+    arrow.header.frame_id = "odom";
+    arrow.header.stamp = node_->now();
     arrow.type = visualization_msgs::msg::Marker::ARROW;
     arrow.action = visualization_msgs::msg::Marker::ADD;
 
@@ -122,8 +122,8 @@ namespace ego_planner
   void PlanningVisualization::displayGoalPoint(Eigen::Vector3d goal_point, Eigen::Vector4d color, const double scale, int id)
   {
     visualization_msgs::msg::Marker sphere;
-    sphere.header.frame_id = "world";
-    sphere.header.stamp = rclcpp::Clock().now();
+    sphere.header.frame_id = "odom";
+    sphere.header.stamp = node_->now();
     sphere.type = visualization_msgs::msg::Marker::SPHERE;
     sphere.action = visualization_msgs::msg::Marker::ADD;
     sphere.id = id;
@@ -143,13 +143,21 @@ namespace ego_planner
     goal_point_pub->publish(sphere);
   }
 
+  void PlanningVisualization::clearPaths()
+  {
+    visualization_msgs::msg::Marker clear;
+    clear.header.frame_id = "odom";
+    clear.header.stamp = node_->now();
+    clear.action = visualization_msgs::msg::Marker::DELETEALL;
+    goal_point_pub->publish(clear);
+    global_list_pub->publish(clear);
+    init_list_pub->publish(clear);
+    optimal_list_pub->publish(clear);
+    a_star_list_pub->publish(clear);
+  }
+
   void PlanningVisualization::displayGlobalPathList(vector<Eigen::Vector3d> init_pts, const double scale, int id)
   {
-
-    if (global_list_pub->get_subscription_count() == 0)
-    {
-      return;
-    }
 
     Eigen::Vector4d color(0, 0.5, 0.5, 1);
     displayMarkerList(global_list_pub, init_pts, scale, color, id);
@@ -197,11 +205,6 @@ namespace ego_planner
 
   void PlanningVisualization::displayOptimalList(Eigen::MatrixXd optimal_pts, int id)
   {
-
-    if (optimal_list_pub->get_subscription_count() == 0)
-    {
-      return;
-    }
 
     vector<Eigen::Vector3d> list;
     for (int i = 0; i < optimal_pts.cols(); i++)

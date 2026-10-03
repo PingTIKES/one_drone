@@ -68,6 +68,7 @@ namespace ego_planner
           have_target_ = have_trigger_ = have_odom_ = false;
           have_new_target_ = false;
           planner_manager_->local_data_.duration_ = 0.0;
+          visualization_->clearPaths();
           changeFSMExecState(INIT, "VIO_RESET");
         });
 

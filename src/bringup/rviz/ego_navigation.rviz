@@ -63,7 +63,7 @@ Visualization Manager:
       Enabled: true
       Topic:
         Value: /ego/visualization/optimal_path
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         Reliability Policy: Reliable
         Depth: 10
     - Class: rviz_default_plugins/Marker
@@ -71,7 +71,7 @@ Visualization Manager:
       Enabled: true
       Topic:
         Value: /ego/visualization/global_path
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         Reliability Policy: Reliable
         Depth: 10
     - Class: rviz_default_plugins/Marker
@@ -79,7 +79,7 @@ Visualization Manager:
       Enabled: true
       Topic:
         Value: /ego/visualization/goal
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         Reliability Policy: Reliable
         Depth: 10
     - Class: rviz_default_plugins/Image

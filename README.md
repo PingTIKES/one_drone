@@ -60,6 +60,7 @@ src/
 │   ├── depth_filter/                # 深度时空滤波与小空洞填补
 │   └── obstacle_cloud/              # 调试用深度点云与自体掩膜
 ├── localization/
+│   ├── open_vins/                   # 内置 OpenVINS：ov_core、ov_init、ov_msckf、ov_eval
 │   └── vio_bridge/                  # OpenVINS 健康检查、/odom、TF、PX4 外部视觉
 ├── navigation/
 │   ├── ego_bridge/                  # /odom 与深度健康适配
@@ -77,6 +78,9 @@ EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，�
 | `stereo_depth` | 左右红外灰度图、双目标定 | `/uav1/d435i/depth/image_raw`、CameraInfo | 包内 `config/params.yaml` |
 | `depth_filter` | 软件或真机原始深度 | `/uav1/d435i/depth/image_filtered` | 包内 `config/params.yaml` |
 | `obstacle_cloud` | 滤波深度、CameraInfo、相机外参 | `/uav1/obstacles`，仅调试显示 | 包内 `config/params.yaml` |
+| `ov_core` / `ov_init` | 图像特征、IMU 和标定（内部库接口） | 跟踪结果及初始化状态 | 由 `ov_msckf` 使用同一估计器配置 |
+| `ov_msckf` | `/uav1/cam0/image_raw`、`cam1`、`imu0` | `/uav1/odomimu` 等 VIO 输出 | `vio_bridge/config/openvins_sim` 或真机标定目录 |
+| `ov_eval` | 离线轨迹及计时文件 | 误差统计和评估图表；默认启动不运行 | 各评估命令参数 |
 | `vio_bridge` | `/uav1/odomimu`、双目图像、IMU | `/odom`、`odom→base_link`、`/vio_health`、`/vio_diagnostics`、PX4 外部视觉 | 包内 `config/params.yaml` |
 | `ego_bridge` | `/odom`、深度图 | `/ego/odom`、`/ego/depth_fresh` | 包内 `config/params.yaml` |
 | `ego_planner` | `/ego/odom`、深度、CameraInfo、`/ego/goal` | 三维占用、B-spline、可视化 Marker | `bringup/params/ego_params.yaml` |
@@ -125,13 +129,15 @@ bash setup_env.sh sim       # 仿真机
 # 或 bash setup_env.sh onboard
 ```
 
-脚本固定并校验 MicoAir PX4 1.14.3、`px4_msgs` release/1.14 和 OpenVINS 版本，安装 PCL、Eigen、cv_bridge 和 CycloneDDS，然后构建工作区。已有仓库不要再次 `git clone`。若 `apt` 被 `packagekitd` 占锁，等系统更新完成后重试，不要删除锁文件。
+OpenVINS 固定版本源码直接随仓库提供，来源及补丁见 `src/localization/open_vins/UPSTREAM.md`。脚本固定并校验外部 MicoAir PX4 1.14.3 和 `px4_msgs` release/1.14，安装 Ceres、OpenCV、Boost、PCL、Eigen、cv_bridge 和 CycloneDDS，然后在本项目一次构建全部功能包。仿真 PX4 仍放在外部 `~/PX4-Autopilot-1.14.3`（可用 `PX4_DIR` 指定）；onboard 模式不下载或编译 PX4。已有仓库不要再次 `git clone`。若 `apt` 被 `packagekitd` 占锁，等系统更新完成后重试，不要删除锁文件。
 
 日常修改 YAML、launch 或 Python 后执行：
 
 ```bash
 cd ~/one_drone
+source /opt/ros/humble/setup.bash
 colcon build --symlink-install
+source install/setup.bash
 ```
 
 ## 仿真流程
@@ -154,7 +160,6 @@ bash scripts/start_algorithm_sim.sh
 ```bash
 cd ~/one_drone
 source /opt/ros/humble/setup.bash
-source ~/catkin_ws_ov/install/setup.bash
 source ~/one_drone/install/setup.bash
 source /tmp/one_drone_gz_env.sh
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
@@ -238,7 +243,6 @@ python3 tools/import_kalibr.py \
 ```bash
 cd ~/one_drone
 source /opt/ros/humble/setup.bash
-source ~/catkin_ws_ov/install/setup.bash
 source ~/one_drone/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
@@ -357,3 +361,25 @@ ROS_DOMAIN_ID=83 PYTHONNOUSERSITE=1 python3 tests/integration_depth_reset.py
 ```bash
 ROS_DOMAIN_ID=84 PYTHONNOUSERSITE=1 python3 tests/integration_sim_clock.py
 ```
+
+
+## 内置 OpenVINS 与旧工作区迁移
+
+项目内包含 `ov_core`（特征跟踪和基础算法）、`ov_init`（静态/动态初始化）、`ov_msckf`（视觉惯性估计和 ROS 节点）、`ov_eval`（离线评估工具）。上游示例数据包 `ov_data` 不参与本项目运行，未引入。源码保留原许可证。
+
+项目启动仍读取 `vio_bridge/config/openvins_sim` 或真机 `calibration_dir`；不需要修改 OpenVINS 上游示例配置。安装脚本不再下载或修改外部 OpenVINS 工作区，静态初始化补丁已纳入源码。
+
+从旧版本升级请打开新终端，只 source ROS Humble，然后构建，避免继承旧的 OpenVINS overlay。也请移除个人 shell 启动文件中旧 VIO 工作区的自动 source 行。
+
+```bash
+cd ~/one_drone
+git pull --ff-only
+source /opt/ros/humble/setup.bash
+# 初次迁移清理 CMake 缓存，避免旧依赖路径；限制并发降低内存峰值
+MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --executor sequential --cmake-clean-cache
+source install/setup.bash
+ros2 pkg prefix ov_msckf
+# 应指向 ~/one_drone/install/ov_msckf
+```
+
+如果缺少系统依赖，先运行 `bash setup_env.sh sim` 或 `bash setup_env.sh onboard`。安装脚本默认串行构建包、每个包使用 2 个编译任务；资源允许时可设 `BUILD_JOBS=4`。日常源码、参数和 launch 修改仍使用项目根目录的 `colcon build --symlink-install`。旧外部 VIO 工作区可以保留备份，本项目不再依赖它。`startup.launch.py` 启动时会检查 `bringup` 与 `ov_msckf` 是否解析到同一个安装工作区，避免加载旧工作区的估计器。

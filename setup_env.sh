@@ -10,10 +10,9 @@ if [[ "$MODE" != sim && "$MODE" != onboard ]]; then
 fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot-1.14.3}"
-OV_WS="${OV_WS:-$HOME/catkin_ws_ov}"
+OPENVINS_DIR="$ROOT_DIR/src/localization/open_vins"
 PX4_COMMIT=08310a5e8ac64d02edb41523460e7dc267298deb
 PX4_MSGS_COMMIT=ffb6e80e1c17e5714395611a020c282a87af8fa4
-OPENVINS_COMMIT=69488123ed9362dd44b6f28e7f4680abbff1442b
 
 if [[ ! -f /opt/ros/humble/setup.bash ]]; then
     echo 'Install ROS 2 Humble before running setup_env.sh.' >&2
@@ -26,17 +25,14 @@ set -u
 
 sudo apt update
 sudo apt install -y python3-colcon-common-extensions python3-rosdep python3-numpy python3-pil \
-    python3-yaml python3-opencv python3-pip git curl build-essential cmake \
+    python3-yaml python3-opencv python3-pip python3-dev python3-matplotlib git curl build-essential cmake \
     ros-humble-cv-bridge ros-humble-rmw-cyclonedds-cpp ros-humble-pcl-conversions \
-    libpcl-dev libeigen3-dev
+    libpcl-dev libeigen3-dev libceres-dev libboost-all-dev libopencv-dev libopencv-contrib-dev \
+    ros-humble-image-transport ros-humble-tf2-geometry-msgs
 
-if [[ ! -d "$OV_WS/src/open_vins/.git" ]]; then
-    mkdir -p "$OV_WS/src"
-    git clone https://github.com/rpng/open_vins.git "$OV_WS/src/open_vins"
-    git -C "$OV_WS/src/open_vins" checkout "$OPENVINS_COMMIT"
-fi
-if [[ "$(git -C "$OV_WS/src/open_vins" rev-parse HEAD)" != "$OPENVINS_COMMIT" ]]; then
-    echo "OpenVINS must be the tested commit $OPENVINS_COMMIT." >&2
+# OpenVINS is versioned with this repository and built in the same workspace.
+if [[ ! -f "$OPENVINS_DIR/ov_msckf/src/core/VioManager.h" ]]; then
+    echo "Bundled OpenVINS source is missing: $OPENVINS_DIR" >&2
     exit 1
 fi
 
@@ -97,19 +93,22 @@ if [[ "$MODE" == sim ]]; then
         exit 1
     fi
     python3 "$ROOT_DIR/tools/prepare_algorithm_sim.py" \
-        --px4 "$PX4_DIR" --openvins "$OV_WS/src/open_vins"
+        --px4 "$PX4_DIR"
     (cd "$PX4_DIR" && bash Tools/setup/ubuntu.sh --no-nuttx && DONT_RUN=1 make px4_sitl_default)
 else
     sudo apt install -y ros-humble-realsense2-camera
-    python3 "$ROOT_DIR/tools/prepare_algorithm_sim.py" --openvins "$OV_WS/src/open_vins"
+    python3 "$ROOT_DIR/tools/prepare_algorithm_sim.py"
 fi
 
 rosdep install --from-paths "$ROOT_DIR/src" --ignore-src -r -y
-(cd "$OV_WS" && colcon build --packages-select ov_core ov_init ov_msckf ov_eval)
-set +u
-source "$OV_WS/install/setup.bash"
-set -u
-(cd "$ROOT_DIR" && colcon build --symlink-install)
+# Rebuild against the bundled source, without retaining an old OpenVINS overlay.
+# Run colcon in a clean environment so install/setup.* records only ROS Humble.
+env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="/usr/local/bin:/usr/bin:/bin" \
+    LANG="${LANG:-C.UTF-8}" PYTHONNOUSERSITE=1 ROOT_DIR="$ROOT_DIR" \
+    MAKEFLAGS="-j${BUILD_JOBS:-2}" CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_JOBS:-2}" \
+    bash --noprofile --norc -c 'source /opt/ros/humble/setup.bash
+        cd "$ROOT_DIR"
+        colcon build --symlink-install --executor sequential --cmake-clean-cache'
 
 echo "Ready: one_drone PX4 1.14.3 workspace ($MODE)."
-echo "Source $OV_WS/install/setup.bash and $ROOT_DIR/install/setup.bash in each terminal."
+echo "Source $ROOT_DIR/install/setup.bash in each terminal."

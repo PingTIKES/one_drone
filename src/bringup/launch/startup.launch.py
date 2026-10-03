@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import numpy as np
 import yaml
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
@@ -54,6 +54,12 @@ def setup(context):
         raise ValueError('hardware needs explicit measured camera, IMU and depth topics')
     target_system = int(arg('target_system') or '2')
     px4_ns = arg('px4_ns') or ('px4_1' if sim else '/')
+    bringup_prefix = Path(get_package_prefix('bringup')).resolve()
+    ov_prefix = Path(get_package_prefix('ov_msckf')).resolve()
+    if ov_prefix.parent != bringup_prefix.parent:
+        raise RuntimeError(
+            f'OpenVINS resolves outside this workspace: {ov_prefix}; '
+            'source one_drone/install/setup.bash after any old ROS overlays')
     bringup = Path(get_package_share_directory('bringup'))
     process_config = yaml.safe_load((bringup / 'params/launch.yaml').read_text())['ego_planner']
     if float(process_config['respawn_delay']) < 0:

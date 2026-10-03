@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply checked OpenVINS and optional MicoAir PX4 1.14.3 SITL patches."""
+"""Verify bundled OpenVINS and apply optional MicoAir PX4 1.14.3 SITL patches."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -21,7 +21,6 @@ def write_checked(path,old,new,marker,equivalent=None):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--px4',help='MicoAir PX4 1.14.3 source; omit on an onboard computer')
-    p.add_argument('--openvins',required=True)
     a=p.parse_args()
     if a.px4:
         px4=Path(a.px4).resolve()
@@ -65,12 +64,11 @@ if [ "$RM27_SIM_CLOCK" = "1" ]; then
 fi
 '''
             rc.write_text(text,encoding='utf-8',newline='\n')
-    header=Path(a.openvins)/'ov_msckf/src/core/VioManager.h'
-    old='bool initialized() { return is_initialized_vio && timelastupdate != -1; }'
-    new='bool initialized() { return is_initialized_vio; } // RM27_STATIC_VIO: publish after successful static initialization'
-    write_checked(header,old,new,'RM27_STATIC_VIO',
-                  equivalent='bool initialized() { return is_initialized_vio; }')
-    print('Patched source with .rm27-backup copies. Rebuild the patched dependencies before running.')
+    header=Path(__file__).resolve().parents[1]/'src/localization/open_vins/ov_msckf/src/core/VioManager.h'
+    if not header.is_file() or 'RM27_STATIC_VIO' not in header.read_text(encoding='utf-8'):
+        raise RuntimeError('bundled OpenVINS source/static initialization patch is missing')
+    print('Bundled OpenVINS verified. Rebuild this workspace; rebuild PX4 if patched.')
+
 
 
 if __name__=='__main__':main()

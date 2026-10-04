@@ -13,6 +13,9 @@ flight_bridge:
     yaw_reverse_limit_deg: 150.0 # 超过此方向偏差停止平移（度）
     yaw_min_speed_scale: 0.25 # 大角度转向时的最小平移速度比例（0～1）
     yaw_rate_gain: 0.8 # 方向误差转角速度的比例增益（1/s）
+    camera_hfov_deg: 87.0 # 前视双目水平视角（度）；仿真 D435i 约 87 度，真机按标定值改
+    yaw_lookahead_time: 0.3 # 用轨迹速度+加速度预测前方航向的时间（s）
+    yaw_outside_fov_speed_scale: 0.25 # 预测运动方向超出前视视角时的水平速度上限比例
     arrival_position_deadband: 0.15 # 到点水平位置死区（m），同时满足速度条件才生效
     arrival_velocity_deadband: 0.10 # 到点轨迹水平速度阈值（m/s）
     arrival_exit_scale: 1.5 # 到点死区退出阈值倍率；大于 1 可防止边界抖动
@@ -34,3 +37,8 @@ flight_bridge:
     takeoff_stable_time: 1.0 # 进入巡航前需持续满足起飞误差的时间（s）
     planner_heartbeat_timeout: 0.75 # 规划器心跳最大真实时间间隔（s），失联进入 HOLD
     map_timeout: 0.75 # 最近成功融合的深度源时间戳最大年龄（s）
+    trajectory_max_sample_age: 0.5 # 接收 EGO 轨迹样本时允许的最大 ROS 时间戳年龄（s）
+    trajectory_max_future_stamp: 0.1 # 轨迹样本相对本机 ROS 时间最多可超前的秒数
+    trajectory_max_planned_speed: 8.0 # 拒绝明显异常的 EGO 水平速度（m/s），独立于飞控速度限幅
+    trajectory_max_planned_acceleration: 12.0 # 拒绝明显异常的 EGO 水平加速度（m/s²）
+    trajectory_max_tracking_error: 5.0 # 样本位置与当前 odom 相差超过此值时拒绝（m）

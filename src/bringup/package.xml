@@ -21,6 +21,7 @@
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>flight_bridge</exec_depend>
+  <exec_depend>flight_interfaces</exec_depend>
   <exec_depend>ego_bridge</exec_depend>
   <exec_depend>ego_planner</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>

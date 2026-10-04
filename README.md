@@ -27,8 +27,10 @@
           └─ /ego/planning/bspline
               └─ traj_server
                   └─ /ego/position_cmd
-                      └─ flight_bridge
-                          └─ PX4 Offboard 速度和偏航角速度设定值
+                      └─ trajectory_validator → trajectory_controller
+                          └─ yaw_manager → flight_supervisor
+                              └─ FlightSetpoint → px4_adapter
+                                  └─ PX4 Offboard 速度和偏航角速度设定值
 
 RViz 2D Goal Pose
   └─ /navigation_goal（map）
@@ -38,13 +40,13 @@ RViz 2D Goal Pose
 
 TF 链为 `map→odom→base_link`：modify 节点按配置和 RViz 面板调整发布 `map→odom`，OpenVINS 发布 `odom→base_link`。先验 PGM 在 `map` 下显示，RViz 以 `map` 为 Fixed Frame，打点在 `map` 下；`goal_manager` 把目标变换到 `odom`，EGO 仍在 `odom` 下规划与控制。手动对齐不会触发起飞门控，但打点位置是否正确取决于当前 `map→odom`。EGO 的局部地图只由实际深度观测生成，未知区域不直接写成障碍；PGM **不参与** EGO 碰撞检测。
 
-`flight_bridge` 执行
+`trajectory_controller` 执行
 
 ```text
 v_cmd = v_ego + Kp × (p_ego - p_actual)
 ```
 
-并把 odom 世界系速度转换到机体系和 PX4 NED。EGO 的 XYZ B-spline 与 yaw 已解耦，`flight_bridge` 单独执行感知航向策略：目标方向在机头 ±30° 内保持当前 yaw 并允许横移；30°–100° 边平移边缓慢转向；100°–150° 保留 25% 平移速度并继续对齐；只有接近正后方、超过 150° 时才停止平移，避免前视相机不可见区域内的后退盲飞。最大偏航角速度默认为 0.35 rad/s。到点时，水平位置误差不超过 0.15 m 且 EGO 水平速度不超过 0.10 m/s 会进入 `ARRIVAL_HOLD`，水平速度和 yaw 角速度归零；退出阈值为进入阈值的 1.5 倍，避免 VIO 微小抖动反复触发旋转。
+`yaw_manager` 根据当前速度和未来 0.3 秒的轨迹加速度调整航向；运动方向超出相机约 87° 的水平视角时，将平移速度比例限制到 25%，并继续缓慢转向。原有 ±30° 航向保持、100° 大角度限速、150° 后方停止平移及到点 `ARRIVAL_HOLD` 仍保留。`trajectory_validator` 拒绝帧、时间戳、非有限数值、速度、加速度或跟踪误差异常的样本。`flight_supervisor` 决定起飞、HOLD 与恢复；`px4_adapter` 是唯一 PX4 指令发布者，负责转换到 PX4 NED 和发布 `FlightSetpoint` 审计话题。以上为同一进程内的模块，避免多个节点同时争夺 Offboard。当前 yaw 已使用相机 FOV、轨迹前瞻和 VIO 健康状态；尚未建立“已观测区域”的方向模型或 FUEL Frontier 层，不能把这版称作完整 FUEL 主动感知。
 
 ## 目录与功能包
 
@@ -69,7 +71,8 @@ src/
 │   ├── ego_planner/                 # EGO-Swarm ROS 2 单机规划核心
 │   └── goal_manager/                # RViz 目标门控与 /ego/goal 发布
 ├── control/
-│   └── flight_bridge/               # PositionCommand 到 PX4 Offboard
+│   ├── flight_interfaces/           # FlightSetpoint、SystemStatus 消息
+│   └── flight_bridge/               # 控制、安全与 PX4 适配模块，单一 Offboard 发布者
 └── rviz/
     ├── modify_map_to_odom/          # 可调 map→odom TF 发布
     └── rviz_tf_shift/               # RViz 手动平移/旋转面板
@@ -92,7 +95,8 @@ EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，�
 | `modify_map_to_odom` | 配置中的 X/Y/Rotation、RViz 面板调整 | TF `map→odom` | 包内 `config/config.yaml` |
 | `nav2_map_server` | `bringup/map` 中选定的 YAML/PGM | `/map`，只供显示与打点 | `bringup/params/global_config.yaml` |
 | `goal_manager` | `map` 或 `odom` 下的 `/navigation_goal`、TF、VIO、深度、飞行状态 | `odom` 下的 `/ego/goal`、`/navigation_state` | 包内 `config/params.yaml` |
-| `flight_bridge` | `/ego/position_cmd`、`/ego/odom`、PX4 状态 | PX4 Offboard 设定值、飞行状态与安全状态 | 包内 `config/params.yaml` |
+| `flight_interfaces` | 控制链内部命令、飞行与传感器状态 | `FlightSetpoint`、`SystemStatus` ROS 2 消息定义 | 无运行参数 |
+| `flight_bridge` | `/ego/position_cmd`、`/ego/odom`、PX4 状态 | PX4 Offboard 设定值、`/flight_setpoint`、`/system_status` 及原有状态话题 | 包内 `config/params.yaml` |
 
 ## 关键参数
 

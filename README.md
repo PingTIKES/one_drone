@@ -21,7 +21,7 @@
 
 双目深度图
   └─ depth_filter（空间去噪、时间滤波、小空洞填补）
-      └─ CameraInfo + T_body_depth + /ego/odom
+      └─ CameraInfo + 相机安装外参 + /ego/odom
           └─ EGO GridMap（三维占用栅格和膨胀）
       └─ B-spline 局部规划器
           └─ /ego/planning/bspline
@@ -121,7 +121,7 @@ EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，�
 
 先完成 0.5 m/s 的避障和 VIO 稳定验证，再提高到 1.0 m/s。达到 3 m/s 前必须实测深度有效距离、端到端延迟、制动距离、转弯半径和 RK3566 规划耗时；不能只修改速度数值。
 
-GridMap 不再使用上游硬编码相机安装关系。`startup.launch.py` 从仿真模型或真机 `body.yaml` 取得 `T_body_depth`，并传入 `grid_map/cam2body`；内参由对应深度 `CameraInfo` 动态更新。深度与里程计采用近似时间同步。
+GridMap 不再使用上游硬编码相机安装关系。软件双目模式从双目标定和 `T_body_imu` 推导深度相机外参；硬件深度模式从真机 `body.yaml` 读取 `T_body_depth`。启动文件将外参传入 `grid_map/cam2body`；深度内参由对应的 `CameraInfo` 动态更新。深度与里程计采用近似时间同步。
 
 第一阶段 VIO 可靠性增强不修改 OpenVINS 核心。`vio_bridge` 从相同的左右目输入低频统计可跟踪角点，同时检查图像、IMU、里程计新鲜度，位置/姿态/速度协方差、速度变化率和角速度。`/vio_diagnostics` 以 JSON 给出 `quality`、`confidence`、`feature_count`、协方差、数据年龄与降级原因。状态处理为：
 
@@ -237,48 +237,140 @@ ros2 service call /land std_srvs/srv/Trigger '{}'
 ### 1. 机械安装和标定
 
 - D435i 刚性安装在机头正前方，左右红外和深度视野不得被桨叶、保护架或线束遮挡。
-- 标定左右红外内参、双目外参、相机与 IMU 的时间偏差和外参。
+- 以实际运行的相机图像流标定左右红外内参、有效畸变、双目外参；随后用**相同分辨率、格式、图像话题及左右顺序**标定相机与 IMU 的时间偏差和外参。
 - 测量 `T_body_imu` 与 `T_body_depth`，定义为 **body FLU ← sensor** 的 4×4 变换。
 - 采集静止、平移和多方向转动数据，检查重投影误差、尺度、时间戳单调性和 IMU 噪声参数。
 
-导入 Kalibr 结果：
+#### D435i 左右目内参、畸变与双目外参
+
+当前实测设备为 D435i，序列号 `135122071701`。本轮选择两路 `640×480 Y8 @ 30 Hz`；ROS 驱动实际发布 `/camera/camera/infra1/image_rect_raw`、`/camera/camera/infra2/image_rect_raw`，均为 `mono8`。Y8 红外图像已由 RealSense 校正，因此 Kalibr 求得的是**该运行图像流的有效内参和剩余畸变**，不是镜头未校正原始像素的物理畸变。不要把旧的 `640×400 Y16` 标定用于这一路图像，也不要仅凭 `CameraInfo` 的零畸变替代本次结果。左右目顺序固定为 `infra1 → cam0`、`infra2 → cam1`；项目内部的 `/uav1/cam0/image_raw`、`/uav1/cam1/image_raw` 只是 `camera_stream` 的转发话题名，**不表示驱动输入必须叫 `image_raw`**。
+
+关闭 RealSense Viewer，在独立终端启动相机；标定及以后真机运行均保持相同的左右目分辨率、格式和左右顺序：
+
+```bash
+source /opt/ros/humble/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 launch realsense2_camera rs_launch.py \
+  enable_depth:=false enable_color:=false \
+  enable_infra1:=true enable_infra2:=true \
+  depth_module.infra_profile:=640x480x30 \
+  depth_module.infra1_format:=Y8 depth_module.infra2_format:=Y8 \
+  enable_gyro:=false enable_accel:=false
+```
+
+在另一终端关闭发射器，并检查两路图像、分辨率和实际频率。`image_rect_raw` 是本机已验证的话题；本轮没有 `/camera/camera/infra1/image_raw` 或 `/camera/camera/infra2/image_raw`：
+
+```bash
+source /opt/ros/humble/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 param set /camera/camera depth_module.emitter_enabled 0
+ros2 topic echo --once /camera/camera/infra1/camera_info
+ros2 topic echo --once /camera/camera/infra2/camera_info
+ros2 topic hz /camera/camera/infra1/image_rect_raw
+ros2 topic hz /camera/camera/infra2/image_rect_raw
+```
+
+本轮使用的实体标定板为 `6×6 AprilGrid`，单个 tag 黑边宽 `35 mm`、相邻黑边间距 `10 mm`；必须以**打印件实测尺寸**为准。建标定板文件，固定相机、缓慢移动标定板，使其覆盖画面中央、边缘、四角及不同距离和倾角，同时保持左右目清晰：
+
+```bash
+mkdir -p ~/kalibr_config ~/kalibr_bags
+cat > ~/kalibr_config/target.yaml <<'EOF'
+target_type: 'aprilgrid'
+tagCols: 6
+tagRows: 6
+tagSize: 0.035
+tagSpacing: 0.2857
+EOF
+ros2 bag record -o ~/kalibr_bags/stereo_d435i_640x480_y8_rect \
+  /camera/camera/infra1/image_rect_raw \
+  /camera/camera/infra2/image_rect_raw
+```
+
+本轮包时长 `190.9 s`，左/右目分别 `5727/5728` 帧，平均约 `30 Hz`。结束录包后先用 `ros2 bag info ~/kalibr_bags/stereo_d435i_640x480_y8_rect` 确认两路帧数，再转换并运行 Kalibr：
+
+```bash
+rosbags-convert \
+  --src ~/kalibr_bags/stereo_d435i_640x480_y8_rect \
+  --dst ~/kalibr_bags/stereo_d435i_640x480_y8_rect_ros1.bag \
+  --src-typestore ros2_humble --dst-typestore ros1_noetic
+docker run -it --rm \
+  -v ~/kalibr_bags:/data/bags \
+  -v ~/kalibr_config:/data/config \
+  kalibr:latest
+```
+
+在 Kalibr 容器内：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /catkin_ws/devel/setup.bash
+cd /data/bags
+rosrun kalibr kalibr_calibrate_cameras \
+  --bag stereo_d435i_640x480_y8_rect_ros1.bag \
+  --topics /camera/camera/infra1/image_rect_raw /camera/camera/infra2/image_rect_raw \
+  --models pinhole-radtan pinhole-radtan \
+  --target /data/config/target.yaml --bag-freq 4.0 --dont-show-report
+```
+
+只有检查了生成的 `camchain*.yaml`、`results*.txt` 和报告后，才能把 camera-only 的结果用于下一阶段。重点检查左右重投影误差、主点是否在 `640×480` 画面内、双目基线是否接近设备约 `50 mm`、畸变是否与已校正图像相符；若某项异常，应检查图像模式、标定板实测尺寸和画面覆盖，不要手动缩放内参。本步骤**不生成** OpenVINS 所需的相机–IMU 外参或时间偏移。
+
+本轮产物为 `~/kalibr_bags/stereo_d435i_640x480_y8_rect_ros1-camchain.yaml`。cam0/cam1 焦距约 `386.6/387.0 px`，主点约 `(321.3, 235.6)/(320.1, 235.6) px`；基线 `50.17 mm`。报告的重投影误差 X/Y 标准差分别约 `0.409/0.313 px` 和 `0.435/0.321 px`，角点分布覆盖画面大部分区域。两路拟合的 `k1` 约 `0.019/0.016`，属于已校正图像流的**剩余畸变拟合**；不要把它解释为镜头原始畸变。以上结果可用于下一阶段，但仍需同图像模式的相机–IMU 标定和无桨运动验证。
+
+下一阶段必须在**同一 `640×480 Y8 image_rect_raw` 双目模式**下启用组合 IMU，标定 IMU 噪声、相机–IMU 外参和时间偏移，并核对 `T_body_imu` 的坐标轴。使用硬件深度还须测得 `T_body_depth`；`tools/import_kalibr.py` 不会凭空生成它。完整标定完成后再导入 Kalibr 结果：
 
 ```bash
 python3 tools/import_kalibr.py \
   --camchain /path/to/camchain-imucam.yaml \
   --imu /path/to/imu.yaml \
   --body /path/to/body.yaml \
-  --output ~/one_drone_calibration
+  --output ~/one_drone/deploy/calibration/uav1
 ```
 
-改变分辨率、镜头相对位置或相机设备后必须重标定。仿真标定不能用于真机。
+启动文件在真机模式读取该目录中的 `estimator_config.yaml`、`kalibr_imucam_chain.yaml`、`kalibr_imu_chain.yaml` 和 `body.yaml`。改变分辨率、镜头相对位置或相机设备后必须重标定；若仅改变整机安装位置，还需更新机体外参。仿真标定不能用于真机。
 
 ### 2. PX4 和传感器检查
 
 - 在 QGroundControl 中确认机型、飞控朝向、传感器标定、遥控接管、急停、电池和失控保护。
 - 配置 PX4 EKF2 融合外部视觉，确认实际 `MAV_SYS_ID` 和 uXRCE DDS 名称空间。
-- 启动 D435i 左右红外、深度、陀螺仪与加速度计，确认组合 IMU 与图像使用同一时基。
+- 启动 D435i 的 `640×480 Y8 @ 30 Hz` 左右红外、深度、陀螺仪与加速度计；关闭红外发射器，使用 `unite_imu_method:=2` 的组合 IMU，并确认图像与 IMU 时间戳连续且同步。深度流另设为设备支持的运行档位。
 - 无桨状态下验证 PX4 能收到 `vehicle_visual_odometry`，移动机体时 `/ego/odom`、RViz 与实物方向一致。
 
 ### 3. 启动真机算法
+
+真机运行时先在独立终端启动 RealSense 驱动。以下为与本轮图像标定一致的左右目模式，同时打开硬件深度和组合 IMU；这套完整并发配置仍须在无桨台架上检查帧率和时间戳：
+
+```bash
+source /opt/ros/humble/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 launch realsense2_camera rs_launch.py \
+  enable_color:=false enable_depth:=true \
+  depth_module.depth_profile:=640x480x30 \
+  enable_infra1:=true enable_infra2:=true \
+  depth_module.infra_profile:=640x480x30 \
+  depth_module.infra1_format:=Y8 depth_module.infra2_format:=Y8 \
+  enable_gyro:=true enable_accel:=true \
+  gyro_fps:=200 accel_fps:=63 unite_imu_method:=2
+```
+
+另开终端执行 `ros2 param set /camera/camera depth_module.emitter_enabled 0`，并核对 `/camera/camera/imu`、`/camera/camera/depth/image_rect_raw`、`/camera/camera/depth/camera_info` 均在持续发布；相机–IMU 联合标定阶段只需双红外与组合 IMU，硬件深度可先关闭以减少带宽。
 
 ```bash
 cd ~/one_drone
 source /opt/ros/humble/setup.bash
 source ~/one_drone/install/setup.bash
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
   sim:=false rviz:=true depth_source:=hardware \
-  calibration_dir:=/home/ubuntu22/one_drone_calibration \
+  calibration_dir:=/home/ubuntu22/one_drone/deploy/calibration/uav1 \
   target_system:=1 px4_ns:=/ \
-  cam0_topic:=/actual/right/infrared \
-  cam1_topic:=/actual/left/infrared \
-  imu_topic:=/actual/synchronized/imu \
-  depth_topic:=/actual/depth/image_rect_raw \
-  depth_info_topic:=/actual/depth/camera_info
+  cam0_topic:=/camera/camera/infra1/image_rect_raw \
+  cam1_topic:=/camera/camera/infra2/image_rect_raw \
+  imu_topic:=/camera/camera/imu \
+  depth_topic:=/camera/camera/depth/image_rect_raw \
+  depth_info_topic:=/camera/camera/depth/camera_info
 ```
 
-示例话题和 `target_system` 必须替换为当前设备实际值。真机深度进入 EGO GridMap，OpenVINS 仍使用左右红外灰度图和 IMU。先完成无桨台架和小范围 0.5 m/s 试飞，再逐级放开速度。
+启动算法前须确认组合 IMU `/camera/camera/imu` 和硬件深度两个话题实际存在；仅当前的双目内参录包配置关闭了 IMU 与深度，**不能直接用于真机飞行**。`target_system` 和 `px4_ns` 仍须按实际飞控核实。真机深度进入 EGO GridMap，OpenVINS 使用左右红外灰度图和 IMU。先完成无桨台架和小范围 0.5 m/s 试飞，再逐级放开速度。
 
 ## 安全状态与故障排查
 

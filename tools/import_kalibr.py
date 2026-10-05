@@ -63,7 +63,7 @@ def main():
         validate_config(staged/'estimator_config.yaml')
         shutil.copytree(staged,out)
     print('Validated:',out/'estimator_config.yaml')
-    print('Use RAW images with this calibration; independent RGB requires separate calibration.')
+    print('Use the same camera image stream, geometry, and ordering used by Kalibr; independent RGB requires separate calibration.')
 
 
 if __name__ == '__main__': main()

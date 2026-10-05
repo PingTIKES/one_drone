@@ -4,7 +4,7 @@ import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Header
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
@@ -19,6 +19,8 @@ class DepthFilterNode(Node):
                         temporal_max_delta=.4, hole_min_neighbors=5, fill_holes=False)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
+        self.declare_parameter('expected_frame_id', '')
+        self.declare_parameter('camera_info_topic', '')
         p = lambda key: self.get_parameter(key).value
         self.fill_holes = bool(p('fill_holes'))
         self.reset_stamp = -float('inf')
@@ -26,6 +28,15 @@ class DepthFilterNode(Node):
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                        reliability=ReliabilityPolicy.RELIABLE))
         self.depth_scale = float(p('depth_scale'))
+        self.expected_frame_id = str(p('expected_frame_id'))
+        self.camera_info_topic = str(p('camera_info_topic'))
+        self.info_shape = None
+        self.last_frame_warning = -float('inf')
+        if self.expected_frame_id:
+            if not self.camera_info_topic:
+                raise ValueError('camera_info_topic required when checking depth frame')
+            self.create_subscription(CameraInfo, self.camera_info_topic,
+                                     self.on_camera_info, qos_profile_sensor_data)
         self.min_range, self.max_range = float(p('min_range')), float(p('max_range'))
         if self.depth_scale <= 0 or not 0 < self.min_range < self.max_range:
             raise ValueError('invalid depth scale or range')
@@ -43,7 +54,28 @@ class DepthFilterNode(Node):
         self.filters.previous = None
         self.reset_stamp = msg.stamp.sec + msg.stamp.nanosec * 1e-9
 
+    def on_camera_info(self, msg):
+        self.info_shape = ((msg.height, msg.width)
+                           if msg.header.frame_id == self.expected_frame_id
+                           else None)
+        if self.info_shape is None:
+            self.filters.previous = None
+
+    def warn_frame(self, frame_id):
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - self.last_frame_warning >= 5:
+            self.get_logger().error(
+                f'拒绝深度图：frame_id={frame_id!r}，需要 '
+                f'{self.expected_frame_id!r} 且 CameraInfo 坐标系/尺寸匹配')
+            self.last_frame_warning = now
+
     def callback(self, msg):
+        if self.expected_frame_id and (
+                msg.header.frame_id != self.expected_frame_id or
+                self.info_shape != (msg.height, msg.width)):
+            self.filters.previous = None
+            self.warn_frame(msg.header.frame_id)
+            return
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         if stamp <= self.reset_stamp:
             return

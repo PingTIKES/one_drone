@@ -121,7 +121,7 @@ EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，�
 
 先完成 0.5 m/s 的避障和 VIO 稳定验证，再提高到 1.0 m/s。达到 3 m/s 前必须实测深度有效距离、端到端延迟、制动距离、转弯半径和 RK3566 规划耗时；不能只修改速度数值。
 
-GridMap 不再使用上游硬编码相机安装关系。软件双目模式从双目标定和 `T_body_imu` 推导深度相机外参；硬件深度模式从真机 `body.yaml` 读取 `T_body_depth`。启动文件将外参传入 `grid_map/cam2body`；深度内参由对应的 `CameraInfo` 动态更新。深度与里程计采用近似时间同步。
+GridMap 不再使用上游硬编码相机安装关系。软件双目模式从双目标定和 `T_body_imu` 推导深度相机外参；当前 D435i 的硬件深度模式从 `T_body_imu`、相机–IMU 标定推导该外参（深度光学坐标系与左红外光学坐标系重合），也可由 `body.yaml` 中显式 `T_body_depth` 覆盖。启动文件将外参传入 `grid_map/cam2body`；深度内参由对应的 `CameraInfo` 动态更新。深度与里程计采用近似时间同步。
 
 第一阶段 VIO 可靠性增强不修改 OpenVINS 核心。`vio_bridge` 从相同的左右目输入低频统计可跟踪角点，同时检查图像、IMU、里程计新鲜度，位置/姿态/速度协方差、速度变化率和角速度。`/vio_diagnostics` 以 JSON 给出 `quality`、`confidence`、`feature_count`、协方差、数据年龄与降级原因。状态处理为：
 
@@ -238,7 +238,7 @@ ros2 service call /land std_srvs/srv/Trigger '{}'
 
 - D435i 刚性安装在机头正前方，左右红外和深度视野不得被桨叶、保护架或线束遮挡。
 - 以实际运行的相机图像流标定左右红外内参、有效畸变、双目外参；随后用**相同分辨率、格式、图像话题及左右顺序**标定相机与 IMU 的时间偏差和外参。
-- 沿用当前安装的实测 `T_body_imu`，并确定 `T_body_depth`；二者定义为 **body FLU ← sensor** 的 4×4 变换。更换安装位置后重新测量。
+- 沿用当前安装的实测 `T_body_imu`，定义为 **body FLU ← IMU** 的 4×4 变换。当前 D435i 的 `T_body_depth` 会从它和相机–IMU 外参推导；更换安装位置后重新测量。其他相机或深度坐标关系不同时显式提供 `T_body_depth`。
 - 采集静止、平移和多方向转动数据，检查重投影误差、尺度、时间戳单调性和 IMU 噪声参数。
 
 #### D435i 左右目内参、畸变与双目外参
@@ -356,10 +356,9 @@ T_body_imu:
   - [-1.0,  0.0, 0.0,  0.00]
   - [ 0.0, -1.0, 0.0, -0.03]
   - [ 0.0,  0.0, 0.0,  1.00]
-T_body_depth: null
 ```
 
-将这份内容存为 `~/kalibr_config/body.yaml`。新一轮 `640×480` 相机内参和相机–IMU 标定不改变机体安装外参；但须核对实际安装未移动，并在无桨测试前确认 IMU 的 `frame_id` 与轴方向。`T_body_depth` 目前没有实测值：若启动 `depth_source:=hardware`，仍须先确定并填入它。`tools/import_kalibr.py` 不会凭空生成机体安装关系。以上检查完成后，再用**本次联合标定**输出导入，不要使用旧的 `640×400` 文件：
+将这份内容存为 `~/kalibr_config/body.yaml`。新一轮 `640×480` 相机内参和相机–IMU 标定不改变机体安装外参；但须核对实际安装未移动，并在无桨测试前确认 IMU 的 `frame_id` 与轴方向。对当前 D435i，设备 SDK 报告深度到左红外光学坐标系的变换为单位矩阵，因此真机 `depth_source:=hardware` 默认计算 `T_body_depth = T_body_imu × T_imu_cam0`；`T_imu_cam0` 来自本次 Kalibr 结果。自动推导只接受本文的左红外、深度图和深度 CameraInfo 话题组合，并检查运行时深度图及 CameraInfo 的 `camera_depth_optical_frame` 和尺寸；其他设备或对齐方式必须在 `body.yaml` 显式给出 `T_body_depth`。无桨测试仍须核对点云方向与实物障碍物一致。`tools/import_kalibr.py` 不会凭空生成机体安装关系。以上检查完成后，再用**本次联合标定**输出导入，不要使用旧的 `640×400` 文件：
 
 ```bash
 python3 tools/import_kalibr.py \
@@ -395,7 +394,7 @@ ros2 launch realsense2_camera rs_launch.py \
   gyro_fps:=200 accel_fps:=63 unite_imu_method:=2
 ```
 
-另开终端执行 `ros2 param set /camera/camera depth_module.emitter_enabled 0`，并核对 `/camera/camera/imu`、`/camera/camera/depth/image_rect_raw`、`/camera/camera/depth/camera_info` 均在持续发布；相机–IMU 联合标定阶段只需双红外与组合 IMU，硬件深度可先关闭以减少带宽。
+另开终端执行 `ros2 param set /camera/camera depth_module.emitter_enabled 0`，并核对 `/camera/camera/imu`、`/camera/camera/depth/image_rect_raw`、`/camera/camera/depth/camera_info` 均在持续发布；自动外参要求深度图与 CameraInfo 的 `header.frame_id` 均为 `camera_depth_optical_frame`。相机–IMU 联合标定阶段只需双红外与组合 IMU，硬件深度可先关闭以减少带宽。
 
 ```bash
 cd ~/one_drone

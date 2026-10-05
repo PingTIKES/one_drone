@@ -12,7 +12,8 @@ from launch_ros.actions import Node
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
 
-from vio_bridge.calibration import read_yaml, transform, validate_config, write_opencv_yaml
+from vio_bridge.calibration import (hardware_depth_transform, read_yaml,
+                                    transform, validate_config, write_opencv_yaml)
 from vio_bridge.vio_geometry import quaternion
 from stereo_depth.stereo_matcher import StereoMatcher
 
@@ -96,7 +97,8 @@ def setup(context):
     else:
         cfg_dir = Path(arg('calibration_dir'))
         config, cameras, imu = validate_config(cfg_dir / 'estimator_config.yaml')
-        t_body_imu = transform(read_yaml(cfg_dir / 'body.yaml')['T_body_imu'])
+        body = read_yaml(cfg_dir / 'body.yaml')
+        t_body_imu = transform(body['T_body_imu'])
     # Estimator tuning is read from calibration_dir/estimator_config.yaml.
     for i in range(2):
         cameras[f'cam{i}']['rostopic'] = f'/uav1/cam{i}/image_raw'
@@ -144,6 +146,7 @@ def setup(context):
                     ('cam0/image_raw', '/uav1/cam0/image_raw'),
                     ('cam1/image_raw', '/uav1/cam1/image_raw'),
                     ('imu0', '/uav1/imu0')])
+    expected_depth_frame = ''
     if mode == 'software':
         matcher = StereoMatcher(ov_config, t_body_imu)
         t_body_camera = matcher.body_optical
@@ -151,7 +154,9 @@ def setup(context):
         depth_info_topic = '/uav1/d435i/depth/camera_info'
     else:
         matcher = None
-        t_body_camera = transform(read_yaml(cfg_dir / 'body.yaml')['T_body_depth'])
+        t_body_camera, expected_depth_frame = hardware_depth_transform(
+            body, cameras, arg('cam0_topic'), arg('depth_topic'),
+            arg('depth_info_topic'))
         source_depth_topic = arg('depth_topic')
         depth_info_topic = arg('depth_info_topic')
     software_stereo = Node(
@@ -166,7 +171,9 @@ def setup(context):
         package='depth_filter', executable='depth_filter',
         namespace='uav1', name='depth_filter', output='screen',
         parameters=[common, node_config('depth_filter', 'depth_filter'),
-                    {'depth_scale': float(arg('depth_scale'))}],
+                    {'depth_scale': float(arg('depth_scale')),
+                     'expected_frame_id': expected_depth_frame,
+                     'camera_info_topic': depth_info_topic}],
         remappings=[('depth/image_raw', source_depth_topic),
                     ('depth/image_filtered', '/uav1/d435i/depth/image_filtered')])
     depth_remaps = [('d435i/depth/image_raw', '/uav1/d435i/depth/image_filtered'),

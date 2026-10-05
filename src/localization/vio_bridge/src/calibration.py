@@ -30,6 +30,26 @@ def transform(value):
     return t
 
 
+def hardware_depth_transform(body, cameras, cam0_topic, depth_topic, depth_info_topic):
+    """Body <- depth optical; infer only for the checked D435i depth/IR1 pair."""
+    measured = body.get('T_body_depth')
+    if measured is not None:
+        return transform(measured), ''
+    expected_topics = (
+        '/camera/camera/infra1/image_rect_raw',
+        '/camera/camera/depth/image_rect_raw',
+        '/camera/camera/depth/camera_info',
+    )
+    if (cam0_topic, depth_topic, depth_info_topic) != expected_topics:
+        raise ValueError(
+            'automatic T_body_depth requires the verified D435i infra1/depth '
+            'topics; provide measured T_body_depth for another stream or camera')
+    # This D435i's SDK reports depth optical -> infra1 optical as identity.
+    # Kalibr's T_imu_cam0 maps the rectified infra1 optical frame into IMU.
+    return (transform(body['T_body_imu']) @
+            transform(cameras['cam0']['T_imu_cam'])), 'camera_depth_optical_frame'
+
+
 def validate_config(path):
     path = Path(path)
     cfg = read_yaml(path)

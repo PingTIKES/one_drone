@@ -9,3 +9,5 @@ depth_filter:
     temporal_max_delta: 0.4 # 允许混合历史深度的最大差值（m）；避免大跳变拖影
     fill_holes: false # 默认保留无效像素，避免插值产生虚假清障射线；true 才允许小孔插值
     hole_min_neighbors: 5 # 填补空洞所需有效邻域像素数量
+    expected_frame_id: null # 自动外参模式的深度光学坐标系；启动入口设置，其他模式不检查
+    camera_info_topic: null # 自动外参模式下用于核对坐标系和图像尺寸；启动入口设置

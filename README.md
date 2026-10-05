@@ -238,7 +238,7 @@ ros2 service call /land std_srvs/srv/Trigger '{}'
 
 - D435i 刚性安装在机头正前方，左右红外和深度视野不得被桨叶、保护架或线束遮挡。
 - 以实际运行的相机图像流标定左右红外内参、有效畸变、双目外参；随后用**相同分辨率、格式、图像话题及左右顺序**标定相机与 IMU 的时间偏差和外参。
-- 测量 `T_body_imu` 与 `T_body_depth`，定义为 **body FLU ← sensor** 的 4×4 变换。
+- 沿用当前安装的实测 `T_body_imu`，并确定 `T_body_depth`；二者定义为 **body FLU ← sensor** 的 4×4 变换。更换安装位置后重新测量。
 - 采集静止、平移和多方向转动数据，检查重投影误差、尺度、时间戳单调性和 IMU 噪声参数。
 
 #### D435i 左右目内参、畸变与双目外参
@@ -348,13 +348,24 @@ rosrun kalibr kalibr_calibrate_imu_camera \
 
 本次加速度计归一化残差均值为 `4.44`（实际均值约 `0.055 m/s²`），明显高于视觉残差；驱动还报告 `IMU Calibration is not available, default intrinsic and extrinsic will be used`。当前 Kalibr 文件采用 `model: calibrated`，该模型假设输入 IMU 已做内部比例尺和轴不正交校正。因此应先用六面静置数据核查重力模长、各轴偏置及稳定性，并复核 IMU 噪声；若需更正设备内部 IMU 标定，完成后应重新采集并计算本节联合标定。不要通过直接调大噪声来掩盖系统性残差。参见 [Kalibr 相机–IMU 标定要求](https://github.com/ethz-asl/kalibr/wiki/camera-imu-calibration)和 [D435i IMU 说明](https://github.com/realsenseai/librealsense/blob/master/doc/d435i.md)。
 
-此外，必须测得 `T_body_imu` 并核对机体与 IMU 坐标轴；使用硬件深度还须测得 `T_body_depth`。`tools/import_kalibr.py` 不会凭空生成这两个机体安装关系。以上检查完成后，再用**本次联合标定**输出导入，不要使用 camera-only 文件：
+当前安装的 `T_body_imu` 已有实测值：IMU 位于机体参考点前方约 `0.03 m`、左右居中、下方约 `0.03 m`。在 `/camera/camera/imu` 的 `frame_id` 为 `camera_imu_optical_frame` 且轴定义为 X 右、Y 下、Z 前时，`body FLU ← IMU` 为：
+
+```yaml
+T_body_imu:
+  - [ 0.0,  0.0, 1.0,  0.03]
+  - [-1.0,  0.0, 0.0,  0.00]
+  - [ 0.0, -1.0, 0.0, -0.03]
+  - [ 0.0,  0.0, 0.0,  1.00]
+T_body_depth: null
+```
+
+将这份内容存为 `~/kalibr_config/body.yaml`。新一轮 `640×480` 相机内参和相机–IMU 标定不改变机体安装外参；但须核对实际安装未移动，并在无桨测试前确认 IMU 的 `frame_id` 与轴方向。`T_body_depth` 目前没有实测值：若启动 `depth_source:=hardware`，仍须先确定并填入它。`tools/import_kalibr.py` 不会凭空生成机体安装关系。以上检查完成后，再用**本次联合标定**输出导入，不要使用旧的 `640×400` 文件：
 
 ```bash
 python3 tools/import_kalibr.py \
   --camchain ~/kalibr_bags/camimu_d435i_640x480_y8_rect_ros1-camchain-imucam.yaml \
   --imu ~/kalibr_bags/camimu_d435i_640x480_y8_rect_ros1-imu.yaml \
-  --body /path/to/measured_body.yaml \
+  --body ~/kalibr_config/body.yaml \
   --output ~/one_drone/deploy/calibration/uav1
 ```
 

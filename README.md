@@ -316,13 +316,45 @@ rosrun kalibr kalibr_calibrate_cameras \
 
 本轮产物为 `~/kalibr_bags/stereo_d435i_640x480_y8_rect_ros1-camchain.yaml`。cam0/cam1 焦距约 `386.6/387.0 px`，主点约 `(321.3, 235.6)/(320.1, 235.6) px`；基线 `50.17 mm`。报告的重投影误差 X/Y 标准差分别约 `0.409/0.313 px` 和 `0.435/0.321 px`，角点分布覆盖画面大部分区域。两路拟合的 `k1` 约 `0.019/0.016`，属于已校正图像流的**剩余畸变拟合**；不要把它解释为镜头原始畸变。以上结果可用于下一阶段，但仍需同图像模式的相机–IMU 标定和无桨运动验证。
 
-下一阶段必须在**同一 `640×480 Y8 image_rect_raw` 双目模式**下启用组合 IMU，标定 IMU 噪声、相机–IMU 外参和时间偏移，并核对 `T_body_imu` 的坐标轴。使用硬件深度还须测得 `T_body_depth`；`tools/import_kalibr.py` 不会凭空生成它。完整标定完成后再导入 Kalibr 结果：
+#### D435i 相机–IMU 联合标定（当前结果待 IMU 验证）
+
+联合标定仍使用上述 `640×480 Y8 image_rect_raw` 双目流，另外启用 `/camera/camera/imu` 组合流。当前录包为 `~/kalibr_bags/camimu_d435i_640x480_y8_rect`：时长 `169.9 s`，左/右目 `5097/5098` 帧（约 `30 Hz`），IMU `34021` 帧（约 `200 Hz`）。录制时关闭红外发射器；相机驱动启用 `enable_gyro:=true enable_accel:=true gyro_fps:=200 accel_fps:=63 unite_imu_method:=2`。左右目使用与上一节完全相同的图像话题、分辨率、格式和顺序。确认三路数据同时存在后录制：
+
+```bash
+ros2 bag record -o ~/kalibr_bags/camimu_d435i_640x480_y8_rect \
+  /camera/camera/infra1/image_rect_raw \
+  /camera/camera/infra2/image_rect_raw \
+  /camera/camera/imu
+ros2 bag info ~/kalibr_bags/camimu_d435i_640x480_y8_rect
+```
+
+本轮 `~/kalibr_config/imu.yaml` 的噪声密度来自同一台 D435i 此前的静止数据分析；其中陀螺仪随机游走仍是暂定值，**本次联合标定没有重新估计 IMU 噪声或内部比例尺**。使用该文件及上一节的 camera-only `camchain.yaml` 运行 Kalibr：
+
+```bash
+rosbags-convert \
+  --src ~/kalibr_bags/camimu_d435i_640x480_y8_rect \
+  --dst ~/kalibr_bags/camimu_d435i_640x480_y8_rect_ros1.bag \
+  --src-typestore ros2_humble --dst-typestore ros1_noetic
+# 进入上一节的 Kalibr 容器后：
+cd /data/bags
+rosrun kalibr kalibr_calibrate_imu_camera \
+  --bag camimu_d435i_640x480_y8_rect_ros1.bag \
+  --cam stereo_d435i_640x480_y8_rect_ros1-camchain.yaml \
+  --imu /data/config/imu.yaml \
+  --target /data/config/target.yaml --dont-show-report
+```
+
+当前产物为 `camimu_d435i_640x480_y8_rect_ros1-camchain-imucam.yaml`、同名前缀的 `-imu.yaml`、`-results-imucam.txt` 和 `-report-imucam.pdf`。cam0/cam1 重投影误差均值分别为 `0.278/0.290 px`；双目基线 `50.174 mm`，与 camera-only 结果一致。Kalibr 的相机时间偏移约为 `-2.702/-2.649 ms`，定义为 `t_imu = t_cam + timeshift_cam_imu`；导入程序会保留其符号，并把 Kalibr 的 `T_cam_imu` 求逆为 OpenVINS 的 `T_imu_cam`。这些结果说明图像几何和两路同步在本次数据上相互一致，但不能单凭这几点判定 IMU 及整机定位已可飞行。
+
+本次加速度计归一化残差均值为 `4.44`（实际均值约 `0.055 m/s²`），明显高于视觉残差；驱动还报告 `IMU Calibration is not available, default intrinsic and extrinsic will be used`。当前 Kalibr 文件采用 `model: calibrated`，该模型假设输入 IMU 已做内部比例尺和轴不正交校正。因此应先用六面静置数据核查重力模长、各轴偏置及稳定性，并复核 IMU 噪声；若需更正设备内部 IMU 标定，完成后应重新采集并计算本节联合标定。不要通过直接调大噪声来掩盖系统性残差。参见 [Kalibr 相机–IMU 标定要求](https://github.com/ethz-asl/kalibr/wiki/camera-imu-calibration)和 [D435i IMU 说明](https://github.com/realsenseai/librealsense/blob/master/doc/d435i.md)。
+
+此外，必须测得 `T_body_imu` 并核对机体与 IMU 坐标轴；使用硬件深度还须测得 `T_body_depth`。`tools/import_kalibr.py` 不会凭空生成这两个机体安装关系。以上检查完成后，再用**本次联合标定**输出导入，不要使用 camera-only 文件：
 
 ```bash
 python3 tools/import_kalibr.py \
-  --camchain /path/to/camchain-imucam.yaml \
-  --imu /path/to/imu.yaml \
-  --body /path/to/body.yaml \
+  --camchain ~/kalibr_bags/camimu_d435i_640x480_y8_rect_ros1-camchain-imucam.yaml \
+  --imu ~/kalibr_bags/camimu_d435i_640x480_y8_rect_ros1-imu.yaml \
+  --body /path/to/measured_body.yaml \
   --output ~/one_drone/deploy/calibration/uav1
 ```
 

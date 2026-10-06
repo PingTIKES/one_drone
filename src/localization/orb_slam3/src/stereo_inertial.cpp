@@ -116,7 +116,8 @@ private:
   }
   void run() {
     double last_frame = -1;
-    int last_map = -1;
+    int last_map = -1, last_correction = -1;
+    bool was_ready = false;
     while(!stop_) {
       Image::ConstSharedPtr left, right;
       std::vector<ORB_SLAM3::IMU::Point> readings;
@@ -129,7 +130,7 @@ private:
         if(!reset_reason_.empty()) {
           auto reason = reset_reason_; reset_reason_.clear();
           lock.unlock(); orb_->ResetActiveMap();
-          last_frame = -1; last_map = -1; epoch(now().seconds(), reason); status(reason);
+          last_frame = -1; last_map = last_correction = -1; was_ready = false; epoch(now().seconds(), reason); status(reason);
           continue;
         }
         while(!left_.empty() && !right_.empty()) {
@@ -181,15 +182,27 @@ private:
         orb_->TrackStereo(lr, rr, t, readings);
         last_frame = t;
         Sophus::SE3f Twi; Eigen::Vector3f v; ORB_SLAM3::IMU::Bias bias;
-        int map_id = -1, inliers = 0;
-        bool ready = orb_->GetCurrentImuState(Twi, v, bias, map_id, inliers);
-        if(last_map >= 0 && map_id != last_map) epoch(t, "MAP_RECREATED");
-        if(orb_->MapChanged()) epoch(t, "MAP_CORRECTION");
-        last_map = map_id;
+        int map_id = -1, inliers = 0, correction = 0;
+        bool ready = orb_->GetCurrentImuState(Twi, v, bias, map_id, inliers, correction);
+        const bool new_map = last_map >= 0 && map_id != last_map;
+        const bool corrected = !new_map && last_correction >= 0 && correction != last_correction;
+        if(new_map) epoch(t, "MAP_RECREATED");
+        else if(corrected) epoch(t, "MAP_CORRECTION");
+        else if(ready && !was_ready) epoch(t, "INERTIAL_TRACKING_READY");
+        // Tracking recovery alone does not necessarily change coordinates, so only
+        // the initial transition in each map announces readiness as a new epoch.
+        if(new_map) was_ready = false;
+        if(ready) was_ready = true;
+        last_map = map_id; last_correction = correction;
         const int state = orb_->GetTrackingState();
         if(!ready || inliers < min_inliers_) {
-          status(state == ORB_SLAM3::Tracking::OK ? "IMU_INITIALIZING_OR_LOW_INLIERS" :
-                 state == ORB_SLAM3::Tracking::RECENTLY_LOST ? "RECENTLY_LOST" : "LOST_OR_INITIALIZING");
+          const std::string reason = state == ORB_SLAM3::Tracking::OK ?
+              (ready ? "LOW_INLIERS" : "IMU_INITIALIZING") :
+              state == ORB_SLAM3::Tracking::RECENTLY_LOST ? "RECENTLY_LOST" : "LOST_OR_INITIALIZING";
+          status(reason);
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+              "Odometry paused: %s, inliers=%d, map=%d correction=%d",
+              reason.c_str(), inliers, map_id, correction);
           continue;
         }
         if(!Twi.matrix().allFinite() || !v.allFinite()) { status("NONFINITE_POSE"); continue; }

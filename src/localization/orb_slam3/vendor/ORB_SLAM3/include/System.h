@@ -175,7 +175,7 @@ public:
     // You can call this right after TrackMonocular (or stereo or RGBD)
     int GetTrackingState();
     bool GetCurrentImuState(Sophus::SE3f &Twi, Eigen::Vector3f &velocity,
-                            IMU::Bias &bias, int &map_id, int &inliers);
+                            IMU::Bias &bias, int &map_id, int &inliers, int &correction);
 
     std::vector<MapPoint*> GetTrackedMapPoints();
     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
@@ -259,6 +259,7 @@ private:
     IMU::Bias mCurrentImuBias;
     bool mCurrentImuInitialized = false;
     int mCurrentMapId = -1;
+    int mCurrentCorrection = 0;
     int mCurrentInliers = 0;
 
     std::vector<MapPoint*> mTrackedMapPoints;

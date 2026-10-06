@@ -317,12 +317,15 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
 
     // std::cout << "out grabber" << std::endl;
 
+    Map* snapshotMap = mpAtlas->GetCurrentMap();
+    unique_lock<mutex> mapSnapshotLock(snapshotMap->mMutexMapUpdate);
     unique_lock<mutex> lock2(mMutexState);
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
     mCurrentImuInitialized = mpAtlas->isImuInitialized();
-    mCurrentMapId = mpAtlas->GetCurrentMap()->GetId();
+    mCurrentMapId = snapshotMap->GetId();
+    mCurrentCorrection = snapshotMap->GetLastBigChangeIdx();
     mCurrentInliers = 0;
     if(mCurrentImuInitialized && mTrackingState == Tracking::OK) {
         mCurrentImuPose = mpTracker->mCurrentFrame.GetImuPose();
@@ -1330,7 +1333,7 @@ void System::SaveDebugData(const int &initIdx)
 
 
 bool System::GetCurrentImuState(Sophus::SE3f &Twi, Eigen::Vector3f &velocity,
-                                IMU::Bias &bias, int &map_id, int &inliers)
+                                IMU::Bias &bias, int &map_id, int &inliers, int &correction)
 {
     unique_lock<mutex> lock(mMutexState);
     Twi = mCurrentImuPose;
@@ -1338,6 +1341,7 @@ bool System::GetCurrentImuState(Sophus::SE3f &Twi, Eigen::Vector3f &velocity,
     bias = mCurrentImuBias;
     map_id = mCurrentMapId;
     inliers = mCurrentInliers;
+    correction = mCurrentCorrection;
     return mCurrentImuInitialized && mTrackingState == Tracking::OK;
 }
 

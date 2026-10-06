@@ -231,6 +231,8 @@ void Map::clear()
     mvpKeyFrameOrigins.clear();
     mbIMU_BA1 = false;
     mbIMU_BA2 = false;
+    // Clearing and reusing a Map keeps its ID, but resets world coordinates.
+    InformNewBigChange();
 }
 
 bool Map::IsInUse()

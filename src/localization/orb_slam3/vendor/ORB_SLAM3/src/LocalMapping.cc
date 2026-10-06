@@ -1422,6 +1422,8 @@ void LocalMapping::InitializeIMU(float priorG, float priorA, bool bFIBA)
     bInitializing = false;
 
     mpCurrentKeyFrame->GetMap()->IncreaseChangeIndex();
+    // Global inertial alignment/BA changes the published world coordinates.
+    mpCurrentKeyFrame->GetMap()->InformNewBigChange();
 
     return;
 }
@@ -1491,6 +1493,8 @@ void LocalMapping::ScaleRefinement()
 
     // To perform pose-inertial opt w.r.t. last keyframe
     mpCurrentKeyFrame->GetMap()->IncreaseChangeIndex();
+    // Global inertial alignment/BA changes the published world coordinates.
+    mpCurrentKeyFrame->GetMap()->InformNewBigChange();
 
     return;
 }

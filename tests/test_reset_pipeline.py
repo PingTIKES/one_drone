@@ -63,6 +63,39 @@ class ResetPipelineTest(unittest.TestCase):
         finally:
             n.destroy_node()
 
+    def test_vio_accepts_small_clock_lead_without_reset_but_rejects_invalid_age(self):
+        n = VioBridge()
+        try:
+            n.now = lambda: 100.
+            n.image_at = [100.001, 100.001]
+            n.imu_at = 100.001
+            n.pub = Mock()
+            n.odom_pub = Mock()
+            n.health = Mock()
+            n.diagnostics = Mock()
+            n.reset_pub = Mock()
+            msg = Odometry()
+            msg.header.frame_id = 'global'
+            msg.child_frame_id = 'imu'
+            msg.pose.pose.orientation.w = 1.
+            msg.header.stamp = stamp(100.001)
+            n.callback(msg)
+            n.pub.publish.assert_called_once()
+            n.reset_pub.publish.assert_not_called()
+            n.watchdog()
+            self.assertEqual(n.health.publish.call_args.args[0].data, 'VALID')
+            n.callback(msg)  # Clock tolerance must not admit duplicate stamps.
+            self.assertEqual(n.pub.publish.call_count, 1)
+            msg.header.stamp = stamp(100.05)  # Beyond the 20 ms clock allowance.
+            n.callback(msg)
+            self.assertEqual(n.reason, 'ODOMETRY_STALE')
+            self.assertEqual(n.pub.publish.call_count, 1)
+            msg.header.stamp = stamp(99.)  # Truly old input remains rejected.
+            n.callback(msg)
+            self.assertEqual(n.pub.publish.call_count, 1)
+        finally:
+            n.destroy_node()
+
     def test_filter_preserves_holes_and_reset_drops_history(self):
         n = DepthFilterNode()
         try:

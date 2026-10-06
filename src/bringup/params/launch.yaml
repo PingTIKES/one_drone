@@ -1,4 +1,33 @@
-# 启动进程管理参数；修改后需要重新启动 launch。
+# 总启动配置；修改后重启 launch。日常只需 ros2 launch bringup startup.launch.py。
+startup:
+  sim: false # false 使用下面 hardware 真机配置；true 使用 simulation 仿真配置
+  rviz: true # 是否打开 RViz
+  flight_control: false # 当前手动摆动台架检查关闭飞控控制节点；准备飞行时改为 true
+  map_file: '' # 留空读取 global_config.yaml 的 map；也可填地图 YAML 文件名或绝对路径
+  depth_scale: 0.001 # 16UC1 深度单位转换到 m 的比例；32FC1 深度已是 m
+
+hardware:
+  depth_source: hardware # hardware 使用 D435i 深度；software 使用项目软件双目
+  calibration_dir: ~/one_drone/deploy/calibration/uav1 # 已导入的真机标定目录，支持 ~
+  target_system: 1 # 实际飞控 MAV_SYS_ID，接入前核对
+  px4_ns: / # 飞控 DDS 命名空间；/ 对应 /fmu/...，有前缀时填实际命名空间
+  cam0_topic: /camera/camera/infra1/image_rect_raw # 左红外，必须对应标定 cam0
+  cam1_topic: /camera/camera/infra2/image_rect_raw # 右红外，必须对应标定 cam1
+  imu_topic: /camera/camera/imu # 相机组合 IMU，使用驱动线性插值合并
+  depth_topic: /camera/camera/depth/image_rect_raw # 未对齐到 RGB 的硬件深度
+  depth_info_topic: /camera/camera/depth/camera_info # 与深度匹配的 CameraInfo
+
+simulation:
+  depth_source: software # 仿真使用图像计算深度
+  calibration_dir: '' # 仿真自动使用 vio_bridge/config/openvins_sim
+  target_system: 2 # 当前仿真飞控 MAV_SYS_ID
+  px4_ns: px4_1 # 当前仿真飞控 DDS 命名空间
+  cam0_topic: '' # 仿真传感器由 Gazebo 桥直接发布，无需真机输入话题
+  cam1_topic: '' # 同上
+  imu_topic: '' # 同上
+  depth_topic: '' # 软件双目节点自动提供深度
+  depth_info_topic: '' # 软件双目节点自动提供 CameraInfo
+
 ego_planner:
   respawn: true # 规划器异常退出后自动重新创建进程；不检测存活但卡死的情况
   respawn_delay: 0.1 # 检测进程退出后等待秒数；不包含进程初始化和地图重建耗时

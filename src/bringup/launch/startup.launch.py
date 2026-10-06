@@ -40,20 +40,38 @@ def selected_map_file(bringup, override):
 
 
 def generate_launch_description():
-    # Runtime calibration depends on launch arguments. setup() builds the named
-    # node list below after those arguments have been resolved.
-    arguments = [('sim', 'true'), ('rviz', 'true'), ('depth_source', 'software'),
-                 ('calibration_dir', ''), ('target_system', ''), ('px4_ns', ''),
-                 ('map_file', ''),
-                 ('cam0_topic', ''), ('cam1_topic', ''),
-                 ('imu_topic', ''), ('depth_topic', ''),
-                 ('depth_info_topic', ''), ('depth_scale', '0.001'),
-                 ]
+    bringup = Path(get_package_share_directory('bringup'))
+    values = yaml.safe_load((bringup / 'params/launch.yaml').read_text())
+    startup = values['startup']
     return LaunchDescription([
-        *[DeclareLaunchArgument(name, default_value=value)
-          for name, value in arguments],
-        OpaqueFunction(function=setup),
+        DeclareLaunchArgument('sim', default_value=launch_value(startup['sim']),
+                              choices=['true', 'false']),
+        DeclareLaunchArgument('rviz', default_value=launch_value(startup['rviz']),
+                              choices=['true', 'false']),
+        OpaqueFunction(function=configure_arguments, kwargs={'values': values}),
     ])
+
+
+def launch_value(value):
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    return str(value)
+
+
+def configure_arguments(context, values):
+    # Select profile after resolving sim, so optional sim:=true also switches
+    # depth source and PX4 identity together. Command-line overrides still work.
+    sim = LaunchConfiguration('sim').perform(context) == 'true'
+    profile = values['simulation' if sim else 'hardware']
+    defaults = {**values['startup'], **profile}
+    names = ('flight_control', 'depth_source', 'calibration_dir', 'target_system', 'px4_ns',
+             'map_file', 'cam0_topic', 'cam1_topic', 'imu_topic', 'depth_topic',
+             'depth_info_topic', 'depth_scale')
+    return [
+        *[DeclareLaunchArgument(name, default_value=launch_value(defaults[name]))
+          for name in names],
+        OpaqueFunction(function=setup),
+    ]
 
 
 def setup(context):
@@ -95,7 +113,7 @@ def setup(context):
                    gyroscope_noise_density=float(.0017 / np.sqrt(200)),
                    accelerometer_noise_density=float(.02 / np.sqrt(200)))
     else:
-        cfg_dir = Path(arg('calibration_dir'))
+        cfg_dir = Path(arg('calibration_dir')).expanduser()
         config, cameras, imu = validate_config(cfg_dir / 'estimator_config.yaml')
         body = read_yaml(cfg_dir / 'body.yaml')
         t_body_imu = transform(body['T_body_imu'])
@@ -272,6 +290,7 @@ def setup(context):
     flight_bridge = Node(
         package='flight_bridge', executable='flight_bridge',
         name='flight_bridge', output='screen',
+        condition=IfCondition(arg('flight_control').lower()),
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
                     {'target_system': target_system, 'px4_ns': px4_ns}])
     one_drone_rviz = Node(

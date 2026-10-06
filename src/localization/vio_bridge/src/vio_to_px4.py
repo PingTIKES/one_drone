@@ -26,7 +26,7 @@ from vio_bridge.vio_quality import normalized_covariance, quality_state
 class VioBridge(Node):
     def __init__(self):
         super().__init__('vio_to_px4')
-        for k,v in dict(uav_id=1,px4_ns='px4_1',max_age=.5,invalid_age=2.,max_position_variance=1.,
+        for k,v in dict(uav_id=1,px4_ns='px4_1',max_age=.5,invalid_age=2.,future_tolerance=.02,max_position_variance=1.,
                         max_orientation_variance=.25,max_velocity_variance=1.,
                         max_speed=4.,max_jump=.4,max_continuous_gap=2.,
                         expected_world='global',expected_imu='imu',
@@ -50,6 +50,8 @@ class VioBridge(Node):
             raise ValueError('invalid feature quality parameters')
         if not 0 < self.p('max_age') < self.p('invalid_age'):
             raise ValueError('VIO freshness requires 0 < max_age < invalid_age')
+        if not math.isfinite(self.p('future_tolerance')) or not 0 <= self.p('future_tolerance') < self.p('max_age'):
+            raise ValueError('VIO future_tolerance must be finite and within [0, max_age)')
         if self.p('max_continuous_gap') <= self.p('max_age'):
             raise ValueError('max_continuous_gap must be greater than max_age')
         uid = int(self.p('uav_id'))
@@ -200,11 +202,11 @@ class VioBridge(Node):
         now = self.now()
         if self.recovery.expired(now):
             self.latched, self.reason = True, 'RECOVERY_TIMEOUT'
-        if self.recovery.active and not all(0 <= now-t <= self.p('max_age') for t in self.image_at):
+        if self.recovery.active and not all(-self.p('future_tolerance') <= now-t <= self.p('max_age') for t in self.image_at):
             self.recovery.previous = self.recovery.stable_since = None
         ages = [now-t for t in [self.last_good]+self.image_at+[self.imu_at]]
-        fresh = all(0 <= age <= self.p('max_age') for age in ages)
-        within_grace = all(0 <= age <= self.p('invalid_age') for age in ages)
+        fresh = all(-self.p('future_tolerance') <= age <= self.p('max_age') for age in ages)
+        within_grace = all(-self.p('future_tolerance') <= age <= self.p('invalid_age') for age in ages)
         healthy = not self.latched and not self.recovery.active and fresh
         if healthy:
             health = 'DEGRADED' if self.quality_reasons else 'VALID'
@@ -243,9 +245,9 @@ class VioBridge(Node):
         stamp = msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9
         now = self.now()
         if self.latched: return
-        if not 0 <= now-stamp <= self.p('max_age'):
+        if not -self.p('future_tolerance') <= now-stamp <= self.p('max_age'):
             self.reject('ODOMETRY_STALE'); return
-        if not all(0<=now-t<=self.p('max_age') for t in self.image_at):
+        if not all(-self.p('future_tolerance')<=now-t<=self.p('max_age') for t in self.image_at):
             self.reject('IMAGES_STALE'); return
         if msg.header.frame_id != self.p('expected_world') or msg.child_frame_id != self.p('expected_imu'):
             self.reject('FRAME_MISMATCH'); return

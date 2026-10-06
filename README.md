@@ -174,10 +174,12 @@ source /opt/ros/humble/setup.bash
 source ~/one_drone/install/setup.bash
 source /tmp/one_drone_gz_env.sh
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true
+ros2 launch bringup startup.launch.py
 ```
 
-不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、先验地图服务器、modify、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。默认地图由 `src/bringup/params/global_config.yaml` 的 `map:` 指定，可填 `src/bringup/map` 内的其他 YAML 文件名；临时切换可在启动命令后加 `map_file:=0928.yaml` 或绝对 YAML 路径。改完参数或地图后运行 `colcon build --symlink-install` 并重启 launch。
+运行上面的仿真算法命令前，将 `src/bringup/params/launch.yaml` 的 `startup.sim` 设为 `true`；启动文件自动读取 `simulation` 内的软件深度、飞控编号和 DDS 命名空间配置。该文件当前默认 `startup.sim: false`，用于已标定的真机。`startup.rviz` 控制 RViz 开关，日常不需要在命令后追加参数。
+
+不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、先验地图服务器、modify、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。默认地图由 `src/bringup/params/global_config.yaml` 的 `map:` 指定，可填 `src/bringup/map` 内的其他 YAML 文件名；也可在 `launch.yaml` 的 `startup.map_file` 中填写地图文件名或绝对 YAML 路径。改完参数或地图后运行 `colcon build --symlink-install` 并重启 launch。
 
 RViz 左侧 **MapOdomModify** 面板可手动平移/旋转 `map→odom`，初值在 `src/rviz/modify_map_to_odom/config/config.yaml`。先观察 `base_link` 在先验地图上的位置，再调整面板。该调整不更改 OpenVINS 的 `odom→base_link` 或 EGO 局部占用，也不需要人工确认才能起飞。
 
@@ -346,29 +348,33 @@ rosrun kalibr kalibr_calibrate_imu_camera \
 
 当前产物为 `camimu_d435i_640x480_y8_rect_ros1-camchain-imucam.yaml`、同名前缀的 `-imu.yaml`、`-results-imucam.txt` 和 `-report-imucam.pdf`。cam0/cam1 重投影误差均值分别为 `0.278/0.290 px`；双目基线 `50.174 mm`，与 camera-only 结果一致。Kalibr 的相机时间偏移约为 `-2.702/-2.649 ms`，定义为 `t_imu = t_cam + timeshift_cam_imu`；导入程序会保留其符号，并把 Kalibr 的 `T_cam_imu` 求逆为 OpenVINS 的 `T_imu_cam`。这些结果说明图像几何和两路同步在本次数据上相互一致，但不能单凭这几点判定 IMU 及整机定位已可飞行。
 
-本次加速度计归一化残差均值为 `4.44`（实际均值约 `0.055 m/s²`），明显高于视觉残差；驱动还报告 `IMU Calibration is not available, default intrinsic and extrinsic will be used`。当前 Kalibr 文件采用 `model: calibrated`，该模型假设输入 IMU 已做内部比例尺和轴不正交校正。因此应先用六面静置数据核查重力模长、各轴偏置及稳定性，并复核 IMU 噪声；若需更正设备内部 IMU 标定，完成后应重新采集并计算本节联合标定。不要通过直接调大噪声来掩盖系统性残差。参见 [Kalibr 相机–IMU 标定要求](https://github.com/ethz-asl/kalibr/wiki/camera-imu-calibration)和 [D435i IMU 说明](https://github.com/realsenseai/librealsense/blob/master/doc/d435i.md)。
+本次加速度计归一化残差均值为 `4.44`（实际均值约 `0.055 m/s²`）；驱动还报告 `IMU Calibration is not available, default intrinsic and extrinsic will be used`，表示驱动读取不到设备的 IMU 标定数据而使用默认参数，不能仅凭此警告判断 IMU 无法工作。当前使用 `model: calibrated`，本轮沿用已有噪声参数，暂不进行六面静置及 IMU 内部参数重标。无桨联调时检查 IMU 数据连续性与 VIO 表现，出现问题后结合数据判断是否需要进一步标定；不要把暂定噪声值写成这次联合标定新测得的结果。参见 [Kalibr 相机–IMU 标定要求](https://github.com/ethz-asl/kalibr/wiki/camera-imu-calibration)和 [D435i IMU 说明](https://github.com/realsenseai/librealsense/blob/master/doc/d435i.md)。
 
-当前安装的 `T_body_imu` 已有实测值：IMU 位于机体参考点前方约 `0.03 m`、左右居中、下方约 `0.03 m`。在 `/camera/camera/imu` 的 `frame_id` 为 `camera_imu_optical_frame` 且轴定义为 X 右、Y 下、Z 前时，`body FLU ← IMU` 为：
+当前安装的 `T_body_imu` 已有实测值：IMU 位于机体参考点前方约 `0.040 m`、左右居中、上方约 `0.014 m`。在 `/camera/camera/imu` 的 `frame_id` 为 `camera_imu_optical_frame` 且轴定义为 X 右、Y 下、Z 前时，`body FLU ← IMU` 为：
 
 ```yaml
 T_body_imu:
-  - [ 0.0,  0.0, 1.0,  0.03]
-  - [-1.0,  0.0, 0.0,  0.00]
-  - [ 0.0, -1.0, 0.0, -0.03]
-  - [ 0.0,  0.0, 0.0,  1.00]
+  - [ 0.0,  0.0,  1.0,  0.040]
+  - [-1.0,  0.0,  0.0,  0.000]
+  - [ 0.0, -1.0,  0.0,  0.014]
+  - [ 0.0,  0.0,  0.0,  1.000]
+source: measured body mounting
 ```
 
 将这份内容存为 `~/kalibr_config/body.yaml`。新一轮 `640×480` 相机内参和相机–IMU 标定不改变机体安装外参；但须核对实际安装未移动，并在无桨测试前确认 IMU 的 `frame_id` 与轴方向。对当前 D435i，设备 SDK 报告深度到左红外光学坐标系的变换为单位矩阵，因此真机 `depth_source:=hardware` 默认计算 `T_body_depth = T_body_imu × T_imu_cam0`；`T_imu_cam0` 来自本次 Kalibr 结果。自动推导只接受本文的左红外、深度图和深度 CameraInfo 话题组合，并检查运行时深度图及 CameraInfo 的 `camera_depth_optical_frame` 和尺寸；其他设备或对齐方式必须在 `body.yaml` 显式给出 `T_body_depth`。无桨测试仍须核对点云方向与实物障碍物一致。`tools/import_kalibr.py` 不会凭空生成机体安装关系。以上检查完成后，再用**本次联合标定**输出导入，不要使用旧的 `640×400` 文件：
 
 ```bash
+# 当前参数已导入 deploy/calibration/uav1；下面演示重新导入到新目录。
 python3 tools/import_kalibr.py \
   --camchain ~/kalibr_bags/camimu_d435i_640x480_y8_rect_ros1-camchain-imucam.yaml \
   --imu ~/kalibr_bags/camimu_d435i_640x480_y8_rect_ros1-imu.yaml \
   --body ~/kalibr_config/body.yaml \
-  --output ~/one_drone/deploy/calibration/uav1
+  --output ~/one_drone/deploy/calibration/uav1_new
 ```
 
-启动文件在真机模式读取该目录中的 `estimator_config.yaml`、`kalibr_imucam_chain.yaml`、`kalibr_imu_chain.yaml` 和 `body.yaml`。改变分辨率、镜头相对位置或相机设备后必须重标定；若仅改变整机安装位置，还需更新机体外参。仿真标定不能用于真机。
+当前 D435i（序列号 `135122071701`）的四份配置已导入项目 [deploy/calibration/uav1](deploy/calibration/uav1/README.md)，包含中文参数注释；本轮三个方向的点云运动检查已由用户确认通过。真机启动命令使用该目录，启动时直接读取文件，修改标定参数无需 `colcon build`，重启节点即可生效。导入脚本拒绝覆盖已有目录；重新导入到 `uav1_new` 后，检查新结果并将启动参数 `calibration_dir` 切换到该目录。
+
+启动文件在真机模式读取 `estimator_config.yaml`、`kalibr_imucam_chain.yaml`、`kalibr_imu_chain.yaml` 和 `body.yaml`。改变分辨率、镜头相对位置或相机设备后必须重标定；若仅改变整机安装位置，还需更新机体外参。仿真标定不能用于真机。
 
 ### 2. PX4 和传感器检查
 
@@ -401,16 +407,16 @@ cd ~/one_drone
 source /opt/ros/humble/setup.bash
 source ~/one_drone/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py \
-  sim:=false rviz:=true depth_source:=hardware \
-  calibration_dir:=/home/ubuntu22/one_drone/deploy/calibration/uav1 \
-  target_system:=1 px4_ns:=/ \
-  cam0_topic:=/camera/camera/infra1/image_rect_raw \
-  cam1_topic:=/camera/camera/infra2/image_rect_raw \
-  imu_topic:=/camera/camera/imu \
-  depth_topic:=/camera/camera/depth/image_rect_raw \
-  depth_info_topic:=/camera/camera/depth/camera_info
+ros2 launch bringup startup.launch.py
 ```
+
+所有启动选项预先填写在 `src/bringup/params/launch.yaml`：`startup.sim: false` 选择 `hardware` 真机配置，其中已填入当前 D435i 图像、IMU、深度话题，以及 `~/one_drone/deploy/calibration/uav1` 标定目录、`target_system: 1` 和 `px4_ns: /`。更换设备、话题或飞控编号时修改此文件；`~` 会展开为当前用户目录。RealSense 驱动和飞控 Agent 仍须在算法启动前单独启动。
+
+手动摆动检查定位时，将 `startup.flight_control` 设为 `false`（当前台架配置），启动相机和算法即可；无需连接飞控 DDS，`flight_bridge` 不启动，起飞服务和 Offboard 控制指令不会发布。移除桨叶、静置至 VIO 初始化后，缓慢前后、左右、上下移动机体并观察 `odom→base_link`；确认方向、位移尺度、静止漂移和回到起点后的误差。准备进行飞行控制联调时，将 `startup.flight_control` 改为 `true`，并先建立飞控 DDS 通信。仿真起飞同样需要该项为 `true`。
+
+真机双目配对时间差由标定目录 `estimator_config.yaml` 中的 `stereo_sync_max_interval` 控制，当前为 `0.003 s`；一侧丢帧时丢弃无法同步的图像，不将相差一两帧的左右图像作为同一时刻的双目输入。`vio_bridge/config/params.yaml` 的 `future_tolerance: 0.02` 允许设备校时后时间戳略超前于电脑时钟，保留原始时间戳；真正过期、倒退、跳变或高协方差数据仍受原有检查约束。
+
+D435i 的双目基线约 5 cm，真机 `estimator_config.yaml` 使用 `fi_max_baseline: 120.0`、`fi_max_cond_number: 100000.0`，支持几米外、短基线条件下的特征三角化。`fi_max_baseline` 是特征距离与有效基线的比值，不是以米表示的安装基线；默认 40 在机体静止后可能持续拒绝较远特征，造成“检测到角点，但没有视觉更新”。2026-10-06 的两分钟手动摆动录包中，原版独立回放末段发散至百米级，调整后末段静止位置保持稳定；这项回放没有独立真值，不能据此宣称实机绝对定位精度。相机内外参和 IMU 噪声未因本次排查更改。
 
 启动算法前须确认组合 IMU `/camera/camera/imu` 和硬件深度两个话题实际存在；仅当前的双目内参录包配置关闭了 IMU 与深度，**不能直接用于真机飞行**。`target_system` 和 `px4_ns` 仍须按实际飞控核实。真机深度进入 EGO GridMap，OpenVINS 使用左右红外灰度图和 IMU。先完成无桨台架和小范围 0.5 m/s 试飞，再逐级放开速度。
 
@@ -458,7 +464,7 @@ ros2 bag record -o flight_bags/vio_fault_$(date +%Y%m%d_%H%M%S) \
 
 ## 参数修改与生效
 
-常用 ROS 参数位于各功能包 `config/params.yaml`，EGO 参数在 `src/bringup/params/ego_params.yaml`，进程重启设置在 `src/bringup/params/launch.yaml`。这些文件逐项提供中文含义、单位和覆盖来源。修改后执行 `colcon build --symlink-install` 并重启启动入口；多数参数在节点初始化时读取，不能假设 `ros2 param set` 后立即生效。
+常用 ROS 参数位于各功能包 `config/params.yaml`，EGO 参数在 `src/bringup/params/ego_params.yaml`；仿真/真机选择、RViz、输入话题、标定目录、飞控身份、深度单位及进程重启设置统一在 `src/bringup/params/launch.yaml`。这些文件逐项提供中文含义、单位和覆盖来源。修改后执行 `colcon build --symlink-install` 并重启启动入口；多数参数在节点初始化时读取，不能假设 `ros2 param set` 后立即生效。
 
 新增可调项包括：VIO 质量检测图像缩小比例、角点数量/质量/间距/窗口；软件双目的视差搜索范围、匹配窗口、唯一性及斑块过滤、OpenCV 线程数和同步队列；规划器到点容差；进程 respawn 延迟。角点统计属于外围质量检测，与 OpenVINS 的 `num_pts` 不同。
 
@@ -499,8 +505,8 @@ ros2 topic echo /navigation_state
 回归验证（先 source 工作空间，独立 ROS domain，不连接 PX4）：
 
 ```bash
-ROS_DOMAIN_ID=83 PYTHONNOUSERSITE=1 python3 -m unittest discover -s tests -v
-ROS_DOMAIN_ID=83 PYTHONNOUSERSITE=1 python3 tests/integration_depth_reset.py
+ROS_DOMAIN_ID=83 python3 -m unittest discover -s tests -v
+ROS_DOMAIN_ID=83 python3 tests/integration_depth_reset.py
 ```
 
 
@@ -515,7 +521,7 @@ ROS_DOMAIN_ID=83 PYTHONNOUSERSITE=1 python3 tests/integration_depth_reset.py
 额外时钟回归测试：
 
 ```bash
-ROS_DOMAIN_ID=84 PYTHONNOUSERSITE=1 python3 tests/integration_sim_clock.py
+ROS_DOMAIN_ID=84 python3 tests/integration_sim_clock.py
 ```
 
 

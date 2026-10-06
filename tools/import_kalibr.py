@@ -30,7 +30,8 @@ def main():
     template = ROOT/'src/localization/vio_bridge/config/openvins_sim'
     cfg = read_yaml(template/'estimator_config.yaml')
     cfg.update(num_opencv_threads=2,record_timing_information=True,
-               record_timing_filepath=f'/tmp/uav{a.uav_id}_ov_timing.txt')
+               record_timing_filepath=f'/tmp/uav{a.uav_id}_ov_timing.txt',
+               fi_max_baseline=120.0, fi_max_cond_number=100000.0)
     out_cams = {}
     shifts = []
     for name in ('cam0','cam1'):

@@ -188,7 +188,16 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
     // Create sync filter (they have unique pointers internally, so we have to use move logic here...)
     auto image_sub0 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic0);
     auto image_sub1 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic1);
+    // A dropped infrared frame must not pair the next left image with an older
+    // right image. Preserve source stamps and bound the actual pair interval.
+    double stereo_sync_max_interval = 0.003;
+    parser->parse_config("stereo_sync_max_interval", stereo_sync_max_interval, false);
+    if (!std::isfinite(stereo_sync_max_interval) || stereo_sync_max_interval <= 0) {
+      throw std::invalid_argument("stereo_sync_max_interval must be finite and positive");
+    }
     auto sync = std::make_shared<message_filters::Synchronizer<sync_pol>>(sync_pol(10), *image_sub0, *image_sub1);
+    sync->setMaxIntervalDuration(rclcpp::Duration::from_seconds(stereo_sync_max_interval));
+    PRINT_INFO("Stereo maximum pair interval: %.3f ms\n", stereo_sync_max_interval * 1000.0);
     sync->registerCallback(std::bind(&ROS2Visualizer::callback_stereo, this, std::placeholders::_1, std::placeholders::_2, 0, 1));
     // sync->registerCallback([](const sensor_msgs::msg::Image::SharedPtr msg0, const sensor_msgs::msg::Image::SharedPtr msg1)
     // {callback_stereo(msg0, msg1, 0, 1);});

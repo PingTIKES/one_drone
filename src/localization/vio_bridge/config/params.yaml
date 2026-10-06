@@ -11,6 +11,7 @@ vio_bridge:
     t_body_imu: null # body←IMU 的 4×4 外参；由启动入口根据标定生成
     max_age: 0.5 # 图像、IMU、VIO 新鲜度阈值（s）；超过后软降级或拒收
     invalid_age: 2.0 # 持续数据缺口判为 INVALID 的时间阈值（s），应大于 max_age
+    future_tolerance: 0.02 # 允许设备时间戳略超前于电脑时钟（s），避免毫秒级校时抖动误锁定；不修改源时间戳
     max_position_variance: 1.0 # 位置方差硬上限（m²）；超过拒收
     max_orientation_variance: 0.25 # 姿态方差硬上限（rad²）；超过拒收
     max_velocity_variance: 1.0 # 速度方差硬上限（m²/s²）；超过拒收

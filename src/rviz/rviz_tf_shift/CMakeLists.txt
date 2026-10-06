@@ -51,4 +51,5 @@ install(
 )
 
 pluginlib_export_plugin_description_file(rviz_common plugin_description.xml)
+install(PROGRAMS src/tf_display_filter.py DESTINATION lib/${PROJECT_NAME})
 ament_package()

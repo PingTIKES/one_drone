@@ -293,10 +293,16 @@ def setup(context):
         condition=IfCondition(arg('flight_control').lower()),
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
                     {'target_system': target_system, 'px4_ns': px4_ns}])
+    rviz_tf_filter = Node(
+        package='rviz_tf_shift', executable='tf_display_filter.py',
+        name='rviz_tf_filter', output='screen',
+        condition=IfCondition(arg('rviz').lower()),
+        parameters=[common, str(bringup / 'params/rviz_tf.yaml')])
     one_drone_rviz = Node(
         package='rviz2', executable='rviz2', name='one_drone_rviz',
         output='screen', condition=IfCondition(arg('rviz').lower()),
         parameters=[common],
+        remappings=[('/tf', '/rviz/tf'), ('/tf_static', '/rviz/tf_static')],
         arguments=['-d', str(bringup / 'rviz/ego_navigation.rviz')])
 
     # Startup inventory. EGO-Planner is part of this single launch chain.
@@ -317,5 +323,6 @@ def setup(context):
         ego_traj_server,             # B-spline -> PositionCommand
         goal_manager,                # RViz goal -> EGO target
         flight_bridge,               # EGO PositionCommand -> PX4 Offboard
+        rviz_tf_filter,              # navigation TF only for RViz
         one_drone_rviz,
     ]).entities

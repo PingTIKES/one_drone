@@ -545,3 +545,7 @@ ros2 pkg prefix ov_msckf
 ```
 
 如果缺少系统依赖，先运行 `bash setup_env.sh sim` 或 `bash setup_env.sh onboard`。安装脚本默认串行构建包、每个包使用 2 个编译任务；资源允许时可设 `BUILD_JOBS=4`。日常源码、参数和 launch 修改仍使用项目根目录的 `colcon build --symlink-install`。旧外部 VIO 工作区可以保留备份，本项目不再依赖它。`startup.launch.py` 启动时会检查 `bringup` 与 `ov_msckf` 是否解析到同一个安装工作区，避免加载旧工作区的估计器。
+
+### RViz 导航 TF 显示
+
+RViz 通过 `rviz_tf_shift` 包的 `tf_display_filter.py` 接收独立的 `/rviz/tf`、`/rviz/tf_static`，默认仅包含 `map → odom → base_link`。显示列表在 `src/bringup/params/rviz_tf.yaml` 修改；原始 `/tf` 和 `/tf_static` 不受影响。新增过滤节点后先执行 `colcon build --symlink-install --packages-select rviz_tf_shift bringup` 并重新 source 工作空间，再重启启动文件。单独启动 RViz 时也需要启动过滤节点并重映射两个 TF 话题。

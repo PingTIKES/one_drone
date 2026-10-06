@@ -1,0 +1,5 @@
+# 仅过滤 RViz 接收的 TF；原始 /tf 和 /tf_static 继续供算法使用。
+# 两端坐标系都在此列表中的变换才会显示；修改后重启 RViz 和过滤节点。
+rviz_tf_filter:
+  ros__parameters:
+    frames: [map, odom, base_link] # RViz 中需要显示的导航坐标系

@@ -1,6 +1,6 @@
 # one_drone
 
-`one_drone` 是一台无人机的三维局部自主导航工程，运行环境为 **Ubuntu 22.04、ROS 2 Humble、OpenVINS、EGO-Planner / EGO-Swarm 单机模式和 MicoAir PX4 1.14.3**。仿真与真机使用同一套算法节点；Gazebo 只提供环境、相机、IMU 和飞行动力学，算法不读取仿真真值位姿。
+`one_drone` 是一台无人机的三维局部自主导航工程，运行环境为 **Ubuntu 22.04、ROS 2 Humble、ORB-SLAM3（当前测试默认）/ OpenVINS（保留对照）、EGO-Planner / EGO-Swarm 单机模式和 MicoAir PX4 1.14.3**。仿真与真机使用同一套算法节点；Gazebo 只提供环境、相机、IMU 和飞行动力学，算法不读取仿真真值位姿。
 
 当前仓库只保留单机定位、先验 PGM 地图显示、三维局部建图、轨迹规划和 PX4 控制。先验地图及手动 `map→odom` 调整用于 RViz 定位和打点；EGO 的避障仍只使用深度观测。Nav2 规划器、2D 代价地图、行为树和 `cmd_vel` 控制链已移除。多机协同、目标识别和任务决策暂不在本阶段范围内。
 
@@ -10,7 +10,7 @@
 
 ```text
 左右红外灰度图 + IMU
-  └─ OpenVINS
+  └─ ORB-SLAM3 双目惯性定位
       ├─ /odom + TF odom→base_link
       ├─ /vio_health
       └─ PX4 vehicle_visual_odometry
@@ -38,7 +38,7 @@ RViz 2D Goal Pose
           └─ /ego/goal（odom）
 ```
 
-TF 链为 `map→odom→base_link`：modify 节点按配置和 RViz 面板调整发布 `map→odom`，OpenVINS 发布 `odom→base_link`。先验 PGM 在 `map` 下显示，RViz 以 `map` 为 Fixed Frame，打点在 `map` 下；`goal_manager` 把目标变换到 `odom`，EGO 仍在 `odom` 下规划与控制。手动对齐不会触发起飞门控，但打点位置是否正确取决于当前 `map→odom`。EGO 的局部地图只由实际深度观测生成，未知区域不直接写成障碍；PGM **不参与** EGO 碰撞检测。
+TF 链为 `map→odom→base_link`：modify 节点按配置和 RViz 面板调整发布 `map→odom`，定位桥根据 ORB-SLAM3 输出发布 `odom→base_link`。先验 PGM 在 `map` 下显示，RViz 以 `map` 为 Fixed Frame，打点在 `map` 下；`goal_manager` 把目标变换到 `odom`，EGO 仍在 `odom` 下规划与控制。手动对齐不会触发起飞门控，但打点位置是否正确取决于当前 `map→odom`。EGO 的局部地图只由实际深度观测生成，未知区域不直接写成障碍；PGM **不参与** EGO 碰撞检测。
 
 `trajectory_controller` 执行
 
@@ -64,8 +64,9 @@ src/
 │   ├── depth_filter/                # 深度时空滤波与小空洞填补
 │   └── obstacle_cloud/              # 调试用深度点云与自体掩膜
 ├── localization/
+│   ├── orb_slam3/                   # 内置 ORB-SLAM3、ROS 2 双目惯性接口与配置
 │   ├── open_vins/                   # 内置 OpenVINS：ov_core、ov_init、ov_msckf、ov_eval
-│   └── vio_bridge/                  # OpenVINS 健康检查、/odom、TF、PX4 外部视觉
+│   └── vio_bridge/                  # 定位健康检查、/odom、TF、PX4 外部视觉
 ├── navigation/
 │   ├── ego_bridge/                  # /odom 与深度健康适配
 │   ├── ego_planner/                 # EGO-Swarm ROS 2 单机规划核心
@@ -86,6 +87,7 @@ EGO 核心来自 `ZJU-FAST-Lab/ego-planner-swarm` 的 `ros2_version` 分支，�
 | `stereo_depth` | 左右红外灰度图、双目标定 | `/uav1/d435i/depth/image_raw`、CameraInfo | 包内 `config/params.yaml` |
 | `depth_filter` | 软件或真机原始深度 | `/uav1/d435i/depth/image_filtered` | 包内 `config/params.yaml` |
 | `obstacle_cloud` | 滤波深度、CameraInfo、相机外参 | `/uav1/obstacles`，仅调试显示 | 包内 `config/params.yaml` |
+| `orb_slam3` | 已标定的左右目与相机 IMU | `/uav1/odomimu`、`/orbslam/tracking_state`、`/estimator_reset` | `orb_slam3/config/params.yaml`；启动时转换当前标定 |
 | `ov_core` / `ov_init` | 图像特征、IMU 和标定（内部库接口） | 跟踪结果及初始化状态 | 由 `ov_msckf` 使用同一估计器配置 |
 | `ov_msckf` | `/uav1/cam0/image_raw`、`cam1`、`imu0` | `/uav1/odomimu` 等 VIO 输出 | `vio_bridge/config/openvins_sim` 或真机标定目录 |
 | `ov_eval` | 离线轨迹及计时文件 | 误差统计和评估图表；默认启动不运行 | 各评估命令参数 |
@@ -179,7 +181,7 @@ ros2 launch bringup startup.launch.py
 
 运行上面的仿真算法命令前，将 `src/bringup/params/launch.yaml` 的 `startup.sim` 设为 `true`；启动文件自动读取 `simulation` 内的软件深度、飞控编号和 DDS 命名空间配置。该文件当前默认 `startup.sim: false`，用于已标定的真机。`startup.rviz` 控制 RViz 开关，日常不需要在命令后追加参数。
 
-不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、OpenVINS、先验地图服务器、modify、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。默认地图由 `src/bringup/params/global_config.yaml` 的 `map:` 指定，可填 `src/bringup/map` 内的其他 YAML 文件名；也可在 `launch.yaml` 的 `startup.map_file` 中填写地图文件名或绝对 YAML 路径。改完参数或地图后运行 `colcon build --symlink-install` 并重启 launch。
+不再启动第二套导航 launch。`startup.launch.py` 已包含传感器桥、ORB-SLAM3、先验地图服务器、modify、深度、EGO、轨迹服务器、目标管理、PX4 控制和 RViz。默认地图由 `src/bringup/params/global_config.yaml` 的 `map:` 指定，可填 `src/bringup/map` 内的其他 YAML 文件名；也可在 `launch.yaml` 的 `startup.map_file` 中填写地图文件名或绝对 YAML 路径。改完参数或地图后运行 `colcon build --symlink-install` 并重启 launch。
 
 RViz 左侧 **MapOdomModify** 面板可手动平移/旋转 `map→odom`，初值在 `src/rviz/modify_map_to_odom/config/config.yaml`。先观察 `base_link` 在先验地图上的位置，再调整面板。该调整不更改 OpenVINS 的 `odom→base_link` 或 EGO 局部占用，也不需要人工确认才能起飞。
 
@@ -544,8 +546,39 @@ ros2 pkg prefix ov_msckf
 # 应指向 ~/one_drone/install/ov_msckf
 ```
 
-如果缺少系统依赖，先运行 `bash setup_env.sh sim` 或 `bash setup_env.sh onboard`。安装脚本默认串行构建包、每个包使用 2 个编译任务；资源允许时可设 `BUILD_JOBS=4`。日常源码、参数和 launch 修改仍使用项目根目录的 `colcon build --symlink-install`。旧外部 VIO 工作区可以保留备份，本项目不再依赖它。`startup.launch.py` 启动时会检查 `bringup` 与 `ov_msckf` 是否解析到同一个安装工作区，避免加载旧工作区的估计器。
+如果缺少系统依赖，先运行 `bash setup_env.sh sim` 或 `bash setup_env.sh onboard`。安装脚本默认串行构建包、每个包使用 2 个编译任务；资源允许时可设 `BUILD_JOBS=4`。日常源码、参数和 launch 修改仍使用项目根目录的 `colcon build --symlink-install`。旧外部 VIO 工作区可以保留备份，本项目不再依赖它。`startup.launch.py` 启动时会检查 `bringup` 与 `orb_slam3` 是否解析到同一个安装工作区，避免加载旧工作区的估计器。
 
 ### RViz 导航 TF 显示
 
 RViz 通过 `rviz_tf_shift` 包的 `tf_display_filter.py` 接收独立的 `/rviz/tf`、`/rviz/tf_static`，默认仅包含 `map → odom → base_link`。显示列表在 `src/bringup/params/rviz_tf.yaml` 修改；原始 `/tf` 和 `/tf_static` 不受影响。新增过滤节点后先执行 `colcon build --symlink-install --packages-select rviz_tf_shift bringup` 并重新 source 工作空间，再重启启动文件。单独启动 RViz 时也需要启动过滤节点并重映射两个 TF 话题。
+
+
+## ORB-SLAM3 双目惯性对照测试（当前默认）
+
+`src/bringup/launch/startup.launch.py` 的启动列表已注释 `openvins`，改为 `orbslam`，两套估计器不能同时发布 `/uav1/odomimu`。OpenVINS 源码与配置保留。前文关于 OpenVINS 的 ZUPT、`num_pts`、初始化配置仅适用于切回 OpenVINS 后的运行。
+
+ORB-SLAM3 包位于 `src/localization/orb_slam3`，核心、Pangolin 与压缩词典随仓库提供，版本和补丁记录在 `UPSTREAM.md`；不需要外部 ORB 工作区。首次构建建议限制并行度：
+
+```bash
+cd ~/one_drone
+source /opt/ros/humble/setup.bash
+MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --executor sequential
+source install/setup.bash
+ros2 launch bringup startup.launch.py
+```
+
+继续从 `src/bringup/params/launch.yaml` 选择真机/仿真与输入话题。台架测试保持 `flight_control: false`，真机相机驱动按前文单独启动。可调 ORB 参数及中文说明在 `src/localization/orb_slam3/config/params.yaml`。启动时从当前 `calibration_dir` 自动生成临时 ORB 配置：读取两目内参/残余畸变、双目外参、相机到 IMU 外参、IMU 噪声和时间偏移；额外执行标定矫正使双目满足 ORB 水平极线约束，并相应旋转相机到 IMU 的外参。机体安装参数仍由 `body.yaml` 提供，不使用官方示例标定。
+
+真机 ORB 直接订阅 RealSense 话题，绕过用于软件深度的 Python 转发。输入图像与 IMU 需处于相同时间域；左右目时间差、IMU 间隔、积压和时间倒退都会检查。时间偏移按 Kalibr 的 `t_imu = t_cam + timeshift_cam_imu` 应用一次。
+
+先让双目看到纹理丰富的环境，再缓慢进行平移及俯仰/横滚运动，以完成惯性初始化；一直静置可能无法完成初始化。初始化或跟踪丢失时不发布虚假定位：
+
+```bash
+ros2 topic echo /orbslam/tracking_state
+ros2 topic hz /uav1/odomimu
+ros2 topic echo /vio_health
+```
+
+`TRACKING` 表示惯性已初始化、跟踪成功且内点达标，其他状态用于排查初始化、丢失、同步或处理超时。输出为相机频率的 IMU 位姿与机体系速度，经过现有定位桥生成 `/odom` 与 `odom→base_link`；`map→odom` 仍由 modify 发布。ORB 重建地图、回环或全局校正时，经 `/estimator_reset` 转成 `/vio_reset_event`，清除旧 EGO 地图、轨迹及目标，需要重新打点。
+
+上游不提供在线位姿协方差，配置中的方差是明确标注的桥接代理值；`VALID` 不能证明定位误差小于 10 cm。当前为算法对照版本，需实际完成摆动返回原点、重复轨迹和时间延迟测试，再评估是否适合飞行。词典解压和编译会增加本地磁盘占用，但未引入数据集或新录包。

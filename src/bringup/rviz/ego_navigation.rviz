@@ -49,7 +49,7 @@ Visualization Manager:
       Style: Points
       Size (Pixels): 2
     - Class: rviz_default_plugins/Odometry
-      Name: OpenVINSOdom
+      Name: LocalizationOdom
       Enabled: true
       Keep: 1
       Shape:

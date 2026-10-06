@@ -1,0 +1,22 @@
+# ORB-SLAM3 双目惯性测试；标定由 calibration_dir 转换，不能套官方示例外参。
+orbslam:
+  ros__parameters:
+    viewer: false # 禁用 Pangolin 窗口，使用项目 RViz
+    camera_fps: 30 # 相机实际标称帧率；不是算法强制输出频率
+    n_features: 1000 # 每幅图像 ORB 目标特征数，增大会提高计算量
+    scale_factor: 1.2 # 图像金字塔相邻层缩放比例
+    n_levels: 8 # 图像金字塔层数
+    ini_fast: 20 # 初始 FAST 角点阈值
+    min_fast: 7 # 弱纹理网格的备用 FAST 阈值
+    close_depth_baselines: 40.0 # 近点距离门限，单位为双目基线倍数
+    stereo_sync_max_interval: 0.003 # 左右目时间差上限（s）
+    image_queue_size: 12 # 每目缓存上限；积压时丢弃最旧图像并记录计数
+    imu_queue_size: 4000 # IMU 缓存上限；溢出会明确重置跟踪，不能隐瞒数据缺口
+    max_imu_gap: 0.03 # 配准区间允许的最大 IMU 源时间间隔（s）
+    max_image_age: 0.3 # 拒绝已经过期的图像（s），避免积压位姿送给控制器
+    future_tolerance: 0.02 # 设备时间戳轻微超前容差（s）
+    min_inliers: 30 # 输出定位所需的跟踪内点数量下限
+    loop_closing: true # 启用回环；修正事件会清除 EGO 地图、轨迹和旧目标
+    position_variance: 0.04 # 桥接用位置方差代理值（m²），不是 ORB 优化器估计协方差
+    orientation_variance: 0.01 # 桥接用姿态方差代理值（rad²），不能用于证明实际精度
+    velocity_variance: 0.1 # 桥接用速度方差代理值（m²/s²）

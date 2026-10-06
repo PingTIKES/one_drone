@@ -90,6 +90,10 @@ class VioBridge(Node):
         for i in range(2):
             self.create_subscription(Image,f'cam{i}/image_raw',lambda msg,index=i:self.image(msg,index),qos_profile_sensor_data)
         self.create_subscription(Imu, 'imu0', self.imu, qos_profile_sensor_data)
+        self.estimator_epoch = None
+        self.create_subscription(Header, '/estimator_reset', self.estimator_reset,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_service(Trigger,'reset_vio_bridge',self.reset)
         self.create_timer(.1,self.watchdog)
         self.notify_reset('BRIDGE_START')
@@ -182,14 +186,20 @@ class VioBridge(Node):
             odom.twist.covariance[i * 6 + i] = float(variance)
         self.odom_pub.publish(odom)
 
-    def reset(self,request,response):
+    def estimator_reset(self, msg):
+        if msg.frame_id == self.estimator_epoch:
+            return
+        self.estimator_epoch = msg.frame_id
+        self.reset(None, Trigger.Response(), reason='ESTIMATOR_RESET:' + msg.frame_id)
+
+    def reset(self,request,response,reason='MANUAL_RESET'):
         self.last_stamp = self.last_position = None
         self.last_quat = self.last_velocity = self.last_omega = None
         self.recovery = self.new_recovery()
         self.reset_count = (self.reset_count+1)%256
-        self.notify_reset('MANUAL_RESET')
+        self.notify_reset(reason)
         self.latched = False
-        self.reason = 'MANUAL_RESET'
+        self.reason = reason
         self.last_good = -math.inf
         self.quality_velocity = self.quality_velocity_stamp = None
         self.quality_acceleration = 0.0

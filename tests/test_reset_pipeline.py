@@ -115,6 +115,30 @@ class ResetPipelineTest(unittest.TestCase):
         finally:
             n.destroy_node()
 
+    def test_orb_epoch_clears_bridge_and_deduplicates(self):
+        n = VioBridge()
+        try:
+            n.reset_pub = Mock()
+            n.last_stamp = 42.
+            n.last_position = np.ones(3)
+            n.latched = True
+            count = n.reset_count
+            event = Header(frame_id='ORB:process-a:1:MAP_CORRECTION')
+            n.estimator_reset(event)
+            self.assertIsNone(n.last_stamp)
+            self.assertIsNone(n.last_position)
+            self.assertFalse(n.latched)
+            self.assertEqual(n.reset_count, (count + 1) % 256)
+            n.reset_pub.publish.assert_called_once()
+            n.estimator_reset(event)
+            n.reset_pub.publish.assert_called_once()
+            # A restarted estimator is a new epoch even with the same local counter.
+            event.frame_id = 'ORB:process-b:1:START'
+            n.estimator_reset(event)
+            self.assertEqual(n.reset_pub.publish.call_count, 2)
+        finally:
+            n.destroy_node()
+
     def test_vio_jump_publishes_reset_at_detection_and_acceptance(self):
         n = VioBridge()
         try:

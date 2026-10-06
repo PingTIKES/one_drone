@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>orb_slam3</name>
+  <version>0.1.0</version>
+  <description>Bundled ORB-SLAM3 stereo inertial ROS 2 test integration</description>
+  <maintainer email="team@example.com">PingTIKES</maintainer>
+  <license>GPL-3.0-or-later</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend><depend>sensor_msgs</depend><depend>nav_msgs</depend><depend>std_msgs</depend><depend>cv_bridge</depend>
+  <depend>eigen</depend><depend>libopencv-dev</depend><depend>boost</depend><depend>libssl-dev</depend><depend>libglew-dev</depend>
+  <exec_depend>python3-numpy</exec_depend><exec_depend>python3-opencv</exec_depend><exec_depend>python3-yaml</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

@@ -27,7 +27,7 @@ sudo apt update
 sudo apt install -y python3-colcon-common-extensions python3-rosdep python3-numpy python3-pil \
     python3-yaml python3-opencv python3-pip python3-dev python3-matplotlib git curl build-essential cmake \
     ros-humble-cv-bridge ros-humble-rmw-cyclonedds-cpp ros-humble-pcl-conversions \
-    libpcl-dev libeigen3-dev libceres-dev libboost-all-dev libopencv-dev libopencv-contrib-dev \
+    libpcl-dev libeigen3-dev libceres-dev libboost-all-dev libopencv-dev libopencv-contrib-dev libglew-dev libssl-dev libgl1-mesa-dev libx11-dev \
     ros-humble-image-transport ros-humble-tf2-geometry-msgs
 
 # OpenVINS is versioned with this repository and built in the same workspace.

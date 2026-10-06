@@ -1,6 +1,9 @@
-"""Start sensing, OpenVINS, EGO-Planner, PX4 control and RViz."""
+"""Start sensing, ORB-SLAM3, EGO-Planner, PX4 control and RViz."""
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
+import json
 import numpy as np
 import yaml
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -92,10 +95,10 @@ def setup(context):
     target_system = int(arg('target_system') or '2')
     px4_ns = arg('px4_ns') or ('px4_1' if sim else '/')
     bringup_prefix = Path(get_package_prefix('bringup')).resolve()
-    ov_prefix = Path(get_package_prefix('ov_msckf')).resolve()
-    if ov_prefix.parent != bringup_prefix.parent:
+    orb_prefix = Path(get_package_prefix('orb_slam3')).resolve()
+    if orb_prefix.parent != bringup_prefix.parent:
         raise RuntimeError(
-            f'OpenVINS resolves outside this workspace: {ov_prefix}; '
+            f'ORB-SLAM3 resolves outside this workspace: {orb_prefix}; '
             'source one_drone/install/setup.bash after any old ROS overlays')
     bringup = Path(get_package_share_directory('bringup'))
     map_file = selected_map_file(bringup, arg('map_file'))
@@ -154,6 +157,28 @@ def setup(context):
                     {'config_path': ov_config,
                      'publish_global_to_imu_tf': False,
                      'publish_calibration_tf': False}])
+    orb_share = Path(get_package_share_directory('orb_slam3'))
+    orb_params = orb_share / 'config/params.yaml'
+    converted = subprocess.run(
+        [sys.executable, str(orb_prefix / 'lib/orb_slam3/prepare_calibration.py'),
+         '--estimator', ov_config, '--params', str(orb_params), '--output', str(work)],
+        capture_output=True, text=True)
+    if converted.returncode:
+        raise RuntimeError('ORB calibration conversion failed: ' + converted.stderr.strip())
+    settings, rectification, timeshift = json.loads(converted.stdout)
+    camera_topics = [f'/uav1/cam{i}/image_raw' if sim else arg(f'cam{i}_topic')
+                     for i in range(2)]
+    imu_topic = '/uav1/imu0' if sim else arg('imu_topic')
+    orbslam = Node(
+        package='orb_slam3', executable='stereo_inertial',
+        name='orbslam', output='screen',
+        parameters=[common, str(orb_params),
+                    {'settings_file': settings, 'rectification_file': rectification,
+                     'vocabulary_file': str(orb_share / 'vocabulary/ORBvoc.txt'),
+                     'camera_imu_timeshift': timeshift}],
+        remappings=[('cam0/image_raw', camera_topics[0]),
+                    ('cam1/image_raw', camera_topics[1]), ('imu0', imu_topic),
+                    ('odomimu', '/uav1/odomimu')])
     vio_bridge = Node(
         package='vio_bridge', executable='vio_to_px4.py',
         name='vio_bridge', output='screen',
@@ -161,9 +186,9 @@ def setup(context):
                     {'px4_ns': px4_ns,
                      't_body_imu': t_body_imu.ravel().tolist()}],
         remappings=[('odomimu', '/uav1/odomimu'),
-                    ('cam0/image_raw', '/uav1/cam0/image_raw'),
-                    ('cam1/image_raw', '/uav1/cam1/image_raw'),
-                    ('imu0', '/uav1/imu0')])
+                    ('cam0/image_raw', camera_topics[0]),
+                    ('cam1/image_raw', camera_topics[1]),
+                    ('imu0', imu_topic)])
     expected_depth_frame = ''
     if mode == 'software':
         matcher = StereoMatcher(ov_config, t_body_imu)
@@ -309,7 +334,8 @@ def setup(context):
     return LaunchDescription([
         gazebo_sensors,              # sim: Gazebo camera, IMU, clock bridge
         sensor_relay,                # hardware: measured camera/IMU topics
-        openvins,                    # stereo VIO
+        # openvins,                  # retained for comparison; disabled
+        orbslam,                     # calibrated stereo + IMU ORB-SLAM3
         vio_bridge,                  # VIO -> PX4 and odom TF
         software_stereo,             # sim/software depth
         depth_filter,                # temporal/spatial depth cleanup

@@ -1,4 +1,5 @@
 #include "plan_env/grid_map.h"
+#include "plan_env/vehicle_geometry.h"
 
 // #define current_img_ md_.depth_image_[image_cnt_ & 1]
 // #define last_img_ md_.depth_image_[!(image_cnt_ & 1)]
@@ -29,7 +30,9 @@ void GridMap::initMap(rclcpp::Node::SharedPtr node)
   node_->declare_parameter("grid_map/local_update_range_x", -1.0);
   node_->declare_parameter("grid_map/local_update_range_y", -1.0);
   node_->declare_parameter("grid_map/local_update_range_z", -1.0);
-  node_->declare_parameter("grid_map/obstacles_inflation", -1.0);
+  node_->declare_parameter("grid_map/obstacles_inflation", -1.0); // legacy total radius
+  const double body_radius = node_->declare_parameter("grid_map/body_radius", -1.0);
+  const double safety_margin = node_->declare_parameter("grid_map/safety_margin", 0.0);
   node_->declare_parameter("grid_map/fx", -1.0);
   node_->declare_parameter("grid_map/fy", -1.0);
   node_->declare_parameter("grid_map/cx", -1.0);
@@ -69,6 +72,14 @@ void GridMap::initMap(rclcpp::Node::SharedPtr node)
   node_->get_parameter("grid_map/local_update_range_y", mp_.local_update_range_(1));
   node_->get_parameter("grid_map/local_update_range_z", mp_.local_update_range_(2));
   node_->get_parameter("grid_map/obstacles_inflation", mp_.obstacles_inflation_);
+  if (body_radius != -1.0) {
+    mp_.obstacles_inflation_ = plan_env::inflationRadius(body_radius, safety_margin);
+    node_->set_parameter(rclcpp::Parameter("grid_map/obstacles_inflation", mp_.obstacles_inflation_));
+    RCLCPP_INFO(node_->get_logger(), "Vehicle radius %.3f m + margin %.3f m = inflation %.3f m",
+                body_radius, safety_margin, mp_.obstacles_inflation_);
+  }
+  if (!std::isfinite(mp_.obstacles_inflation_) || mp_.obstacles_inflation_ <= 0.0)
+    throw std::invalid_argument("obstacle inflation must be positive (metres)");
   node_->get_parameter("grid_map/fx", mp_.fx_);
   node_->get_parameter("grid_map/fy", mp_.fy_);
   node_->get_parameter("grid_map/cx", mp_.cx_);

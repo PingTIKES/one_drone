@@ -1,5 +1,6 @@
 # 总启动配置；修改后重启 launch。日常只需 ros2 launch bringup startup.launch.py。
 startup:
+  estimator: openvins # 默认定位；orbslam 仅用于独立对照测试，两者不会同时启动
   sim: false # false 使用下面 hardware 真机配置；true 使用 simulation 仿真配置
   rviz: true # 是否打开 RViz
   flight_control: false # 当前手动摆动台架检查关闭飞控控制节点；准备飞行时改为 true

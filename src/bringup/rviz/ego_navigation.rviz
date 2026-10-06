@@ -70,7 +70,13 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Frames:
-        All Enabled: true
+        All Enabled: false
+        map:
+          Value: true
+        odom:
+          Value: true
+        base_link:
+          Value: true
     - Class: rviz_default_plugins/Marker
       Name: EGOOptimalPath
       Enabled: true

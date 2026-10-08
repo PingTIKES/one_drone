@@ -115,7 +115,15 @@ ROS 参数文件附有中文说明。修改源码、launch 或包内参数后执
 
 ## 4. 仿真启动
 
-先在 `launch.yaml` 中设置 `startup.sim: true`。需要起飞时同时设置 `startup.flight_control: true`。
+先在 `src/bringup/params/launch.yaml` 中将以下两项改为 `true`，其余配置保留：
+
+```yaml
+startup:
+  sim: true
+  flight_control: true
+```
+
+`flight_control: false` 不启动 `/takeoff` 服务，调用时会一直等待。修改配置后需要重启算法；已有实机节点应先在其启动终端按 `Ctrl+C` 退出。
 
 **终端 A：启动 Gazebo、PX4 和 DDS Agent。**
 
@@ -203,12 +211,25 @@ ros2 launch bringup startup.launch.py
 
 ## 6. 起飞、打点与降落
 
-启用飞控控制并确认定位、深度与飞控连接正常后：
+启用飞控控制并确认定位、深度与飞控连接正常后，在**新终端 C** 设置与算法相同的环境。仿真使用：
 
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/one_drone/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+```
+
+真机按第 5 节使用 `export RMW_IMPLEMENTATION=rmw_fastrtps_cpp`。若设置了 `ROS_DOMAIN_ID`，各终端也需一致。
+
+确认服务存在后起飞：
+
+```bash
+ros2 service type /takeoff
 ros2 service call /takeoff std_srvs/srv/Trigger '{}'
 ros2 topic echo /flight_state
 ```
+
+第一条应输出 `std_srvs/srv/Trigger`；若没有服务，先检查算法终端是否启动了 `flight_bridge`。
 
 状态依次经过 `PRESTREAM → ARMING → TAKEOFF → CRUISE`。进入 `CRUISE` 后：
 

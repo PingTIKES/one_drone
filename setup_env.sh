@@ -25,10 +25,16 @@ set -u
 
 sudo apt update
 sudo apt install -y python3-colcon-common-extensions python3-rosdep python3-numpy python3-pil \
-    python3-yaml python3-opencv python3-pip python3-dev python3-matplotlib git curl build-essential cmake \
+    python3-yaml python3-opencv python3-pip python3-dev python3-matplotlib python3-serial python3-lxml python3-future git curl build-essential cmake \
     ros-humble-cv-bridge ros-humble-rmw-cyclonedds-cpp ros-humble-pcl-conversions \
     libpcl-dev libeigen3-dev libceres-dev libboost-all-dev libopencv-dev libopencv-contrib-dev \
     ros-humble-image-transport ros-humble-tf2-geometry-msgs
+
+# microvio reads PX4 MAVLink telemetry. Install only this protocol library;
+# keep ROS/OpenCV on the distribution NumPy rather than pulling a pip NumPy.
+if ! python3 -c 'import pymavlink' >/dev/null 2>&1; then
+    python3 -m pip install --user --no-deps 'pymavlink>=2.4.41,<3'
+fi
 
 # OpenVINS is versioned with this repository and built in the same workspace.
 if [[ ! -f "$OPENVINS_DIR/ov_msckf/src/core/VioManager.h" ]]; then

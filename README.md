@@ -35,7 +35,7 @@ map → odom → base_link → camera_optical
 src/
 ├── bringup/       # 总启动文件、启动参数、EGO 参数、先验地图和 RViz 配置
 ├── perception/    # 相机话题转发、软件双目深度、深度过滤、调试点云
-├── localization/  # OpenVINS 及定位桥
+├── localization/  # OpenVINS、定位桥及 microvio 模组遥测接入
 ├── navigation/    # EGO 规划器、里程计适配、目标管理
 ├── decision/      # 行为选择与航点执行，支持 once/loop
 ├── control/       # 轨迹执行、飞行状态管理、PX4 指令适配
@@ -212,6 +212,16 @@ ros2 launch bringup startup.launch.py
 ```
 
 先进行无桨检查：静置初始化后缓慢移动机体，确认 TF、位移尺度、点云方向及回到原处的误差。飞行联调前检查飞控标定、遥控接管与失控保护，再将 `startup.flight_control` 改为 `true` 并重启算法。仿真结果不能代替真机验证。
+
+### MicoVIO 模组定位检查
+
+已将 MicoVIO 接到 PX4 TELEM2 的设备，可使用独立包读取飞控融合定位：
+
+```bash
+ros2 launch microvio microvio.launch.py
+```
+
+使用前 source 本工作区并按真机章节统一 RMW 环境。串口、波特率及输出话题放在 `src/localization/microvio/config/params.yaml`，输出为 `/microvio/odom`、`/microvio/health` 和 `/microvio/diagnostics`。此入口只检查定位，不启动飞控控制，也不替换总启动中的 OpenVINS。[接线、启动及导航接入说明](src/localization/microvio/README.md)。
 
 ## 6. 起飞、打点与降落
 

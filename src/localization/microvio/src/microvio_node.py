@@ -1,0 +1,307 @@
+"""Read PX4 MAVLink odometry aided by MicoVIO. Never sends flight commands."""
+import json
+import math
+import os
+import time
+import uuid
+
+os.environ.setdefault('MAVLINK20', '1')
+from pymavlink import mavutil
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from geometry_msgs.msg import TransformStamped
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Range
+from std_msgs.msg import Header, String
+from tf2_ros import TransformBroadcaster
+
+from microvio.geometry import ClockSync, convert
+
+
+class Microvio(Node):
+    def __init__(self):
+        super().__init__('microvio')
+        defaults = dict(device='/dev/ttyACM0', baud=921600, target_system=1,
+                        target_component=1, source_system=245, source_component=191,
+                        odom_topic='/microvio/odom', health_topic='/microvio/health',
+                        diagnostics_topic='/microvio/diagnostics', reset_topic='/microvio/reset_event',
+                        range_topic='/microvio/range', odom_frame='microvio_odom',
+                        body_frame='microvio_base_link', range_frame='microvio_range',
+                        publish_tf=True, poll_rate=200., reconnect_interval=2.,
+                        heartbeat_timeout=3., odom_timeout=.5, estimator_timeout=1.,
+                        timesync_interval=.5, timesync_timeout=5., max_timesync_rtt=.1,
+                        future_tolerance=.05, reset_hold_time=1., unknown_variance=1000.,
+                        request_streams=False, odometry_rate=30., required_estimator_flags=47,
+                        expected_estimator_type=8)
+        for name, value in defaults.items():
+            self.declare_parameter(name, value)
+        for name in ('poll_rate', 'reconnect_interval', 'heartbeat_timeout', 'odom_timeout',
+                     'estimator_timeout', 'timesync_interval', 'timesync_timeout',
+                     'max_timesync_rtt', 'unknown_variance', 'odometry_rate'):
+            if not math.isfinite(float(self.p(name))) or float(self.p(name)) <= 0:
+                raise ValueError(f'{name} must be positive and finite')
+        if not 1 <= int(self.p('target_system')) <= 255:
+            raise ValueError('target_system must be 1..255')
+        if self.p('target_system') == self.p('source_system'):
+            raise ValueError('source_system must differ from target_system')
+        self.link = None
+        self.sync = ClockSync()
+        self.retry_at = self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
+        self.last_heartbeat_sent = self.last_sync_sent = -math.inf
+        self.reset_at = -math.inf
+        self.remote_stamp = self.odom_stamp = self.reset_counter = None
+        self.flags = None
+        self.quality = None
+        self.estimator_type = None
+        self.source_pose_frame = self.source_velocity_frame = None
+        self.pose_diagonal_known = self.twist_diagonal_known = False
+        self.reason = 'WAIT_CONNECTION'
+        self.armed = False
+        self.stream_requested = False
+        self.received_count = self.published_count = 0
+        self.started_at = time.monotonic()
+        self.epoch = uuid.uuid4().hex[:12]
+        self.reset_index = 0
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.odom_pub = self.create_publisher(Odometry, str(self.p('odom_topic')), 10)
+        self.health_pub = self.create_publisher(String, str(self.p('health_topic')), latched)
+        self.diag_pub = self.create_publisher(String, str(self.p('diagnostics_topic')), 10)
+        self.reset_pub = self.create_publisher(Header, str(self.p('reset_topic')), latched)
+        self.range_pub = self.create_publisher(Range, str(self.p('range_topic')), 10)
+        self.tf = TransformBroadcaster(self)
+        self.create_timer(1. / float(self.p('poll_rate')), self.poll)
+        self.create_timer(.1, self.publish_health)
+        self.create_timer(1., self.publish_diagnostics)
+        self.get_logger().info('Telemetry only: no arming, mode changes, setpoints, or external-vision writes')
+
+    def p(self, key):
+        return self.get_parameter(key).value
+
+    def reset_event(self, reason):
+        self.reset_index += 1
+        self.reset_at = time.monotonic()
+        self.reset_pub.publish(Header(stamp=self.get_clock().now().to_msg(),
+                                      frame_id=f'microvio:{self.epoch}:{self.reset_index}:{reason}'))
+        self.get_logger().warn('PX4 odometry reset: ' + reason)
+
+    def connect(self):
+        try:
+            self.link = mavutil.mavlink_connection(
+                str(self.p('device')), baud=int(self.p('baud')), autoreconnect=False,
+                source_system=int(self.p('source_system')),
+                source_component=int(self.p('source_component')))
+            self.sync = ClockSync()
+            self.stream_requested = False
+            self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
+            self.remote_stamp = self.odom_stamp = self.reset_counter = None
+            self.last_heartbeat_sent = self.last_sync_sent = -math.inf
+            self.reason = 'WAIT_HEARTBEAT'
+            self.get_logger().info('Opened MAVLink device: ' + str(self.p('device')))
+        except OSError as error:
+            self.reason = 'SERIAL_UNAVAILABLE'
+            self.get_logger().warn(str(error), throttle_duration_sec=5.)
+            self.link = None
+
+    def poll(self):
+        now = time.monotonic()
+        if self.link is None:
+            if now >= self.retry_at:
+                self.retry_at = now + float(self.p('reconnect_interval'))
+                self.connect()
+            return
+        try:
+            if now - self.last_heartbeat_sent >= 1.:
+                self.link.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GCS,
+                                            mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+                self.last_heartbeat_sent = now
+            if now - self.last_sync_sent >= float(self.p('timesync_interval')):
+                stamp = self.get_clock().now().nanoseconds
+                self.sync.request(stamp)
+                self.link.mav.timesync_send(0, stamp)
+                self.last_sync_sent = now
+            deadline = now + .005
+            for _ in range(200):
+                msg = self.link.recv_match(blocking=False)
+                if msg is None:
+                    break
+                if (msg.get_srcSystem() == int(self.p('target_system')) and
+                        msg.get_srcComponent() == int(self.p('target_component'))):
+                    self.handle_message(msg)
+                if time.monotonic() >= deadline:
+                    break
+        except (OSError, ValueError) as error:
+            self.get_logger().warn('MAVLink disconnected: ' + str(error), throttle_duration_sec=5.)
+            self.link.close()
+            self.link = None
+            self.reason = 'SERIAL_DISCONNECTED'
+            self.reset_event('CONNECTION_LOST')
+
+    def handle_message(self, msg):
+        kind = msg.get_type()
+        now = time.monotonic()
+        if kind == 'HEARTBEAT':
+            if msg.autopilot != mavutil.mavlink.MAV_AUTOPILOT_PX4:
+                return
+            self.heartbeat_at = now
+            self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+            if self.p('request_streams') and not self.stream_requested:
+                for message_id, hz in ((331, float(self.p('odometry_rate'))), (230, 5.), (132, 10.)):
+                    self.link.mav.command_long_send(int(self.p('target_system')),
+                        int(self.p('target_component')), mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                        0, message_id, 1e6 / hz, 0, 0, 0, 0, 0)
+                self.stream_requested = True
+        elif kind == 'TIMESYNC' and msg.tc1 > 0:
+            self.sync.reply(msg.tc1, msg.ts1, self.get_clock().now().nanoseconds,
+                            now, float(self.p('max_timesync_rtt')))
+        elif kind == 'ESTIMATOR_STATUS':
+            self.flags, self.estimator_at = int(msg.flags), now
+        elif kind == 'ODOMETRY':
+            self.on_odometry(msg)
+        elif kind == 'DISTANCE_SENSOR' and msg.orientation == 25:
+            distance = msg.current_distance * .01
+            if not msg.min_distance <= msg.current_distance <= msg.max_distance:
+                return
+            try:
+                stamp = self.sync.stamp(int(msg.time_boot_ms) * 1000)
+            except ValueError:
+                return
+            out = Range()
+            out.header.frame_id = str(self.p('range_frame'))
+            out.header.stamp.sec, out.header.stamp.nanosec = divmod(stamp, 1000000000)
+            out.radiation_type = Range.INFRARED
+            out.min_range, out.max_range = msg.min_distance * .01, msg.max_distance * .01
+            out.range = distance
+            self.range_pub.publish(out)
+
+    def on_odometry(self, msg):
+        self.received_count += 1
+        self.quality, self.estimator_type = int(msg.quality), int(msg.estimator_type)
+        self.source_pose_frame, self.source_velocity_frame = int(msg.frame_id), int(msg.child_frame_id)
+        raw = int(msg.time_usec)
+        if self.remote_stamp is not None and raw <= self.remote_stamp:
+            if raw < self.remote_stamp - 1_000_000:
+                self.sync = ClockSync()
+                self.remote_stamp = None
+                self.odom_at = -math.inf
+                self.reset_event('SOURCE_CLOCK_RESTART')
+            self.reason = 'SOURCE_STAMP_NOT_INCREASING'
+            return
+        self.remote_stamp = raw
+        if self.reset_counter is not None and int(msg.reset_counter) != self.reset_counter:
+            self.reset_event('PX4_RESET_COUNTER_CHANGED')
+        self.reset_counter = int(msg.reset_counter)
+        try:
+            if self.estimator_type != int(self.p('expected_estimator_type')):
+                raise ValueError('UNEXPECTED_ESTIMATOR_TYPE')
+            if self.quality < 0:
+                raise ValueError('ODOMETRY_FAILED')
+            stamp = self.sync.stamp(raw)
+            age = (self.get_clock().now().nanoseconds - stamp) * 1e-9
+            if not -float(self.p('future_tolerance')) <= age <= float(self.p('odom_timeout')):
+                raise ValueError('STALE_OR_FUTURE_SOURCE_STAMP')
+            pose = convert(msg, float(self.p('unknown_variance')))
+        except ValueError as error:
+            self.reason = str(error)
+            return
+        self.pose_diagonal_known = pose['pose_diagonal_known']
+        self.twist_diagonal_known = pose['twist_diagonal_known']
+        out = Odometry()
+        out.header.frame_id = str(self.p('odom_frame'))
+        out.header.stamp.sec, out.header.stamp.nanosec = divmod(stamp, 1000000000)
+        out.child_frame_id = str(self.p('body_frame'))
+        out.pose.pose.position.x, out.pose.pose.position.y, out.pose.pose.position.z = map(float, pose['position'])
+        q = pose['quaternion']
+        out.pose.pose.orientation.w, out.pose.pose.orientation.x, out.pose.pose.orientation.y, out.pose.pose.orientation.z = map(float, q)
+        out.twist.twist.linear.x, out.twist.twist.linear.y, out.twist.twist.linear.z = map(float, pose['velocity'])
+        out.twist.twist.angular.x, out.twist.twist.angular.y, out.twist.twist.angular.z = map(float, pose['omega'])
+        out.pose.covariance = pose['pose_covariance'].reshape(-1).tolist()
+        out.twist.covariance = pose['twist_covariance'].reshape(-1).tolist()
+        self.odom_pub.publish(out)
+        if self.p('publish_tf'):
+            tf = TransformStamped()
+            tf.header = out.header
+            tf.child_frame_id = out.child_frame_id
+            tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = map(float, pose['position'])
+            tf.transform.rotation = out.pose.pose.orientation
+            self.tf.sendTransform(tf)
+        self.published_count += 1
+        self.odom_at, self.odom_stamp = time.monotonic(), stamp
+        self.reason = 'OK'
+
+    def health(self):
+        now = time.monotonic()
+        if self.link is None:
+            return 'INVALID', self.reason
+        if now - self.heartbeat_at > float(self.p('heartbeat_timeout')):
+            return 'INVALID', 'PX4_HEARTBEAT_STALE'
+        if now - self.sync.last_reply_at > float(self.p('timesync_timeout')):
+            return 'INVALID', 'TIMESYNC_NOT_READY'
+        if now - self.odom_at > float(self.p('odom_timeout')):
+            return 'INVALID', self.reason if self.reason != 'OK' else 'ODOMETRY_STALE'
+        age = (self.get_clock().now().nanoseconds - self.odom_stamp) * 1e-9
+        if not -float(self.p('future_tolerance')) <= age <= float(self.p('odom_timeout')):
+            return 'INVALID', 'SOURCE_STAMP_AGE'
+        if self.reason != 'OK':
+            return 'INVALID', self.reason
+        if now - self.estimator_at > float(self.p('estimator_timeout')):
+            return 'DEGRADED', 'ESTIMATOR_STATUS_STALE'
+        required = int(self.p('required_estimator_flags'))
+        if not self.pose_diagonal_known:
+            return 'DEGRADED', 'POSE_COVARIANCE_UNKNOWN'
+        if self.flags & 2048:
+            return 'INVALID', 'ESTIMATOR_ACCEL_ERROR'
+        if self.flags & 128:
+            return 'DEGRADED', 'ESTIMATOR_CONSTANT_POSITION'
+        if self.flags & required != required:
+            return 'DEGRADED', 'ESTIMATOR_FLAGS_INCOMPLETE'
+        if now - self.reset_at < float(self.p('reset_hold_time')):
+            return 'DEGRADED', 'ESTIMATOR_RECENT_RESET'
+        return 'VALID', 'PX4_ESTIMATE_VALID_MODULE_HEALTH_UNAVAILABLE'
+
+    def publish_health(self):
+        state, _ = self.health()
+        self.health_pub.publish(String(data=state))
+
+    def publish_diagnostics(self):
+        state, reason = self.health()
+        now = time.monotonic()
+        def age(t):
+            return round(now - t, 4) if math.isfinite(t) else None
+        data = dict(state=state, reason=reason, source='PX4_FUSED_ODOMETRY',
+                    module_raw_health_available=False, quality=self.quality,
+                    quality_unknown=self.quality == 0, estimator_type=self.estimator_type,
+                    source_pose_frame=self.source_pose_frame, source_velocity_frame=self.source_velocity_frame,
+                    frame_id=str(self.p('odom_frame')), body_frame=str(self.p('body_frame')),
+                    armed=self.armed, estimator_flags=self.flags,
+                    missing_estimator_flags=None if self.flags is None else int(self.p('required_estimator_flags')) & ~self.flags,
+                    odom_age=age(self.odom_at), heartbeat_age=age(self.heartbeat_at),
+                    timesync_age=age(self.sync.last_reply_at), offset_ns=self.sync.offset_ns,
+                    received_odometry=self.received_count, published_odometry=self.published_count,
+                    average_output_hz=round(self.published_count / max(.001, now-self.started_at), 2),
+                    reset_counter=self.reset_counter, reset_events=self.reset_index,
+                    covariance='diagonal_approximation; unknown entries use configured variance',
+                    pose_diagonal_known=self.pose_diagonal_known,
+                    twist_diagonal_known=self.twist_diagonal_known)
+        self.diag_pub.publish(String(data=json.dumps(data)))
+
+    def destroy_node(self):
+        if self.link is not None:
+            self.link.close()
+        return super().destroy_node()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = None
+    try:
+        node = Microvio()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if node is not None:
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()

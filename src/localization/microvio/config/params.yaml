@@ -1,0 +1,33 @@
+microvio:
+  ros__parameters:
+    use_sim_time: false # 本包用于实机遥测，使用电脑 ROS 时钟
+    device: /dev/serial/by-id/usb-MicoAir_MicoAir743v2_0-if00 # 电脑到飞控的 USB MAVLink 口；不是模组所在 TELEM2
+    baud: 921600 # 主机串口波特率；USB CDC 通常不依赖此值，UART 必须匹配飞控
+    target_system: 1 # 目标 PX4 MAV_SYS_ID，过滤其他系统的数据
+    target_component: 1 # 飞控组件号，拒绝其他组件的原始/转发里程计混入
+    source_system: 245 # 本诊断程序 MAVLink 系统号，不能与飞控相同
+    source_component: 191 # 本程序组件号
+    odom_topic: /microvio/odom # 台架默认独立话题，不覆盖 OpenVINS /odom
+    health_topic: /microvio/health # 遥测/估计器健康；不能当成模组独立跟踪质量
+    diagnostics_topic: /microvio/diagnostics # 帧类型、质量、时间戳、重置和估计器状态
+    reset_topic: /microvio/reset_event # PX4 重置计数变化/重启事件
+    range_topic: /microvio/range # 下视 ToF，单位 m；不作为飞行指令
+    odom_frame: microvio_odom # 与 PX4 NED 同原点、轴转换为 NWU；不自动清零或对齐 map
+    body_frame: microvio_base_link # 机体系 FLU；独立名称防止覆盖现有 TF
+    range_frame: microvio_range # 测距传感器坐标名，不猜测安装外参
+    publish_tf: true # 只在新里程计通过数值/时间检查时发布，不补造冻结数据
+    poll_rate: 200.0 # 非阻塞串口轮询频率 Hz
+    reconnect_interval: 2.0 # 断线后重连间隔 s
+    heartbeat_timeout: 3.0 # PX4 心跳最大接收间隔 s
+    odom_timeout: 0.5 # 里程计最大年龄及接收间隔 s
+    estimator_timeout: 1.0 # ESTIMATOR_STATUS 最大接收间隔 s
+    timesync_interval: 0.5 # 主动 MAVLink TIMESYNC 请求间隔 s
+    timesync_timeout: 5.0 # 时钟同步回复最大间隔 s
+    max_timesync_rtt: 0.1 # 接受时间同步的最大往返延迟 s
+    future_tolerance: 0.05 # 允许源时间戳领先电脑的最大秒数
+    reset_hold_time: 1.0 # 重置后健康暂记 DEGRADED 的持续时间 s
+    unknown_variance: 1000.0 # 缺失协方差对角项的保守替代值；不将未知填零
+    request_streams: false # true 仅请求遥测频率，不修改持久飞控参数；当前飞控已有约 30 Hz ODOMETRY
+    odometry_rate: 30.0 # request_streams=true 时请求的 ODOMETRY 频率 Hz
+    expected_estimator_type: 8 # MAV_ESTIMATOR_TYPE_AUTOPILOT：只接受飞控融合输出，不把转发的原始模块数据混进来
+    required_estimator_flags: 47 # MAVLink 状态要求姿态、水平/垂直速度、相对水平及垂直位置；缺失仅标记 DEGRADED，不隐藏可显示的遥测

@@ -54,6 +54,7 @@ RViz 的 Fixed Frame 使用 `microvio_odom`，添加 Odometry 显示 `/microvio/
 - 主动 TIMESYNC 估算电脑和飞控时钟差，使用原始 ODOMETRY 的采样时刻；未同步、过期、重复、倒退的样本不生成新里程计或 TF。
 - `reset_counter` 变化、源时钟重启或串口异常会产生重置事件。未来接导航时，必须将该事件接入现有清地图、清轨迹和旧目标的流程。
 - `quality=0` 表示未知，不等于质量差；`quality=-1` 才表示失败。PX4 融合 ODOMETRY 的质量字段可能为 0，不能将其误当成模组原始质量。
+- MicoVIO 原始数据使用任意初始航向的 LOCAL_FRD，PX4 1.14.3 接受此航向后会主动将 `cs_yaw_align` 置为 false。这个标志不是本模式的初始化完成条件，也不要求旋转机体或与真北对齐。配置 `external_vision_reference: local_frd` 对应此模式；真正提供 NED 参考的设备才使用 `ned`。不要仅根据飞控融合输出的 frame_id 判断模组原始参考系。
 - 健康消息根据遥测新鲜度和 PX4 `ESTIMATOR_STATUS` 计算。`VALID` 仅代表这些检查通过，**不代表独立验证了模组持续跟踪状态或绝对定位精度**。具体原因及缺失状态位见 diagnostics。
 - PX4 常用 NaN 表示未知交叉协方差；目前输出对角近似，未知对角项使用配置的保守方差，而非填零。
 - `/microvio/range` 仅转发下视测距，单位 m。没有发布猜测的测距传感器安装 TF。
@@ -73,7 +74,7 @@ RViz 的 Fixed Frame 使用 `microvio_odom`，添加 Odometry 显示 `/microvio/
 | 原始模块单次快照 | `vehicle_visual_odometry.quality=91`，FRD 世界 / FRD 机体速度 |
 | ROS 里程计静置采样 | 10 秒 301 条，29.98 Hz，无重置事件 |
 | 静置位置峰峰变化 | X 约 2.0 mm、Y 约 3.5 mm、Z 约 48.1 mm；不是绝对定位误差或精度标定 |
-| 本次健康 | DEGRADED，ESTIMATOR_STATUS 缺姿态有效位 |
+| 健康判据 | LOCAL_FRD 模式不要求全局 yaw_align；仍检查实际四元数、时间戳、位置/速度有效状态、故障和重置 |
 | 高度状态 | `EKF2_HGT_REF=2`，但实际 `cs_rng_hgt=false`、`cs_baro_hgt=true`；仅设置参考源不保证测距当前有效或已参与融合 |
 | DDS | `UXRCE_DDS_CFG=0`，未启用 |
 
@@ -81,7 +82,7 @@ RViz 的 Fixed Frame 使用 `microvio_odom`，添加 Odometry 显示 `/microvio/
 
 ## 后续接入导航需要完成的事
 
-1. 确认 yaw 对齐状态及测距参与高度融合的条件；不能用删除健康检查来替代排查。
+1. 确认实际原始坐标参考模式及测距参与高度融合的条件；LOCAL_FRD 无需等待全局 yaw_align=true。
 2. 接通与当前固件匹配的 DDS 通道，或实现统一的 MAVLink 控制适配。本项目现有 flight_bridge 仍通过 DDS 控制，不能因本包能读 USB 就认为已有控制链路。TELEM2 已被模块使用，可评估 TELEM1 供 RK3566 的 DDS 通信。
 3. 互斥启动 OpenVINS 与 microvio，只保留一个 `odom→base_link` 发布者；把 odom、健康和重置事件接入现有导航接口，停止旧的 VIO→PX4 回灌节点，防止融合反馈环路。
 4. 保留前视 D435i 的深度感知和准确的机体安装外参。MicoVIO 的下视 ToF 不能替代三维障碍物地图。
@@ -92,3 +93,5 @@ RViz 的 Fixed Frame 使用 `microvio_odom`，添加 Odometry 显示 `/microvio/
 - [PX4 1.14 外部视觉接入](https://docs.px4.io/v1.14/en/ros/external_position_estimation)
 - [PX4 1.14 DDS 接口](https://docs.px4.io/v1.14/en/middleware/uxrce_dds)
 - [MAVLink ODOMETRY 定义](https://mavlink.io/en/messages/common.html#ODOMETRY)
+
+PX4 对 LOCAL_FRD 的具体处理见 [v1.14.3 ev_yaw_control.cpp](https://github.com/PX4/PX4-Autopilot/blob/v1.14.3/src/modules/ekf2/EKF/ev_yaw_control.cpp#L141)。

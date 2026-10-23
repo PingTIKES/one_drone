@@ -33,7 +33,7 @@ class Microvio(Node):
                         timesync_interval=.5, timesync_timeout=5., max_timesync_rtt=.1,
                         future_tolerance=.05, reset_hold_time=1., unknown_variance=1000.,
                         request_streams=False, odometry_rate=30., required_estimator_flags=47,
-                        expected_estimator_type=8)
+                        expected_estimator_type=8, external_vision_reference='local_frd')
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         for name in ('poll_rate', 'reconnect_interval', 'heartbeat_timeout', 'odom_timeout',
@@ -45,6 +45,8 @@ class Microvio(Node):
             raise ValueError('target_system must be 1..255')
         if self.p('target_system') == self.p('source_system'):
             raise ValueError('source_system must differ from target_system')
+        if self.p('external_vision_reference') not in ('local_frd', 'ned'):
+            raise ValueError('external_vision_reference must be local_frd or ned')
         self.link = None
         self.sync = ClockSync()
         self.retry_at = self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
@@ -230,6 +232,16 @@ class Microvio(Node):
         self.odom_at, self.odom_stamp = time.monotonic(), stamp
         self.reason = 'OK'
 
+    def required_flags(self):
+        flags = int(self.p('required_estimator_flags'))
+        if self.p('external_vision_reference') == 'local_frd':
+            # PX4 1.14 intentionally clears yaw_align after resetting to FRD
+            # vision yaw. ESTIMATOR_ATTITUDE also depends on yaw_align, so that
+            # global-alignment bit is not a valid local-FRD failure criterion.
+            # The actual quaternion, timestamps, and aiding flags remain checked.
+            flags &= ~1
+        return flags
+
     def health(self):
         now = time.monotonic()
         if self.link is None:
@@ -247,7 +259,7 @@ class Microvio(Node):
             return 'INVALID', self.reason
         if now - self.estimator_at > float(self.p('estimator_timeout')):
             return 'DEGRADED', 'ESTIMATOR_STATUS_STALE'
-        required = int(self.p('required_estimator_flags'))
+        required = self.required_flags()
         if not self.pose_diagonal_known:
             return 'DEGRADED', 'POSE_COVARIANCE_UNKNOWN'
         if self.flags & 2048:
@@ -275,7 +287,10 @@ class Microvio(Node):
                     source_pose_frame=self.source_pose_frame, source_velocity_frame=self.source_velocity_frame,
                     frame_id=str(self.p('odom_frame')), body_frame=str(self.p('body_frame')),
                     armed=self.armed, estimator_flags=self.flags,
-                    missing_estimator_flags=None if self.flags is None else int(self.p('required_estimator_flags')) & ~self.flags,
+                    external_vision_reference=str(self.p('external_vision_reference')),
+                    effective_required_estimator_flags=self.required_flags(),
+                    global_attitude_flag=None if self.flags is None else bool(self.flags & 1),
+                    missing_estimator_flags=None if self.flags is None else self.required_flags() & ~self.flags,
                     odom_age=age(self.odom_at), heartbeat_age=age(self.heartbeat_at),
                     timesync_age=age(self.sync.last_reply_at), offset_ns=self.sync.offset_ns,
                     received_odometry=self.received_count, published_odometry=self.published_count,

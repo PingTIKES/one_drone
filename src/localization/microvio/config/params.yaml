@@ -30,4 +30,5 @@ microvio:
     request_streams: false # true 仅请求遥测频率，不修改持久飞控参数；当前飞控已有约 30 Hz ODOMETRY
     odometry_rate: 30.0 # request_streams=true 时请求的 ODOMETRY 频率 Hz
     expected_estimator_type: 8 # MAV_ESTIMATOR_TYPE_AUTOPILOT：只接受飞控融合输出，不把转发的原始模块数据混进来
-    required_estimator_flags: 47 # MAVLink 状态要求姿态、水平/垂直速度、相对水平及垂直位置；缺失仅标记 DEGRADED，不隐藏可显示的遥测
+    external_vision_reference: local_frd # 已核实模块原始 pose_frame=FRD；该模式下 PX4 主动置 yaw_align=false，不能据此认定局部航向未初始化
+    required_estimator_flags: 47 # 位置/速度/姿态状态掩码；local_frd 模式自动排除依赖全局 yaw_align 的姿态标志位，仍检查实际四元数及其余状态

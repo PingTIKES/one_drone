@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 import rclpy
+from rclpy.parameter import Parameter
 from microvio.microvio_node import Microvio
 from test_geometry import packet
 
@@ -30,9 +31,23 @@ def test_real_node_constructs_and_quality_zero_is_unknown(node):
     assert node.quality == 0
 
 
-def test_estimator_attitude_flag_missing_is_explicit_degradation(node):
+def test_local_frd_does_not_require_global_yaw_alignment(node):
     node.on_odometry(packet())
     node.flags = 830
+    assert node.health()[0] == 'VALID'
+    assert node.required_flags() == 46
+
+
+def test_ned_reference_still_requires_global_attitude_flag(node):
+    node.set_parameters([Parameter('external_vision_reference', value='ned')])
+    node.on_odometry(packet())
+    node.flags = 830
+    assert node.health() == ('DEGRADED', 'ESTIMATOR_FLAGS_INCOMPLETE')
+
+
+def test_local_frd_still_rejects_missing_horizontal_aiding(node):
+    node.on_odometry(packet())
+    node.flags = 830 & ~8
     assert node.health() == ('DEGRADED', 'ESTIMATOR_FLAGS_INCOMPLETE')
 
 

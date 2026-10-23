@@ -300,6 +300,13 @@ def setup(context):
         name='goal_manager', output='screen',
         parameters=[common, node_config('goal_manager', 'goal_manager'),
                     {'goal_frame': 'odom'}])
+    decision_config = bringup / 'params/decisions.yaml'
+    decision_params = yaml.safe_load(decision_config.read_text())['decision_manager']['ros__parameters']
+    decision_manager = Node(
+        package='decision_manager', executable='decision_manager',
+        name='decision_manager', output='screen',
+        parameters=[decision_params, common,
+                    {'decisions_file': str(decision_config), 'px4_ns': px4_ns}])
     modify_map_to_odom = Node(
         package='modify_map_to_odom', executable='modify_map_to_odom_node',
         name='modify_map_to_odom', output='screen',
@@ -356,6 +363,7 @@ def setup(context):
         ego_planner,                 # depth GridMap + local B-spline planning
         ego_traj_server,             # B-spline -> PositionCommand
         goal_manager,                # RViz goal -> EGO target
+        decision_manager,            # OFFBOARD -> selected decision -> ordered waypoints
         flight_bridge,               # EGO PositionCommand -> PX4 Offboard
         rviz_tf_filter,              # navigation TF only for RViz
         one_drone_rviz,

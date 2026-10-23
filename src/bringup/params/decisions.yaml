@@ -1,0 +1,33 @@
+# 航点单位 m，格式 [x, y, z]。修改后重启算法。
+# map 坐标受 modify 的 map→odom 设置影响；odom 坐标相对本次定位原点。
+# 不提供虚构场地目标；填入航点后，下一次进入 OFFBOARD 自动开始。
+decisions:
+  decision_1:
+    mode: loop # loop 循环巡航；once 全部航点完成后结束并保持末点
+    frame_id: map # map 或 odom；同一个行为的所有航点共用此坐标系
+    waypoints: [] # 按下面格式填写至少一个目标；空列表显示 NO_WAYPOINTS，不下发目标
+    # waypoints:
+    #   - [0.0, 0.0, 2.0]
+    #   - [1.0, 0.0, 2.0]
+    #   - [1.0, 1.0, 2.0]
+    #   - [0.0, 1.0, 2.0]
+  decision_2:
+    mode: once # 单次行为示例，通过 initial_decision 选择
+    frame_id: map # 航点坐标系
+    waypoints: [] # 填入本行为的目标列表
+
+# 以下为 ROS 节点参数；任务定义与运行阈值放在同一个文件方便上场修改。
+decision_manager:
+  ros__parameters:
+    enabled: true # 订阅 PX4 OFFBOARD 后自动选择行为；false 禁用自动任务，保留 RViz 手动导航
+    initial_decision: decision_1 # 当前固定调用此决策；未来在 select_decision 中扩展行为选择
+    check_rate: 10.0 # 到点与状态检查频率 Hz
+    xy_tolerance: 0.25 # 水平到点容差 m
+    z_tolerance: 0.20 # 高度到点容差 m
+    speed_tolerance: 0.20 # 三维速度低于此值才确认到点 m/s
+    dwell_time: 0.5 # 连续满足位置与速度条件的时间 s；每点停稳，不是高速途经点
+    odom_timeout: 0.5 # 里程计接收及消息时间戳最大年龄 s
+    status_timeout: 1.0 # PX4 状态最大接收间隔 s
+    health_timeout: 1.0 # VIO 健康消息最大接收间隔 s
+    flight_timeout: 1.0 # flight_state 最大接收间隔 s
+    goal_retry_interval: 1.0 # 等待目标管理器确认时重试间隔 s；使用同一请求编号，不重复重规划

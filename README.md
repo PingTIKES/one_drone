@@ -17,6 +17,7 @@ RViz 目标 → goal_manager → EGO 轨迹规划 → 轨迹控制 → PX4 Offbo
 - **定位**：默认使用 OpenVINS 双目惯性里程计，定位桥发布 `/odom`、TF 和 PX4 外部视觉数据。
 - **建图与避障**：EGO 使用有效深度观测建立三维占用栅格，并按机体尺寸和安全余量膨胀障碍物。未知区域按当前配置允许通行。
 - **导航**：RViz 打点后，目标转换到 `odom` 坐标系，由 EGO 规划轨迹，控制模块向 PX4 发送设定值。
+- **决策**：进入 PX4 OFFBOARD 后选择航点行为，支持单次执行与循环巡航，通过现有目标管理器调用 EGO。
 - **先验地图**：PGM 地图用于 RViz 显示、定位参考和打点；碰撞检测使用深度生成的局部地图。
 - **仿真**：Gazebo 提供环境、相机、IMU 和动力学，定位算法使用传感器数据，不读取仿真真值位姿。
 
@@ -36,6 +37,7 @@ src/
 ├── perception/    # 相机话题转发、软件双目深度、深度过滤、调试点云
 ├── localization/  # OpenVINS、定位桥及 ORB-SLAM3 对照测试包
 ├── navigation/    # EGO 规划器、里程计适配、目标管理
+├── decision/      # 行为选择与航点执行，支持 once/loop
 ├── control/       # 轨迹执行、飞行状态管理、PX4 指令适配
 └── rviz/          # map→odom 调整插件、导航 TF 显示过滤
 
@@ -90,7 +92,7 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | `hardware.cam0_topic`、`cam1_topic`、`imu_topic` | 与标定对应的左右目和 IMU 输入 |
 | `hardware.depth_source`、`depth_topic`、`depth_info_topic` | 深度来源及匹配的 CameraInfo |
 
-当前仓库默认采用 **真机配置、OpenVINS、打开 RViz、关闭飞控控制**。仿真飞行前将 `startup.sim` 和 `startup.flight_control` 都设为 `true`。
+启动模式以 `launch.yaml` 的实际值为准。仿真飞行将 `startup.sim` 和 `startup.flight_control` 都设为 `true`；真机定位台架检查使用 `sim: false`、`flight_control: false`。
 
 ### 参数文件位置
 
@@ -104,6 +106,7 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | map→odom 初值 | `src/rviz/modify_map_to_odom/config/config.yaml` |
 | 飞行控制、速度、起飞高度及偏航 | `src/control/flight_bridge/config/params.yaml` |
 | 打点目标高度 | `src/navigation/goal_manager/config/params.yaml` |
+| 决策航点、循环模式及到点容差 | `src/bringup/params/decisions.yaml` |
 | 定位健康检查 | `src/localization/vio_bridge/config/params.yaml` |
 | 仿真 OpenVINS 参数 | `src/localization/vio_bridge/config/openvins_sim/estimator_config.yaml` |
 | 真机 OpenVINS 参数与标定 | `calibration_dir` 中的 YAML 文件 |
@@ -236,6 +239,29 @@ ros2 topic echo /flight_state
 1. 在 RViz 的 **MapOdomModify** 面板调整 `map→odom`，使机体显示位置与先验地图对应。该调整没有人工确认门控。
 2. 使用 **2D Goal Pose** 在地图上指定目标。
 3. 查看路径和 `/navigation_state`。目标从 `map` 转换到 `odom`，默认目标高度为 2 m，可在目标管理参数中修改。
+
+### 自动航点决策
+
+`startup.launch.py` 已包含 `decision_manager`。在 `src/bringup/params/decisions.yaml` 中填写 `decision_1.waypoints`，默认列表为空，不会向未经配置的场地坐标飞行。坐标格式为 `[x, y, z]`，单位 m；`frame_id` 支持 `map` 和 `odom`。
+
+- `mode: once`：依次执行所有航点，在最后一个点结束任务并保持位置。
+- `mode: loop`：最后一个点到达后回到第一个点，持续循环。
+- `decision_manager.ros__parameters.initial_decision`：当前固定选择的行为，默认为 `decision_1`。
+- `enabled: false`：禁用自动任务，仅使用 RViz 手动打点。
+
+进入 PX4 OFFBOARD 时自动提交第一个航点；起飞阶段仍遵循原有流程，目标在 `CRUISE` 且定位、深度和地图就绪后下发。节点不主动解锁或起飞，仍使用 `/takeoff`。重复 OFFBOARD 状态消息不会重新开始任务；退出后再次进入 OFFBOARD 则从首点开始。
+
+每点满足水平距离、高度、低速及持续时间条件后才切换，第一版是**逐点停稳巡航**，不支持高速途经点衔接。决策航点保留各自高度；RViz 二维打点仍采用 `goal_altitude`。导航接收确认使用转换后的 `odom` 目标，到点检查使用新鲜的 `/ego/odom`。
+
+定位暂时异常或控制进入 HOLD 时暂停航点推进；恢复后继续当前航点。VIO 重置会清除当前任务，不会在健康恢复后自动重发旧目标；需退出并重新进入 OFFBOARD 才开始新一轮。RViz 手动打点接管后，当前自动任务取消，本次 OFFBOARD 内不再自动抢回目标。自动任务不会自行降落。
+
+查看当前行为、航点索引（从 0 开始）、已完成圈数及等待原因：
+
+```bash
+ros2 topic echo /decision/state --qos-durability transient_local
+```
+
+后续行为选择逻辑可扩展 `src/decision/decision_manager/src/decision_node.py` 中的 `select_decision()`；任务航点及到点阈值均在 `decisions.yaml` 中修改。
 
 任务结束时降落：
 

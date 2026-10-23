@@ -16,6 +16,7 @@
   <exec_depend>depth_filter</exec_depend>
   <exec_depend>obstacle_cloud</exec_depend>
   <exec_depend>goal_manager</exec_depend>
+  <exec_depend>decision_manager</exec_depend>
   <exec_depend>modify_map_to_odom</exec_depend>
   <exec_depend>rviz_tf_shift</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>

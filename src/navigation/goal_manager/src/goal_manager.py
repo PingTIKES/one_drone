@@ -29,11 +29,17 @@ class GoalManager(Node):
         self.flight_state = 'IDLE'
         self.pending_goal = None
         self.goal_unsent = False
+        self.decision_request_stamp = None
+        self.decision_accepted_goal = None
+        self.decision_cutoff = -1
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.state_pub = self.create_publisher(String, 'navigation_state', latched)
         self.goal_pub = self.create_publisher(PoseStamped, '/ego/goal', 10)
+        self.decision_ack_pub = self.create_publisher(PoseStamped, '/decision/accepted_goal', 10)
         self.create_subscription(PoseStamped, '/navigation_goal', self.on_goal, 10)
+        self.create_subscription(PoseStamped, '/decision/goal', self.on_decision_goal, 10)
+        self.create_subscription(Header, '/decision/clear_pending', self.on_clear_decision, 10)
         self.create_subscription(Bool, '/ego/depth_fresh', self.on_depth, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
         self.create_subscription(String, 'flight_state', self.on_flight, 10)
@@ -53,24 +59,51 @@ class GoalManager(Node):
         self.reset_stamp = msg.stamp.sec + msg.stamp.nanosec * 1e-9
         self.pending_goal = None
         self.goal_unsent = False
+        self.decision_request_stamp = None
         self.last_depth_good = -math.inf
         self.state('VIO_RESET_NEW_GOAL_REQUIRED')
 
-    def on_goal(self, msg):
+    def on_clear_decision(self, msg):
+        # Only clear the decision queue. A new manual goal must remain intact.
+        cutoff = msg.stamp.sec * 1000000000 + msg.stamp.nanosec
+        self.decision_cutoff = max(self.decision_cutoff, cutoff)
+        if (self.decision_request_stamp is not None and
+                self.decision_request_stamp.sec * 1000000000 +
+                self.decision_request_stamp.nanosec <= cutoff):
+            self.pending_goal = None
+            self.goal_unsent = False
+            self.decision_request_stamp = None
+
+    def on_decision_goal(self, msg):
+        if msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec <= self.decision_cutoff:
+            return
+        if self.decision_request_stamp == msg.header.stamp:
+            if self.goal_unsent:
+                self.publish_pending_goal('GOAL_SENT_TO_EGO')
+            elif self.decision_accepted_goal is not None:
+                self.decision_ack_pub.publish(self.decision_accepted_goal)
+            return
+        self.on_goal(msg, decision=True)
+
+    def on_goal(self, msg, decision=False):
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         if stamp <= self.reset_stamp:
             self.state('REJECTED_PRE_RESET_GOAL')
             return
         p = msg.pose.position
         if msg.header.frame_id not in (self.goal_frame, 'map') or not all(
-                math.isfinite(v) for v in (p.x, p.y)):
+                math.isfinite(v) for v in (p.x, p.y, p.z)):
             self.state('REJECTED_FRAME_OR_POSITION')
             return
         goal = PoseStamped()
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.header.frame_id = msg.header.frame_id
         goal.pose = msg.pose
-        goal.pose.position.z = float(self.get_parameter('goal_altitude').value)
+        if not decision:
+            self.decision_cutoff = max(self.decision_cutoff, self.get_clock().now().nanoseconds)
+            goal.pose.position.z = float(self.get_parameter('goal_altitude').value)
+        self.decision_request_stamp = msg.header.stamp if decision else None
+        self.decision_accepted_goal = None
         self.pending_goal = goal
         self.goal_unsent = True
         self.publish_pending_goal('GOAL_SENT_TO_EGO')
@@ -106,6 +139,15 @@ class GoalManager(Node):
                 self.state('GOAL_QUEUED_TF_NOT_READY')
                 return False
         self.goal_pub.publish(goal)
+        if self.decision_request_stamp is not None:
+            ack = PoseStamped()
+            ack.header.frame_id = goal.header.frame_id
+            # Echo the request stamp as its identifier; the pose is the actual
+            # transformed target sent to EGO, not the untransformed map point.
+            ack.header.stamp = self.decision_request_stamp
+            ack.pose = goal.pose
+            self.decision_accepted_goal = ack
+            self.decision_ack_pub.publish(ack)
         self.goal_unsent = False
         self.state(success_state)
         return True

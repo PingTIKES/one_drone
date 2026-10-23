@@ -35,7 +35,7 @@ map → odom → base_link → camera_optical
 src/
 ├── bringup/       # 总启动文件、启动参数、EGO 参数、先验地图和 RViz 配置
 ├── perception/    # 相机话题转发、软件双目深度、深度过滤、调试点云
-├── localization/  # OpenVINS、定位桥及 ORB-SLAM3 对照测试包
+├── localization/  # OpenVINS 及定位桥
 ├── navigation/    # EGO 规划器、里程计适配、目标管理
 ├── decision/      # 行为选择与航点执行，支持 once/loop
 ├── control/       # 轨迹执行、飞行状态管理、PX4 指令适配
@@ -84,7 +84,6 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | 配置项 | 用途 |
 | --- | --- |
 | `startup.sim` | `true` 使用仿真配置；`false` 使用真机配置 |
-| `startup.estimator` | 默认 `openvins` |
 | `startup.rviz` | 是否打开 RViz |
 | `startup.flight_control` | `false` 只测试感知、定位和规划；`true` 启动飞控控制节点及起飞/降落服务 |
 | `hardware.calibration_dir` | 当前设备的标定目录 |
@@ -309,4 +308,3 @@ ros2 topic echo --once /flight_hold_reason --qos-durability transient_local
 - [控制模块说明](docs/control_architecture.md)
 - [当前真机标定说明](deploy/calibration/uav1/README.md)
 - 上游来源及许可证：各算法目录中的 `UPSTREAM.md`、`LICENSE`。
-- ORB-SLAM3 对照测试：`ros2 launch bringup orbslam_test.launch.py`。测试前停止默认算法，该入口固定关闭飞控控制。

@@ -1,9 +1,6 @@
 """Start sensing, OpenVINS, EGO-Planner, PX4 control and RViz."""
 from pathlib import Path
 import tempfile
-import subprocess
-import sys
-import json
 import numpy as np
 import yaml
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -67,7 +64,7 @@ def configure_arguments(context, values):
     sim = LaunchConfiguration('sim').perform(context) == 'true'
     profile = values['simulation' if sim else 'hardware']
     defaults = {**values['startup'], **profile}
-    names = ('estimator', 'flight_control', 'depth_source', 'calibration_dir', 'target_system', 'px4_ns',
+    names = ('flight_control', 'depth_source', 'calibration_dir', 'target_system', 'px4_ns',
              'map_file', 'cam0_topic', 'cam1_topic', 'imu_topic', 'depth_topic',
              'depth_info_topic', 'depth_scale')
     return [
@@ -79,9 +76,6 @@ def configure_arguments(context, values):
 
 def setup(context):
     arg = lambda key: LaunchConfiguration(key).perform(context)
-    estimator = arg('estimator')
-    if estimator not in ('openvins', 'orbslam'):
-        raise ValueError('estimator must be openvins or orbslam')
     sim = arg('sim').lower() == 'true'
     mode = arg('depth_source')
     if mode not in ('software', 'hardware'):
@@ -98,11 +92,10 @@ def setup(context):
     target_system = int(arg('target_system') or '2')
     px4_ns = arg('px4_ns') or ('px4_1' if sim else '/')
     bringup_prefix = Path(get_package_prefix('bringup')).resolve()
-    estimator_package = 'ov_msckf' if estimator == 'openvins' else 'orb_slam3'
-    estimator_prefix = Path(get_package_prefix(estimator_package)).resolve()
-    if estimator_prefix.parent != bringup_prefix.parent:
+    openvins_prefix = Path(get_package_prefix('ov_msckf')).resolve()
+    if openvins_prefix.parent != bringup_prefix.parent:
         raise RuntimeError(
-            f'{estimator_package} resolves outside this workspace: {estimator_prefix}; '
+            f'ov_msckf resolves outside this workspace: {openvins_prefix}; '
             'source one_drone/install/setup.bash after any old ROS overlays')
     bringup = Path(get_package_share_directory('bringup'))
     map_file = selected_map_file(bringup, arg('map_file'))
@@ -161,33 +154,8 @@ def setup(context):
                     {'config_path': ov_config,
                      'publish_global_to_imu_tf': False,
                      'publish_calibration_tf': False}])
-    localization = openvins
     camera_topics = [f'/uav1/cam{i}/image_raw' for i in range(2)]
     imu_topic = '/uav1/imu0'
-    if estimator == 'orbslam':
-        camera_topics = [f'/uav1/cam{i}/image_raw' if sim else arg(f'cam{i}_topic')
-                         for i in range(2)]
-        imu_topic = '/uav1/imu0' if sim else arg('imu_topic')
-        orb_share = Path(get_package_share_directory('orb_slam3'))
-        orb_params = orb_share / 'config/params.yaml'
-        converted = subprocess.run(
-            [sys.executable, str(estimator_prefix / 'lib/orb_slam3/prepare_calibration.py'),
-             '--estimator', ov_config, '--params', str(orb_params), '--output', str(work)],
-            capture_output=True, text=True)
-        if converted.returncode:
-            raise RuntimeError('ORB calibration conversion failed: ' + converted.stderr.strip())
-        settings, rectification, timeshift = json.loads(converted.stdout)
-        orbslam = Node(
-            package='orb_slam3', executable='stereo_inertial',
-            name='orbslam', output='screen',
-            parameters=[common, str(orb_params),
-                        {'settings_file': settings, 'rectification_file': rectification,
-                         'vocabulary_file': str(orb_share / 'vocabulary/ORBvoc.txt'),
-                         'camera_imu_timeshift': timeshift}],
-            remappings=[('cam0/image_raw', camera_topics[0]),
-                        ('cam1/image_raw', camera_topics[1]), ('imu0', imu_topic),
-                        ('odomimu', '/uav1/odomimu')])
-        localization = orbslam
     vio_bridge = Node(
         package='vio_bridge', executable='vio_to_px4.py',
         name='vio_bridge', output='screen',
@@ -350,7 +318,7 @@ def setup(context):
     return LaunchDescription([
         gazebo_sensors,              # sim: Gazebo camera, IMU, clock bridge
         sensor_relay,                # hardware: measured camera/IMU topics
-        localization,                # default: OpenVINS; optional: ORB test
+        openvins,                    # sole visual-inertial estimator
         vio_bridge,                  # VIO -> PX4 and odom TF
         software_stereo,             # sim/software depth
         depth_filter,                # temporal/spatial depth cleanup

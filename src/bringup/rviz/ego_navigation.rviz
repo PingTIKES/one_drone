@@ -112,6 +112,9 @@ Visualization Manager:
   Tools:
     - Class: rviz_default_plugins/Interact
     - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/PublishPoint
+      Single click: true
+      Topic: /clicked_point
     - Class: rviz_default_plugins/SetGoal
       Topic: /navigation_goal
   Views:

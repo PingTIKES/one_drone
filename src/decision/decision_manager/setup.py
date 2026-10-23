@@ -6,6 +6,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/decision_manager']),
         ('share/decision_manager', ['package.xml']),
+        ('share/decision_manager/config', ['config/decision.yaml']),
     ],
     install_requires=['setuptools'], zip_safe=True,
     maintainer='PingTIKES', maintainer_email='team@example.com',

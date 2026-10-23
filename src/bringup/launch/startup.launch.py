@@ -300,7 +300,7 @@ def setup(context):
         name='goal_manager', output='screen',
         parameters=[common, node_config('goal_manager', 'goal_manager'),
                     {'goal_frame': 'odom'}])
-    decision_config = bringup / 'params/decisions.yaml'
+    decision_config = Path(get_package_share_directory('decision_manager')) / 'config/decision.yaml'
     decision_params = yaml.safe_load(decision_config.read_text())['decision_manager']['ros__parameters']
     decision_manager = Node(
         package='decision_manager', executable='decision_manager',

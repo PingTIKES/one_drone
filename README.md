@@ -106,7 +106,7 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | map→odom 初值 | `src/rviz/modify_map_to_odom/config/config.yaml` |
 | 飞行控制、速度、起飞高度及偏航 | `src/control/flight_bridge/config/params.yaml` |
 | 打点目标高度 | `src/navigation/goal_manager/config/params.yaml` |
-| 决策航点、循环模式及到点容差 | `src/bringup/params/decisions.yaml` |
+| 决策航点、循环模式及到点容差 | `src/decision/decision_manager/config/decision.yaml` |
 | 定位健康检查 | `src/localization/vio_bridge/config/params.yaml` |
 | 仿真 OpenVINS 参数 | `src/localization/vio_bridge/config/openvins_sim/estimator_config.yaml` |
 | 真机 OpenVINS 参数与标定 | `calibration_dir` 中的 YAML 文件 |
@@ -242,7 +242,7 @@ ros2 topic echo /flight_state
 
 ### 自动航点决策
 
-`startup.launch.py` 已包含 `decision_manager`。在 `src/bringup/params/decisions.yaml` 中填写 `decision_1.waypoints`，默认列表为空，不会向未经配置的场地坐标飞行。坐标格式为 `[x, y, z]`，单位 m；`frame_id` 支持 `map` 和 `odom`。
+`startup.launch.py` 已包含 `decision_manager`。在 `src/decision/decision_manager/config/decision.yaml` 中填写 `decision_1.waypoints`，默认列表为空，不会向未经配置的场地坐标飞行。坐标格式为 `[x, y, z]`，单位 m；`frame_id` 支持 `map` 和 `odom`。
 
 - `mode: once`：依次执行所有航点，在最后一个点结束任务并保持位置。
 - `mode: loop`：最后一个点到达后回到第一个点，持续循环。
@@ -261,7 +261,7 @@ ros2 topic echo /flight_state
 ros2 topic echo /decision/state --qos-durability transient_local
 ```
 
-后续行为选择逻辑可扩展 `src/decision/decision_manager/src/decision_node.py` 中的 `select_decision()`；任务航点及到点阈值均在 `decisions.yaml` 中修改。
+后续行为选择逻辑可扩展 `src/decision/decision_manager/src/decision_node.py` 中的 `select_decision()`；任务航点及到点阈值均在 `decision.yaml` 中修改。
 
 任务结束时降落：
 

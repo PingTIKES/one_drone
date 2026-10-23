@@ -12,7 +12,9 @@ if [[ "$WORLD" == rmuc_2025_field ]]; then
     WORLD=rmuc_2025_3m_vio_columns
 fi
 AUTOSTART=4001
-SPAWN_POSE="${SPAWN_POSE:-1.3,9.4,0.5,0,0,0}"
+# x,y,z,roll,pitch,yaw（m/rad）；从出生点沿赛场纵向向内（世界 -Y）。
+# 相机安装方向为机体 +X，旋转整机可保持相机外参和机头方向一致。
+SPAWN_POSE="${SPAWN_POSE:-1.3,9.4,0.5,0,0,-1.5707963267948966}"
 
 [[ -d "$PX4_DIR/.git" ]] || { echo "PX4 directory missing: $PX4_DIR" >&2; exit 1; }
 [[ "$(git -C "$PX4_DIR" rev-parse HEAD)" == "$PX4_COMMIT" ]] || {

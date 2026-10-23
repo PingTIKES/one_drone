@@ -137,6 +137,8 @@ bash scripts/start_algorithm_sim.sh
 
 等待 `[sim] Ready.`。默认场景使用 3 m 墙体和识别柱；无图形环境可使用 `HEADLESS=1 bash scripts/start_algorithm_sim.sh`。
 
+默认出生位置为 `(1.3, 9.4, 0.5)`，yaw 为 `-π/2`，机头与前视相机朝场内纵向（Gazebo 世界 −Y）。可通过 `SPAWN_POSE=x,y,z,roll,pitch,yaw` 环境变量覆盖，角度单位为 rad；修改后需重启仿真。该朝向属于仿真世界，不代表 OpenVINS 的初始 `odom` 航向。
+
 **终端 B：启动算法与 RViz。**
 
 ```bash

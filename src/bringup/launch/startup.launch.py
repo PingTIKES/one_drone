@@ -85,17 +85,21 @@ def setup(context):
         raise ValueError('simulation uses OpenVINS; microvio reads the real PX4 USB')
     needs_calibration = source == 'openvins' or perception
     mode = arg('depth_source')
-    if mode not in ('software', 'hardware'):
+    if perception and mode not in ('software', 'hardware'):
         raise ValueError('depth_source must be software or hardware')
-    if sim and mode != 'software':
+    if sim and perception and mode != 'software':
         raise ValueError('simulation uses raw stereo, not Gazebo ideal depth')
     if not sim and needs_calibration and not arg('calibration_dir'):
         raise ValueError('hardware needs a measured calibration_dir')
     if not sim and (not arg('target_system') or int(arg('target_system')) <= 0):
         raise ValueError('hardware needs explicit PX4 target_system')
-    if not sim and needs_calibration and any(not arg(key) for key in
-                       ('cam0_topic', 'cam1_topic', 'imu_topic', 'depth_topic', 'depth_info_topic')):
-        raise ValueError('hardware needs explicit measured camera, IMU and depth topics')
+    required_topics = []
+    if source == 'openvins' or (perception and mode == 'software'):
+        required_topics += ['cam0_topic', 'cam1_topic', 'imu_topic']
+    if perception and mode == 'hardware':
+        required_topics += ['cam0_topic', 'depth_topic', 'depth_info_topic']
+    if not sim and any(not arg(key) for key in required_topics):
+        raise ValueError('selected localization/depth source needs its input topics')
     target_system = int(arg('target_system') or '2')
     px4_ns = arg('px4_ns') or ('px4_1' if sim else '/')
     if source == 'openvins':
@@ -235,41 +239,52 @@ def setup(context):
         name='ego_odom_adapter', output='screen',
         parameters=[common, node_config('ego_bridge', 'ego_odom_adapter'),
                     {'depth_topic': ego_depth_topic}])
-    ego_planner = ego_traj_server = camera_optical_tf = None
-    goal_manager = decision_manager = None
+    camera_optical_tf = None
+    ego_planner = Node(
+        package='ego_planner', executable='ego_planner_node',
+        name='ego_planner_node', output='screen',
+        # Keep the control bridge alive and restart only the planner process.
+        # A small non-zero delay prevents a tight fork/crash loop.
+        respawn=bool(process_config['respawn']),
+        respawn_delay=float(process_config['respawn_delay']),
+        parameters=[str(bringup / 'params/ego_params.yaml'), common,
+                    ({'grid_map/cam2body': t_body_camera.ravel().tolist()} if perception else {})],
+        remappings=[
+            ('odom_world', '/ego/odom'),
+            ('grid_map/odom', '/ego/odom'),
+            ('grid_map/depth', ego_depth_topic if perception else '/ego/unused_depth'),
+            ('grid_map/camera_info', depth_info_topic if perception else '/ego/unused_camera_info'),
+            ('grid_map/cloud', '/ego/unused_cloud'),
+            ('planning/bspline', '/ego/planning/bspline'),
+            ('planning/data_display', '/ego/planning/data_display'),
+            ('planning/broadcast_bspline_from_planner', '/ego/broadcast_bspline'),
+            ('planning/broadcast_bspline_to_planner', '/ego/broadcast_bspline'),
+            ('grid_map/occupancy', '/ego/occupancy'),
+            ('grid_map/occupancy_inflate', '/ego/occupancy_inflate'),
+            ('goal_point', '/ego/visualization/goal'),
+            ('global_list', '/ego/visualization/global_path'),
+            ('init_list', '/ego/visualization/initial_path'),
+            ('optimal_list', '/ego/visualization/optimal_path'),
+            ('a_star_list', '/ego/visualization/a_star')])
+    ego_traj_server = Node(
+        package='ego_planner', executable='traj_server',
+        name='traj_server', output='screen',
+        parameters=[str(bringup / 'params/ego_params.yaml'), common],
+        remappings=[('planning/bspline', '/ego/planning/bspline'),
+                    ('position_cmd', '/ego/position_cmd')])
+    goal_manager = Node(
+        package='goal_manager', executable='goal_manager',
+        name='goal_manager', output='screen',
+        parameters=[common, node_config('goal_manager', 'goal_manager'),
+                    {'goal_frame': 'odom'}])
+    decision_config = Path(get_package_share_directory('decision_manager')) / 'config/decision.yaml'
+    decision_params = yaml.safe_load(decision_config.read_text())['decision_manager']['ros__parameters']
+    decision_manager = Node(
+        package='decision_manager', executable='decision_manager',
+        name='decision_manager', output='screen',
+        parameters=[decision_params, common,
+                    {'decisions_file': str(decision_config), 'px4_ns': px4_ns}])
     if perception:
-        ego_planner = Node(
-            package='ego_planner', executable='ego_planner_node',
-            name='ego_planner_node', output='screen',
-            # Keep the control bridge alive and restart only the planner process.
-            # A small non-zero delay prevents a tight fork/crash loop.
-            respawn=bool(process_config['respawn']),
-            respawn_delay=float(process_config['respawn_delay']),
-            parameters=[str(bringup / 'params/ego_params.yaml'), common,
-                        {'grid_map/cam2body': t_body_camera.ravel().tolist()}],
-            remappings=[
-                ('odom_world', '/ego/odom'),
-                ('grid_map/odom', '/ego/odom'),
-                ('grid_map/depth', ego_depth_topic),
-                ('grid_map/camera_info', ego_info_topic),
-                ('grid_map/cloud', '/ego/unused_cloud'),
-                ('planning/bspline', '/ego/planning/bspline'),
-                ('planning/data_display', '/ego/planning/data_display'),
-                ('planning/broadcast_bspline_from_planner', '/ego/broadcast_bspline'),
-                ('planning/broadcast_bspline_to_planner', '/ego/broadcast_bspline'),
-                ('grid_map/occupancy', '/ego/occupancy'),
-                ('grid_map/occupancy_inflate', '/ego/occupancy_inflate'),
-                ('goal_point', '/ego/visualization/goal'),
-                ('global_list', '/ego/visualization/global_path'),
-                ('init_list', '/ego/visualization/initial_path'),
-                ('optimal_list', '/ego/visualization/optimal_path'),
-                ('a_star_list', '/ego/visualization/a_star')])
-        ego_traj_server = Node(
-            package='ego_planner', executable='traj_server',
-            name='traj_server', output='screen',
-            parameters=[str(bringup / 'params/ego_params.yaml'), common],
-            remappings=[('planning/bspline', '/ego/planning/bspline'),
-                        ('position_cmd', '/ego/position_cmd')])
         camera_q = quaternion(t_body_camera[:3, :3])
         camera_optical_tf = Node(
             package='tf2_ros', executable='static_transform_publisher',
@@ -280,18 +295,6 @@ def setup(context):
                 '--qx', str(float(camera_q[1])), '--qy', str(float(camera_q[2])),
                 '--qz', str(float(camera_q[3])), '--qw', str(float(camera_q[0])),
                 '--frame-id', 'base_link', '--child-frame-id', 'camera_optical'])
-        goal_manager = Node(
-            package='goal_manager', executable='goal_manager',
-            name='goal_manager', output='screen',
-            parameters=[common, node_config('goal_manager', 'goal_manager'),
-                        {'goal_frame': 'odom'}])
-        decision_config = Path(get_package_share_directory('decision_manager')) / 'config/decision.yaml'
-        decision_params = yaml.safe_load(decision_config.read_text())['decision_manager']['ros__parameters']
-        decision_manager = Node(
-            package='decision_manager', executable='decision_manager',
-            name='decision_manager', output='screen',
-            parameters=[decision_params, common,
-                        {'decisions_file': str(decision_config), 'px4_ns': px4_ns}])
     microvio = None
     if source == 'microvio':
         microvio = Node(
@@ -343,11 +346,11 @@ def setup(context):
         arguments=['-d', str(bringup / 'rviz/ego_navigation.rviz')])
 
     startup_mode = LogInfo(msg=(
-        f"Localization: {source}; perception/planning: {perception}; "
+        f"Localization: {source}; depth perception: {perception}; "
         f"flight control: {arg('flight_control')}. "
-        + ("No camera mode: EGO and waypoint execution are disabled." if not perception else "")))
+        + ("No camera mode: EGO plans without observed obstacles; depth health remains false." if not perception else "")))
 
-    # Startup inventory. Camera-free checks omit the perception/planning chain.
+    # Startup inventory. Only camera processing depends on perception_enabled.
     return [action for action in [
         startup_mode,
         gazebo_sensors,              # sim: Gazebo camera, IMU, clock bridge

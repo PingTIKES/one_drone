@@ -92,10 +92,11 @@ try:
     frames(0., 5)
     frames(2., 5, age=2.)
     frames(2., 5, sync_error=.2)
-    assert not ready, 'invalid/stale/unsynchronized frames incorrectly acknowledged map readiness'
+    assert ready and ready[-1] == reset.frame_id, 'fresh odometry did not acknowledge cleared map'
+    assert cloud[0].width == 0, 'invalid/stale/unsynchronized depth incorrectly rebuilt occupancy'
     frames(2., 12)
     assert ready[-1] == reset.frame_id and cloud[0].width > 0
-    print('PASS: reset clears map; only fresh synchronized valid frames rebuild it', flush=True)
+    print('PASS: reset clears map and accepts new odometry; only fresh synchronized valid depth rebuilds occupancy', flush=True)
 
     planned = []
     subscriptions.append(n.create_subscription(Bspline, '/planning/bspline', planned.append, 10))

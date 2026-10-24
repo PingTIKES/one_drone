@@ -66,7 +66,6 @@ struct MappingParameters
   bool require_camera_info_;
 
   /* time out */
-  double odom_depth_timeout_;
 
   /* depth image projection filtering */
   double depth_filter_maxdist_, depth_filter_mindist_, depth_filter_tolerance_;
@@ -118,10 +117,6 @@ struct MappingData
   bool has_first_depth_;
   bool has_odom_, has_cloud_;
 
-  // odom_depth_timeout_
-  rclcpp::Time last_occ_update_time_;
-  bool flag_depth_odom_timeout_;
-  bool flag_use_depth_fusion;
 
   // depth image projected point cloud
 
@@ -197,7 +192,6 @@ public:
   inline double getResolution();
   Eigen::Vector3d getOrigin();
   int getVoxelNum();
-  bool getOdomDepthTimeout() { return md_.flag_depth_odom_timeout_; }
 
   typedef std::shared_ptr<GridMap> Ptr;
 
@@ -209,7 +203,6 @@ private:
   std_msgs::msg::Header reset_epoch_;
   double reset_stamp_ = -1.0, last_depth_stamp_ = -1.0;
   double depth_max_age_, depth_sync_tolerance_, future_tolerance_;
-  int reset_depth_frames_, integrated_frames_ = 0;
   bool reset_pending_ = false;
   bool acceptDepthStamp(const std_msgs::msg::Header &image, const std_msgs::msg::Header &pose);
   void resetForVio(const std_msgs::msg::Header &event);

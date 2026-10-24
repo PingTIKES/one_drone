@@ -19,12 +19,12 @@ bool receive_traj_ = false;
 double reset_cutoff_ = -1.0;
 rclcpp::Node::SharedPtr node_;
 rclcpp::Time heartbeat_at_(0, 0, RCL_STEADY_TIME);
-double map_stamp_ = -1.0, heartbeat_timeout_, map_timeout_;
+double heartbeat_timeout_;
 std::string planner_instance_;
 bool mapHealthy()
 {
-  double age = node_->now().seconds() - map_stamp_;
-  return !planner_instance_.empty() && map_stamp_ > 0.0 && age >= -0.02 && age <= map_timeout_ &&
+  // Planner liveness is independent of whether a depth sensor is connected.
+  return !planner_instance_.empty() &&
     (rclcpp::Clock(RCL_STEADY_TIME).now() - heartbeat_at_).seconds() <= heartbeat_timeout_;
 }
 void invalidateTrajectory()
@@ -156,14 +156,12 @@ int main(int argc, char **argv)
   auto node = rclcpp::Node::make_shared("traj_server");
   node_ = node;
   heartbeat_timeout_ = node->declare_parameter("planner_heartbeat_timeout", 0.75);
-  map_timeout_ = node->declare_parameter("map_timeout", 0.75);
-  if (!(heartbeat_timeout_ > 0) || !(map_timeout_ > 0)) throw std::invalid_argument("invalid watchdog timeout");
+  if (!(heartbeat_timeout_ > 0)) throw std::invalid_argument("invalid watchdog timeout");
   auto heartbeat_sub = node->create_subscription<std_msgs::msg::Header>("/ego/map_heartbeat", 1,
       [](std_msgs::msg::Header::ConstSharedPtr msg) {
         if (planner_instance_ != msg->frame_id) invalidateTrajectory();
         planner_instance_ = msg->frame_id;
         heartbeat_at_ = rclcpp::Clock(RCL_STEADY_TIME).now();
-        map_stamp_ = rclcpp::Time(msg->stamp).seconds();
       });
 
   auto reset_ready = node->create_publisher<std_msgs::msg::Header>("/ego/trajectory_reset_ready",

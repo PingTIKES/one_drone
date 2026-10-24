@@ -41,16 +41,17 @@ def launch_nodes(startup, sim, source, perception):
     return context, nodes
 
 
-def test_microvio_without_camera_has_no_estimator_feedback_or_planner(startup):
+def test_microvio_without_camera_keeps_planner_without_estimator_feedback(startup):
     context, nodes = launch_nodes(startup, False, 'microvio', False)
     assert 'microvio' in nodes
     assert 'ego_odom_adapter' in nodes
     assert 'modify_map_to_odom_node' in nodes
     for executable in ('run_subscribe_msckf', 'vio_to_px4.py', 'sensor_relay',
                        'software_stereo', 'depth_filter', 'stereo_depth_node',
-                       'ego_planner_node', 'traj_server', 'goal_manager',
-                       'decision_manager', 'flight_bridge'):
+                       'flight_bridge'):
         assert executable not in nodes
+    for executable in ('ego_planner_node', 'traj_server', 'goal_manager', 'decision_manager'):
+        assert executable in nodes
     # Validate the actual ROS interface overrides passed to the selected node.
     params = nodes['microvio']._Node__parameters
     merged = {}

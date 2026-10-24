@@ -172,14 +172,16 @@ class ResetPipelineTest(unittest.TestCase):
             n.goal_pub = Mock()
             n.now = lambda: 100.
             n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
-            n.on_depth(Bool(data=True))
             goal = PoseStamped()
             goal.header.frame_id = 'odom'
             n.on_goal(goal)
             n.goal_pub.publish.assert_not_called()
-            n.on_vio(String(data='VALID'))
-            n.on_depth(Bool(data=True))
-            n.on_vio(String(data='VALID'))
+            pose = Odometry()
+            pose.header.frame_id = 'odom'
+            pose.header.stamp = stamp(100.)
+            pose.pose.pose.orientation.w = 1.
+            n.on_odom(pose)
+            n.on_odom(pose)
             self.assertEqual(n.goal_pub.publish.call_count, 1)
         finally:
             n.destroy_node()
@@ -192,9 +194,14 @@ class ResetPipelineTest(unittest.TestCase):
             # No PX4, takeoff, OFFBOARD or flight_state input exists in this test.
             topics = [s.topic_name for s in n.subscriptions]
             self.assertNotIn('/flight_state', topics)
+            self.assertNotIn('/ego/depth_fresh', topics)
+            self.assertNotIn('/vio_health', topics)
             n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
-            n.on_depth(Bool(data=True))
-            n.on_vio(String(data='VALID'))
+            pose = Odometry()
+            pose.header.frame_id = 'odom'
+            pose.header.stamp = stamp(100.)
+            pose.pose.pose.orientation.w = 1.
+            n.on_odom(pose)
             goal = PoseStamped()
             goal.header.frame_id = 'odom'
             goal.pose.position.x = 3.
@@ -204,7 +211,6 @@ class ResetPipelineTest(unittest.TestCase):
             sent = n.goal_pub.publish.call_args.args[0]
             self.assertEqual(sent.pose.position.x, 3.)
             self.assertEqual(sent.pose.position.z, 2.)
-            n.on_depth(Bool(data=True))
             self.assertEqual(n.goal_pub.publish.call_count, 1)
         finally:
             n.destroy_node()
@@ -232,8 +238,11 @@ class ResetPipelineTest(unittest.TestCase):
             n.goal_pub = Mock()
             n.now = lambda: 100.
             n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
-            n.on_depth(Bool(data=True))
-            n.on_vio(String(data='VALID'))
+            pose = Odometry()
+            pose.header.frame_id = 'odom'
+            pose.header.stamp = stamp(100.)
+            pose.pose.pose.orientation.w = 1.
+            n.on_odom(pose)
             goal = PoseStamped()
             goal.header.frame_id = 'map'
             goal.pose.position.x = 11.
@@ -248,6 +257,11 @@ class ResetPipelineTest(unittest.TestCase):
             tf.transform.rotation.w = 1.
             n.tf_buffer.set_transform_static(tf, 'test')
             n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
+            pose = Odometry()
+            pose.header.frame_id = 'odom'
+            pose.header.stamp = stamp(100.)
+            pose.pose.pose.orientation.w = 1.
+            n.on_odom(pose)
             sent = n.goal_pub.publish.call_args.args[0]
             self.assertEqual(sent.header.frame_id, 'odom')
             self.assertAlmostEqual(sent.pose.position.x, 1.)

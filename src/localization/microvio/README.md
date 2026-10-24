@@ -11,7 +11,7 @@
                                                     └─ /microvio/range
 ```
 
-支持独立入口和总启动入口。总启动在 `bringup/params/launch.yaml` 的 `hardware` 下设置 `localization_source: microvio`，统一输出 `/odom`、`/vio_health`、`/vio_diagnostics`、`/vio_reset_event` 和 `odom→base_link`，互斥关闭 OpenVINS 与 VIO→PX4 回灌节点。无相机检查设置 `perception_enabled: false`，关闭深度、EGO、目标管理和巡航；同时保持 `startup.sim: false`、`startup.flight_control: false`。执行 `ros2 launch bringup startup.launch.py` 即可查看地图和定位。两种入口不能同时占用串口。
+支持独立入口和总启动入口。总启动在 `bringup/params/launch.yaml` 的 `hardware` 下设置 `localization_source: microvio`，统一输出 `/odom`、`/vio_health`、`/vio_diagnostics`、`/vio_reset_event` 和 `odom→base_link`，互斥关闭 OpenVINS 与 VIO→PX4 回灌节点。无相机检查设置 `perception_enabled: false`，仅关闭深度处理，EGO 和打点规划仍启动；无深度时没有实时避障；同时保持 `startup.sim: false`、`startup.flight_control: false`。执行 `ros2 launch bringup startup.launch.py` 即可查看地图和定位。两种入口不能同时占用串口。
 
 ## 安装与启动
 

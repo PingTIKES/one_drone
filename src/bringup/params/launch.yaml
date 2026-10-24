@@ -8,7 +8,7 @@ startup:
 
 hardware:
   localization_source: microvio # microvio 读取飞控 USB 定位；openvins 使用双目和 IMU
-  perception_enabled: false # 无相机定位检查设 false，关闭深度、EGO、目标管理和巡航；接回相机后设 true
+  perception_enabled: false # false 只关闭相机深度处理，EGO/打点/决策仍启动；无深度时没有实时障碍信息
   depth_source: hardware # hardware 使用 D435i 深度；software 使用项目软件双目
   calibration_dir: ~/one_drone/deploy/calibration/uav1 # 已导入的真机标定目录，支持 ~
   target_system: 1 # 实际飞控 MAV_SYS_ID，接入前核对
@@ -21,7 +21,7 @@ hardware:
 
 simulation:
   localization_source: openvins # 仿真使用 OpenVINS，不读取实机 microvio 串口
-  perception_enabled: true # 仿真图像生成深度并启动 EGO 规划
+  perception_enabled: true # 仿真图像生成深度；EGO 规划独立启动
   depth_source: software # 仿真使用图像计算深度
   calibration_dir: '' # 仿真自动使用 vio_bridge/config/openvins_sim
   target_system: 2 # 当前仿真飞控 MAV_SYS_ID

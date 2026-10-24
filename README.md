@@ -1,8 +1,8 @@
 # one_drone
 
-基于 **ROS 2 Humble、OpenVINS、EGO-Planner 和 PX4** 的单无人机导航项目。
+基于 **ROS 2 Humble、OpenVINS / MicoVIO、EGO-Planner 和 PX4** 的单无人机导航项目。
 
-无人机通过前视双目相机和 IMU 估计位置，通过深度图建立局部障碍地图；在 RViz 中指定目标后，规划三维轨迹，并将速度与偏航角速度指令发送给飞控。
+无人机通过前视双目与 IMU 或下视 MicoVIO 模组估计位置，通过前视深度图建立局部障碍地图；在 RViz 中指定目标后，规划三维轨迹，并将速度与偏航角速度指令发送给飞控。
 
 ## 1. 项目组成
 
@@ -14,7 +14,7 @@
 RViz 目标 → goal_manager → EGO 轨迹规划 → 轨迹控制 → PX4 Offboard
 ```
 
-- **定位**：默认使用 OpenVINS 双目惯性里程计，定位桥发布 `/odom`、TF 和 PX4 外部视觉数据。
+- **定位**：可选择 OpenVINS 双目惯性里程计，或通过 microvio 读取 PX4 融合后的 MicoVIO 定位，统一发布 `/odom` 和 TF。只有 OpenVINS 链路向 PX4 写入外部视觉。
 - **建图与避障**：EGO 使用有效深度观测建立三维占用栅格，并按机体尺寸和安全余量膨胀障碍物。未知区域按当前配置允许通行。
 - **导航**：RViz 打点后，目标转换到 `odom` 坐标系，由 EGO 规划轨迹，控制模块向 PX4 发送设定值。
 - **决策**：进入 PX4 OFFBOARD 后选择航点行为，支持单次执行与循环巡航，通过现有目标管理器调用 EGO。
@@ -27,7 +27,7 @@ TF 关系为：
 map → odom → base_link → camera_optical
 ```
 
-`map→odom` 由 modify 节点按配置及 RViz 面板调整发布，`odom→base_link` 由定位桥根据 OpenVINS 输出发布。默认将首次接受定位时的机头水平朝向定义为 `odom` 的 +X，因此初始 yaw 为 0；后续转动正常跟随，保留真实 roll/pitch。OpenVINS 和 microvio 包内的 `initial_yaw_zero` 可关闭此约定；该坐标变换不修改飞控原始视觉输入，也不自动修改 `map→odom`。RViz 使用 `map` 作为 Fixed Frame，EGO 在 `odom` 下规划和控制。
+`map→odom` 由 modify 节点按配置及 RViz 面板调整发布，`odom→base_link` 由所选定位节点发布。默认将首次接受定位时的机头水平朝向定义为 `odom` 的 +X，因此初始 yaw 为 0；后续转动正常跟随，保留真实 roll/pitch。OpenVINS 和 microvio 包内的 `initial_yaw_zero` 可关闭此约定；该坐标变换不修改飞控原始视觉输入，也不自动修改 `map→odom`。RViz 使用 `map` 作为 Fixed Frame，EGO 在 `odom` 下规划和控制。
 
 ### 目录
 
@@ -86,6 +86,8 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | `startup.sim` | `true` 使用仿真配置；`false` 使用真机配置 |
 | `startup.rviz` | 是否打开 RViz |
 | `startup.flight_control` | `false` 只测试感知、定位和规划；`true` 启动飞控控制节点及起飞/降落服务 |
+| `hardware.localization_source` | `openvins` 使用相机定位；`microvio` 读取飞控 USB 融合定位 |
+| `hardware.perception_enabled` | `false` 仅检查定位，不启动深度、EGO、目标管理和巡航；接相机导航时设 `true` |
 | `hardware.calibration_dir` | 当前设备的标定目录 |
 | `hardware.target_system`、`hardware.px4_ns` | 飞控编号及 DDS 名称空间 |
 | `hardware.cam0_topic`、`cam1_topic`、`imu_topic` | 与标定对应的左右目和 IMU 输入 |
@@ -151,7 +153,7 @@ ros2 launch bringup startup.launch.py
 
 ## 5. 真机启动
 
-在 `launch.yaml` 中设置 `startup.sim: false`，核对相机话题、标定目录、飞控编号及 DDS 名称空间。初次检查定位时保持 `startup.flight_control: false`。
+使用 OpenVINS 和深度导航时，在 `launch.yaml` 中设置 `startup.sim: false`、`hardware.localization_source: openvins`、`hardware.perception_enabled: true`，核对相机话题、标定目录、飞控编号及 DDS 名称空间。初次检查定位时保持 `startup.flight_control: false`。
 
 ### 标定文件
 
@@ -233,13 +235,24 @@ ros2 launch bringup startup.launch.py
 
 ### MicoVIO 模组定位检查
 
-已将 MicoVIO 接到 PX4 TELEM2 的设备，可使用独立包读取飞控融合定位：
+当前真机配置为无相机定位检查：`sim: false`、`flight_control: false`、`hardware.localization_source: microvio`、`hardware.perception_enabled: false`。MicoVIO 接飞控 TELEM2，电脑 USB 接飞控。在 source 工作区并统一 RMW 环境后启动：
+
+```bash
+ros2 launch bringup startup.launch.py
+ros2 topic echo /vio_health
+ros2 topic hz /odom
+ros2 run tf2_ros tf2_echo odom base_link
+```
+
+总启动保留先验地图、modify、RViz 和 `/ego/odom`，由 microvio 发布 `/odom`、`/vio_health`、`/vio_diagnostics`、`/vio_reset_event` 及 `odom→base_link`。OpenVINS 和 VIO→PX4 回灌节点互斥关闭。无相机时不启动深度处理、EGO 规划、目标管理和巡航；下视 ToF 不能替代前视障碍地图。接回相机后启用 `perception_enabled: true` 并核对深度安装外参，才进行导航联调。
+
+也可使用独立包读取飞控融合定位（不要与总启动同时运行）：
 
 ```bash
 ros2 launch microvio microvio.launch.py
 ```
 
-使用前 source 本工作区并按真机章节统一 RMW 环境。串口、波特率及输出话题放在 `src/localization/microvio/config/params.yaml`，输出为 `/microvio/odom`、`/microvio/health` 和 `/microvio/diagnostics`。此入口只检查定位，不启动飞控控制，也不替换总启动中的 OpenVINS。[接线、启动及导航接入说明](src/localization/microvio/README.md)。
+使用前 source 本工作区并按真机章节统一 RMW 环境。串口、波特率及输出话题放在 `src/localization/microvio/config/params.yaml`，输出为 `/microvio/odom`、`/microvio/health` 和 `/microvio/diagnostics`。独立入口只检查定位，不启动飞控控制；总启动通过上述 `localization_source` 选择定位来源。[接线、启动及导航接入说明](src/localization/microvio/README.md)。
 
 ## 6. 起飞、打点与降落
 

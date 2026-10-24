@@ -11,7 +11,7 @@
                                                     └─ /microvio/range
 ```
 
-本轮是独立的实机定位检查入口。没有启动起飞、巡航或飞控控制节点，没有替换 `bringup/startup.launch.py` 的默认 OpenVINS 链路。
+支持独立入口和总启动入口。总启动在 `bringup/params/launch.yaml` 的 `hardware` 下设置 `localization_source: microvio`，统一输出 `/odom`、`/vio_health`、`/vio_diagnostics`、`/vio_reset_event` 和 `odom→base_link`，互斥关闭 OpenVINS 与 VIO→PX4 回灌节点。无相机检查设置 `perception_enabled: false`，关闭深度、EGO、目标管理和巡航；同时保持 `startup.sim: false`、`startup.flight_control: false`。执行 `ros2 launch bringup startup.launch.py` 即可查看地图和定位。两种入口不能同时占用串口。
 
 ## 安装与启动
 
@@ -52,7 +52,7 @@ RViz 的 Fixed Frame 使用 `microvio_odom`，添加 Odometry 显示 `/microvio/
 - PX4 的世界 NED 转换为项目采用的 NWU：`[x, y, z] → [x, -y, -z]`；机体 FRD 转为 FLU。NWU 与常见 ENU 不同。
 - 默认 `initial_yaw_zero: true`：首次接受的机头水平朝向定义为 ROS odom 的 +X，初始 yaw 为 0；之后转动正常跟随，保留真实 roll/pitch。位置和姿态及姿态协方差使用同一个固定旋转；机体系速度不旋转。原点不平移、Z 不清零。设置为 false 可保留原始 NWU 航向。变换仅在节点启动后锁定一次，不因断流、恢复或重置重新归零；原始 PX4 数据保持不变。`nav_msgs/Odometry` 的速度输出在机体系中，之后可交给现有 EGO 里程计适配器转换为世界速度。
 - 主动 TIMESYNC 估算电脑和飞控时钟差，使用原始 ODOMETRY 的采样时刻；未同步、过期、重复、倒退的样本不生成新里程计或 TF。
-- `reset_counter` 变化、源时钟重启或串口异常会产生重置事件。未来接导航时，必须将该事件接入现有清地图、清轨迹和旧目标的流程。
+- `reset_counter` 变化、源时钟重启或串口异常会产生重置事件。总启动已将该事件接到 `/vio_reset_event`，供现有清地图、清轨迹和旧目标的流程使用。
 - `quality=0` 表示未知，不等于质量差；`quality=-1` 才表示失败。PX4 融合 ODOMETRY 的质量字段可能为 0，不能将其误当成模组原始质量。
 - MicoVIO 原始数据使用任意初始航向的 LOCAL_FRD，PX4 1.14.3 接受此航向后会主动将 `cs_yaw_align` 置为 false。这个标志不是本模式的初始化完成条件，也不要求旋转机体或与真北对齐。配置 `external_vision_reference: local_frd` 对应此模式；真正提供 NED 参考的设备才使用 `ned`。不要仅根据飞控融合输出的 frame_id 判断模组原始参考系。
 - 健康消息根据遥测新鲜度和 PX4 `ESTIMATOR_STATUS` 计算。`VALID` 仅代表这些检查通过，**不代表独立验证了模组持续跟踪状态或绝对定位精度**。具体原因及缺失状态位见 diagnostics。
@@ -84,7 +84,7 @@ RViz 的 Fixed Frame 使用 `microvio_odom`，添加 Odometry 显示 `/microvio/
 
 1. 确认实际原始坐标参考模式及测距参与高度融合的条件；LOCAL_FRD 无需等待全局 yaw_align=true。
 2. 接通与当前固件匹配的 DDS 通道，或实现统一的 MAVLink 控制适配。本项目现有 flight_bridge 仍通过 DDS 控制，不能因本包能读 USB 就认为已有控制链路。TELEM2 已被模块使用，可评估 TELEM1 供 RK3566 的 DDS 通信。
-3. 互斥启动 OpenVINS 与 microvio，只保留一个 `odom→base_link` 发布者；把 odom、健康和重置事件接入现有导航接口，停止旧的 VIO→PX4 回灌节点，防止融合反馈环路。
+3. 总启动已互斥选择定位并接入统一接口；飞行联调前确认只运行一个总启动实例，防止重复 TF 和串口争用。
 4. 保留前视 D435i 的深度感知和准确的机体安装外参。MicoVIO 的下视 ToF 不能替代三维障碍物地图。
 
 ## 协议依据

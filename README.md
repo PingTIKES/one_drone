@@ -193,13 +193,31 @@ ros2 param set /camera/camera depth_module.emitter_enabled 0
 
 ### 飞控通信
 
-飞行控制联调前，在 PX4 上配置 uXRCE-DDS 客户端，并启动主机的 Micro XRCE-DDS Agent。传输方式、串口设备和波特率需与实际飞控配置一致。串口连接的主机命令示例：
+飞行控制使用 PX4 uXRCE-DDS 客户端与电脑上的 Micro XRCE-DDS Agent。当前 MicoVIO 占用 TELEM2，飞控原生 USB 使用 MAVLink（供 microvio/QGroundControl），不能将这个 USB 设备直接当作 DDS 串口。
+
+推荐将空闲 **TELEM1** 接到电脑的 **3.3 V USB-TTL** 转换器（TX→RX、RX→TX、GND→GND），或接 RK3566 上电平匹配且已启用的 UART。按飞控接口定义确认引脚，不将 RS-232 电平直接接入飞控。
+
+通过飞控原生 USB 在 QGroundControl 参数页面设置并保存：
+
+| 参数 | 值 | 含义 |
+| --- | --- | --- |
+| `MAV_0_CONFIG` | `0` | 当前它占用 TELEM1，先释放；其他 MAVLink 实例也不能占用 TELEM1 |
+| `UXRCE_DDS_CFG` | `101`（TELEM1） | DDS 客户端串口 |
+| `SER_TEL1_BAUD` | `921600` | 两端串口波特率 |
+| `UXRCE_DDS_DOM_ID` | `0` | 与电脑 ROS_DOMAIN_ID 一致 |
+| `UXRCE_DDS_KEY` | `1` | 单机客户端标识，不能为 0 |
+
+**保留 TELEM2 的 MAVLink 配置，不要禁用 MicoVIO 链路。** 重启飞控后，在 QGroundControl 的 MAVLink Console 执行 `uxrce_dds_client status` 查看运行状态。操作参数前先停止占用飞控 USB 的 microvio；参数配置完成后退出 QGroundControl，再使用 microvio 读取该 USB。
+
+电脑端启动 Agent，下面 `/dev/ttyUSB0` 是新 USB-TTL 转换器的示例设备名，须替换为实际路径（推荐 `/dev/serial/by-id/...`），与飞控原生 USB 的 `/dev/ttyACM0` 不同：
 
 ```bash
-MicroXRCEAgent serial --dev /dev/ttyACM0 -b 921600
+MicroXRCEAgent serial --dev /dev/ttyUSB0 -b 921600
 ```
 
-确认 `/fmu/out/vehicle_status`、`/fmu/out/vehicle_local_position` 持续发布；有 DDS 前缀时使用实际名称空间，并同步填写 `hardware.px4_ns`。仅手动摆动测试定位时，无需启动飞控通信。
+各 ROS 终端 `export ROS_DOMAIN_ID=0` 并统一 RMW 环境，确认 `/fmu/out/vehicle_status`、`/fmu/out/vehicle_local_position` 持续发布。有 DDS 前缀时使用实际名称空间，并同步填写 `hardware.px4_ns`。`px4_msgs` 必须匹配飞控固件；当前项目对应 PX4 1.14。仅运行 microvio 独立 USB 定位检查时无需 DDS Agent。
+
+参数依据：[PX4 1.14 DDS 配置](https://docs.px4.io/v1.14/en/middleware/uxrce_dds)。本节说明的是接线和配置步骤，不表示检测到新 TELEM1 链路已接通。
 
 ### 终端 B：算法与 RViz
 

@@ -50,7 +50,7 @@ RViz 的 Fixed Frame 使用 `microvio_odom`，添加 Odometry 显示 `/microvio/
 ## 坐标、时间与健康
 
 - PX4 的世界 NED 转换为项目采用的 NWU：`[x, y, z] → [x, -y, -z]`；机体 FRD 转为 FLU。NWU 与常见 ENU 不同。
-- 默认 `initial_yaw_zero: true`：首次接受的机头水平朝向定义为 ROS odom 的 +X，初始 yaw 为 0；之后转动正常跟随，保留真实 roll/pitch。位置和姿态及姿态协方差使用同一个固定旋转；机体系速度不旋转。原点不平移、Z 不清零。设置为 false 可保留原始 NWU 航向。变换仅在节点启动后锁定一次，不因断流、恢复或重置重新归零；原始 PX4 数据保持不变。`nav_msgs/Odometry` 的速度输出在机体系中，之后可交给现有 EGO 里程计适配器转换为世界速度。
+- 默认 `initial_yaw_zero: true`：首次接受的机头水平朝向定义为 ROS odom 的 +X，初始 yaw 为 0；之后转动正常跟随，保留真实 roll/pitch。位置和姿态及姿态协方差使用同一个固定旋转；机体系速度不旋转。默认 `initial_position_zero: true`，减去首次有效机体位置，使初始 XYZ=0；后续只反映相对该固定原点的位移。关闭此项可保留飞控位置原点。设置为 false 可保留原始 NWU 航向。变换仅在节点启动后锁定一次，不因断流、恢复或重置重新归零；原始 PX4 数据保持不变。`nav_msgs/Odometry` 的速度输出在机体系中，之后可交给现有 EGO 里程计适配器转换为世界速度。
 - 主动 TIMESYNC 估算电脑和飞控时钟差，使用原始 ODOMETRY 的采样时刻；未同步、过期、重复、倒退的样本不生成新里程计或 TF。
 - `reset_counter` 变化、源时钟重启或串口异常会产生重置事件。总启动已将该事件接到 `/vio_reset_event`，供现有清地图、清轨迹和旧目标的流程使用。
 - `quality=0` 表示未知，不等于质量差；`quality=-1` 才表示失败。PX4 融合 ODOMETRY 的质量字段可能为 0，不能将其误当成模组原始质量。

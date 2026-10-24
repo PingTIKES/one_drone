@@ -35,7 +35,7 @@ class Microvio(Node):
                         future_tolerance=.05, reset_hold_time=1., unknown_variance=1000.,
                         request_streams=False, odometry_rate=30., required_estimator_flags=47,
                         expected_estimator_type=8, external_vision_reference='local_frd',
-                        initial_yaw_zero=True)
+                        initial_yaw_zero=True,initial_position_zero=True)
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         for name in ('poll_rate', 'reconnect_interval', 'heartbeat_timeout', 'odom_timeout',
@@ -51,7 +51,9 @@ class Microvio(Node):
             raise ValueError('external_vision_reference must be local_frd or ned')
         self.link = None
         self.sync = ClockSync()
-        self.initial_yaw_alignment = InitialYawAlignment()
+        self.initial_yaw_alignment = InitialYawAlignment(
+            zero_position=bool(self.p('initial_position_zero')),
+            zero_yaw=bool(self.p('initial_yaw_zero')))
         self.retry_at = self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
         self.last_heartbeat_sent = self.last_sync_sent = -math.inf
         self.reset_at = -math.inf
@@ -207,7 +209,7 @@ class Microvio(Node):
             if not -float(self.p('future_tolerance')) <= age <= float(self.p('odom_timeout')):
                 raise ValueError('STALE_OR_FUTURE_SOURCE_STAMP')
             pose = convert(msg, float(self.p('unknown_variance')))
-            if self.p('initial_yaw_zero'):
+            if self.p('initial_yaw_zero') or self.p('initial_position_zero'):
                 if self.initial_yaw_alignment.rotation is None:
                     now = time.monotonic()
                     required = self.required_flags()
@@ -304,6 +306,9 @@ class Microvio(Node):
                     external_vision_reference=str(self.p('external_vision_reference')),
                     initial_yaw_zero=bool(self.p('initial_yaw_zero')),
                     initial_yaw_rad=self.initial_yaw_alignment.initial_yaw,
+                    initial_position_zero=bool(self.p('initial_position_zero')),
+                    initial_position=(self.initial_yaw_alignment.initial_position.tolist()
+                                      if self.initial_yaw_alignment.initial_position is not None else None),
                     effective_required_estimator_flags=self.required_flags(),
                     global_attitude_flag=None if self.flags is None else bool(self.flags & 1),
                     missing_estimator_flags=None if self.flags is None else self.required_flags() & ~self.flags,

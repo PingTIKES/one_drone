@@ -50,3 +50,16 @@ def test_vertical_initial_body_forward_axis_waits_for_defined_heading():
     with pytest.raises(ValueError):
         align.apply([0., 0., 0.], np.array([[0., 0., 1.], [0., 1., 0.], [-1., 0., 0.]]), np.eye(6))
     assert align.rotation is None
+
+
+@pytest.mark.parametrize('zero_yaw', [True, False])
+def test_initial_body_position_is_origin_and_later_displacement_is_preserved(zero_yaw):
+    align = InitialYawAlignment(zero_position=True, zero_yaw=zero_yaw)
+    initial = np.array([4., -2., .3])
+    p, q, cov = align.apply(initial, rz(math.pi/2), np.eye(6))
+    np.testing.assert_allclose(p, np.zeros(3), atol=1e-12)
+    displacement = np.array([0., 1., .5])
+    p, _, _ = align.apply(initial + displacement, rz(math.pi/2), np.eye(6))
+    np.testing.assert_allclose(p, [1., 0., .5] if zero_yaw else displacement, atol=1e-12)
+    np.testing.assert_allclose(align.initial_position, initial)
+    np.testing.assert_allclose(cov, np.eye(6), atol=1e-12)

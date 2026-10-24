@@ -29,7 +29,7 @@ class VioBridge(Node):
         for k,v in dict(uav_id=1,px4_ns='px4_1',max_age=.5,invalid_age=2.,future_tolerance=.02,max_position_variance=1.,
                         max_orientation_variance=.25,max_velocity_variance=1.,
                         max_speed=4.,max_jump=.4,max_continuous_gap=2.,
-                        expected_world='global',expected_imu='imu',initial_yaw_zero=True,
+                        expected_world='global',expected_imu='imu',initial_yaw_zero=True,initial_position_zero=True,
                         recovery_stable_time=.5,recovery_timeout=2.,recovery_max_correction=.75,
                         recovery_max_angle_deg=35.,recovery_sample_gap=.1,recovery_residual=.15,
                         recovery_max_source_gap=3.,recovery_gap_max_correction=2.5,
@@ -56,7 +56,9 @@ class VioBridge(Node):
             raise ValueError('max_continuous_gap must be greater than max_age')
         uid = int(self.p('uav_id'))
         self.odom_frame, self.body_frame = 'odom', 'base_link'
-        self.initial_yaw_alignment = InitialYawAlignment()
+        self.initial_yaw_alignment = InitialYawAlignment(
+            zero_position=bool(self.p('initial_position_zero')),
+            zero_yaw=bool(self.p('initial_yaw_zero')))
         self.extrinsic = transform(np.array(self.p('t_body_imu')).reshape(4,4))
         self.last_stamp = self.last_position = None
         self.last_quat = self.last_velocity = self.last_omega = None
@@ -165,7 +167,7 @@ class VioBridge(Node):
         point, body_rotation = vio_body_pose(position, orientation)
         quat = quaternion(body_rotation)
         pose_covariance = np.diag((*pv, *ov))
-        if self.p('initial_yaw_zero'):
+        if self.p('initial_yaw_zero') or self.p('initial_position_zero'):
             try:
                 point, quat, pose_covariance = self.initial_yaw_alignment.apply(
                     point, body_rotation, pose_covariance)
@@ -240,6 +242,9 @@ class VioBridge(Node):
             reason=self.reason, reset_counter=self.reset_count,
             initial_yaw_zero=bool(self.p('initial_yaw_zero')),
             initial_yaw_rad=self.initial_yaw_alignment.initial_yaw,
+            initial_position_zero=bool(self.p('initial_position_zero')),
+            initial_position=(self.initial_yaw_alignment.initial_position.tolist()
+                              if self.initial_yaw_alignment.initial_position is not None else None),
             odom_age=None if not math.isfinite(self.last_good) else round(ages[0],4),
             cam0_age=None if not math.isfinite(self.image_at[0]) else round(ages[1],4),
             cam1_age=None if not math.isfinite(self.image_at[1]) else round(ages[2],4),

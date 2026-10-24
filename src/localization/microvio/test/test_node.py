@@ -85,9 +85,9 @@ def test_initial_heading_zero_does_not_freeze_later_body_turns(node):
     first = node.odom_pub.publish.call_args.args[0]
     q = first.pose.pose.orientation
     np.testing.assert_allclose(rotation([q.w, q.x, q.y, q.z]), np.eye(3), atol=1e-12)
-    assert first.pose.pose.position.x == pytest.approx(2.)
-    assert first.pose.pose.position.y == pytest.approx(1.)
-    assert first.pose.pose.position.z == pytest.approx(3.)
+    assert first.pose.pose.position.x == pytest.approx(0.)
+    assert first.pose.pose.position.y == pytest.approx(0.)
+    assert first.pose.pose.position.z == pytest.approx(0.)
     # Source yaw changes by -90 deg (NED), i.e. +90 deg in ROS.
     node.on_odometry(packet(time_usec=10_001_000))
     second = node.odom_pub.publish.call_args.args[0]

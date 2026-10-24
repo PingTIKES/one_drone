@@ -9,26 +9,30 @@ FLIP = np.diag([1., -1., -1.])
 
 
 class InitialYawAlignment:
-    """Latch heading once, keeping gravity vertical and the source origin fixed.
+    """Latch local world axes and an optional initial body-position origin once.
 
     The rotation is applied to world-frame pose/covariance only. Body-frame
     linear and angular velocities do not change when world axes are renamed.
     Source resets must be reported by the caller, not concealed by relatching.
     """
-    def __init__(self):
+    def __init__(self, zero_position=False, zero_yaw=True):
         self.rotation = None
         self.initial_yaw = None
+        self.initial_position = None
+        self.zero_position = zero_position
+        self.zero_yaw = zero_yaw
 
     def apply(self, position, body_rotation, covariance):
         if self.rotation is None:
-            if math.hypot(body_rotation[0, 0], body_rotation[1, 0]) < 1e-6:
+            if self.zero_yaw and math.hypot(body_rotation[0, 0], body_rotation[1, 0]) < 1e-6:
                 raise ValueError('initial body forward axis is vertical; yaw is undefined')
-            self.initial_yaw = math.atan2(body_rotation[1, 0], body_rotation[0, 0])
+            self.initial_yaw = math.atan2(body_rotation[1, 0], body_rotation[0, 0]) if self.zero_yaw else 0.
             c, s = math.cos(self.initial_yaw), math.sin(self.initial_yaw)
             self.rotation = np.array([[c, s, 0.], [-s, c, 0.], [0., 0., 1.]])
+            self.initial_position = np.asarray(position, dtype=float).copy() if self.zero_position else np.zeros(3)
         axes = np.zeros((6, 6))
         axes[:3, :3] = axes[3:, 3:] = self.rotation
-        return (self.rotation @ np.asarray(position),
+        return (self.rotation @ (np.asarray(position) - self.initial_position),
                 quaternion(self.rotation @ body_rotation),
                 axes @ np.asarray(covariance).reshape(6, 6) @ axes.T)
 

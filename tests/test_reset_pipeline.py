@@ -96,6 +96,30 @@ class ResetPipelineTest(unittest.TestCase):
         finally:
             n.destroy_node()
 
+    def test_ros_origin_zero_does_not_change_raw_px4_visual_position(self):
+        n = VioBridge()
+        try:
+            n.now = lambda: 100.
+            n.image_at = [100., 100.]
+            n.imu_at = 100.
+            n.pub = Mock()
+            n.odom_pub = Mock()
+            msg = Odometry()
+            msg.header.frame_id = 'global'
+            msg.child_frame_id = 'imu'
+            msg.header.stamp = stamp(100.)
+            msg.pose.pose.orientation.w = 1.
+            msg.pose.pose.position.x = 4.
+            msg.pose.pose.position.y = 2.
+            msg.pose.pose.position.z = 1.
+            n.callback(msg)
+            raw = n.pub.publish.call_args.args[0]
+            self.assertGreater(sum(v*v for v in raw.position), 1.)
+            p = n.odom_pub.publish.call_args.args[0].pose.pose.position
+            np.testing.assert_allclose([p.x, p.y, p.z], [0., 0., 0.], atol=1e-12)
+        finally:
+            n.destroy_node()
+
     def test_filter_preserves_holes_and_reset_drops_history(self):
         n = DepthFilterNode()
         try:

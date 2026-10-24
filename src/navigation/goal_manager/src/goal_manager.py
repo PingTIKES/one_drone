@@ -26,7 +26,6 @@ class GoalManager(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.vio_valid = False
         self.last_depth_good = -math.inf
-        self.flight_state = 'IDLE'
         self.pending_goal = None
         self.goal_unsent = False
         self.decision_request_stamp = None
@@ -42,7 +41,6 @@ class GoalManager(Node):
         self.create_subscription(Header, '/decision/clear_pending', self.on_clear_decision, 10)
         self.create_subscription(Bool, '/ego/depth_fresh', self.on_depth, 10)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
-        self.create_subscription(String, 'flight_state', self.on_flight, 10)
         self.reset_stamp = -math.inf
         self.create_subscription(Header, '/vio_reset_event', self.on_reset, latched)
         self.planner_instance = None
@@ -109,6 +107,8 @@ class GoalManager(Node):
         self.publish_pending_goal('GOAL_SENT_TO_EGO')
 
     def publish_pending_goal(self, success_state):
+        # Planning depends on localization/map inputs, never on flight mode.
+        # The control bridge independently decides whether to execute a trajectory.
         if self.pending_goal is None or not self.goal_unsent:
             return False
         if not (self.map_stamp > 0 and -0.02 <= self.now() - self.map_stamp <= float(self.get_parameter('map_timeout').value)
@@ -117,9 +117,6 @@ class GoalManager(Node):
             return False
         if not self.vio_valid:
             self.state('GOAL_QUEUED_VIO_NOT_READY')
-            return False
-        if self.flight_state != 'CRUISE':
-            self.state('GOAL_QUEUED_FLIGHT_NOT_CRUISE')
             return False
         if not 0 <= self.now() - self.last_depth_good <= float(self.get_parameter('depth_grace').value):
             self.state('GOAL_QUEUED_DEPTH_NOT_READY')
@@ -172,12 +169,6 @@ class GoalManager(Node):
         self.planner_at = time.monotonic()
         self.publish_pending_goal('GOAL_SENT_AFTER_MAP_RECOVERY')
 
-    def on_flight(self, msg):
-        previous = self.flight_state
-        self.flight_state = msg.data
-        if self.flight_state == 'CRUISE' and previous != 'CRUISE':
-            self.goal_unsent = self.pending_goal is not None
-            self.publish_pending_goal('GOAL_REPLANNED_AFTER_RECOVERY')
 
 
 def main(args=None):

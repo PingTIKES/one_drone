@@ -171,7 +171,6 @@ class ResetPipelineTest(unittest.TestCase):
         try:
             n.goal_pub = Mock()
             n.now = lambda: 100.
-            n.flight_state = 'CRUISE'
             n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
             n.on_depth(Bool(data=True))
             goal = PoseStamped()
@@ -185,12 +184,53 @@ class ResetPipelineTest(unittest.TestCase):
         finally:
             n.destroy_node()
 
+    def test_ground_goal_plans_without_any_flight_status(self):
+        n = Goal()
+        try:
+            n.goal_pub = Mock()
+            n.now = lambda: 100.
+            # No PX4, takeoff, OFFBOARD or flight_state input exists in this test.
+            topics = [s.topic_name for s in n.subscriptions]
+            self.assertNotIn('/flight_state', topics)
+            n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
+            n.on_depth(Bool(data=True))
+            n.on_vio(String(data='VALID'))
+            goal = PoseStamped()
+            goal.header.frame_id = 'odom'
+            goal.pose.position.x = 3.
+            goal.pose.orientation.w = 1.
+            n.on_goal(goal)
+            n.goal_pub.publish.assert_called_once()
+            sent = n.goal_pub.publish.call_args.args[0]
+            self.assertEqual(sent.pose.position.x, 3.)
+            self.assertEqual(sent.pose.position.z, 2.)
+            n.on_depth(Bool(data=True))
+            self.assertEqual(n.goal_pub.publish.call_count, 1)
+        finally:
+            n.destroy_node()
+
+    def test_planned_trajectory_does_not_activate_idle_flight_control(self):
+        n = FlightBridge()
+        try:
+            n.state = 'IDLE'
+            n.cmd = object()  # A planner may already be publishing trajectories.
+            n.cmd_at = n.now()
+            n.send_position = Mock()
+            n.send_ego_command = Mock()
+            n.vehicle_command = Mock()
+            n.tick()
+            self.assertEqual(n.state, 'IDLE')
+            n.send_position.assert_not_called()
+            n.send_ego_command.assert_not_called()
+            n.vehicle_command.assert_not_called()
+        finally:
+            n.destroy_node()
+
     def test_map_goal_uses_map_to_odom_tf_before_ego(self):
         n = Goal()
         try:
             n.goal_pub = Mock()
             n.now = lambda: 100.
-            n.flight_state = 'CRUISE'
             n.on_planner(Header(stamp=stamp(100.), frame_id='planner1'))
             n.on_depth(Bool(data=True))
             n.on_vio(String(data='VALID'))

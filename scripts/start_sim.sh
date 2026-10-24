@@ -8,7 +8,7 @@ PX4_COMMIT=08310a5e8ac64d02edb41523460e7dc267298deb
 PX4_BIN="$PX4_DIR/build/px4_sitl_default/bin/px4"
 WORLD="${PX4_WORLD:-rmuc_2025_3m_vio_columns}"
 if [[ "$WORLD" == rmuc_2025_field ]]; then
-    echo '[sim] Obsolete world name rmuc_2025_field; using the 3 m VIO-column world.' >&2
+    echo '[sim] Obsolete world name rmuc_2025_field; using the original 3 m field world.' >&2
     WORLD=rmuc_2025_3m_vio_columns
 fi
 AUTOSTART=4001

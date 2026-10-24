@@ -1,10 +1,36 @@
-"""Align accepted OpenVINS body poses with PX4's local NWU odom frame."""
+"""Pose conversions and fixed local-world alignment for ROS odometry."""
+import math
 import numpy as np
 
 from vio_bridge.vio_geometry import quaternion, rotation
 
 
 FLIP = np.diag([1., -1., -1.])
+
+
+class InitialYawAlignment:
+    """Latch heading once, keeping gravity vertical and the source origin fixed.
+
+    The rotation is applied to world-frame pose/covariance only. Body-frame
+    linear and angular velocities do not change when world axes are renamed.
+    Source resets must be reported by the caller, not concealed by relatching.
+    """
+    def __init__(self):
+        self.rotation = None
+        self.initial_yaw = None
+
+    def apply(self, position, body_rotation, covariance):
+        if self.rotation is None:
+            if math.hypot(body_rotation[0, 0], body_rotation[1, 0]) < 1e-6:
+                raise ValueError('initial body forward axis is vertical; yaw is undefined')
+            self.initial_yaw = math.atan2(body_rotation[1, 0], body_rotation[0, 0])
+            c, s = math.cos(self.initial_yaw), math.sin(self.initial_yaw)
+            self.rotation = np.array([[c, s, 0.], [-s, c, 0.], [0., 0., 1.]])
+        axes = np.zeros((6, 6))
+        axes[:3, :3] = axes[3:, 3:] = self.rotation
+        return (self.rotation @ np.asarray(position),
+                quaternion(self.rotation @ body_rotation),
+                axes @ np.asarray(covariance).reshape(6, 6) @ axes.T)
 
 
 def vio_body_pose(position_frd, orientation_frd):

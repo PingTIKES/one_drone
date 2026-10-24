@@ -15,8 +15,9 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Range
 from std_msgs.msg import Header, String
 from tf2_ros import TransformBroadcaster
+from vio_bridge.vio_tf_geometry import InitialYawAlignment
 
-from microvio.geometry import ClockSync, convert
+from microvio.geometry import ClockSync, convert, rotation
 
 
 class Microvio(Node):
@@ -33,7 +34,8 @@ class Microvio(Node):
                         timesync_interval=.5, timesync_timeout=5., max_timesync_rtt=.1,
                         future_tolerance=.05, reset_hold_time=1., unknown_variance=1000.,
                         request_streams=False, odometry_rate=30., required_estimator_flags=47,
-                        expected_estimator_type=8, external_vision_reference='local_frd')
+                        expected_estimator_type=8, external_vision_reference='local_frd',
+                        initial_yaw_zero=True)
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         for name in ('poll_rate', 'reconnect_interval', 'heartbeat_timeout', 'odom_timeout',
@@ -49,6 +51,7 @@ class Microvio(Node):
             raise ValueError('external_vision_reference must be local_frd or ned')
         self.link = None
         self.sync = ClockSync()
+        self.initial_yaw_alignment = InitialYawAlignment()
         self.retry_at = self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
         self.last_heartbeat_sent = self.last_sync_sent = -math.inf
         self.reset_at = -math.inf
@@ -204,6 +207,17 @@ class Microvio(Node):
             if not -float(self.p('future_tolerance')) <= age <= float(self.p('odom_timeout')):
                 raise ValueError('STALE_OR_FUTURE_SOURCE_STAMP')
             pose = convert(msg, float(self.p('unknown_variance')))
+            if self.p('initial_yaw_zero'):
+                if self.initial_yaw_alignment.rotation is None:
+                    now = time.monotonic()
+                    required = self.required_flags()
+                    if (now - self.heartbeat_at > float(self.p('heartbeat_timeout')) or
+                            now - self.estimator_at > float(self.p('estimator_timeout')) or
+                            self.flags is None or self.flags & required != required or
+                            self.flags & (128 | 2048) or not pose['pose_diagonal_known']):
+                        raise ValueError('WAIT_INITIAL_YAW_REFERENCE')
+                pose['position'], pose['quaternion'], pose['pose_covariance'] = self.initial_yaw_alignment.apply(
+                    pose['position'], rotation(pose['quaternion']), pose['pose_covariance'])
         except ValueError as error:
             self.reason = str(error)
             return
@@ -288,6 +302,8 @@ class Microvio(Node):
                     frame_id=str(self.p('odom_frame')), body_frame=str(self.p('body_frame')),
                     armed=self.armed, estimator_flags=self.flags,
                     external_vision_reference=str(self.p('external_vision_reference')),
+                    initial_yaw_zero=bool(self.p('initial_yaw_zero')),
+                    initial_yaw_rad=self.initial_yaw_alignment.initial_yaw,
                     effective_required_estimator_flags=self.required_flags(),
                     global_attitude_flag=None if self.flags is None else bool(self.flags & 1),
                     missing_estimator_flags=None if self.flags is None else self.required_flags() & ~self.flags,

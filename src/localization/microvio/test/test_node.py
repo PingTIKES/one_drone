@@ -75,3 +75,33 @@ def test_no_flight_commands_sent_by_default_poll(node):
     node.link = SimpleNamespace(mav=mav, recv_match=lambda **kwargs: None, close=lambda: None)
     node.poll()
     assert {call[0] for call in mav.method_calls} == {'heartbeat_send', 'timesync_send'}
+
+
+def test_initial_heading_zero_does_not_freeze_later_body_turns(node):
+    import numpy as np
+    from microvio.geometry import rotation
+    node.odom_pub = Mock()
+    node.on_odometry(packet(q=[math.sqrt(.5), 0., 0., math.sqrt(.5)]))
+    first = node.odom_pub.publish.call_args.args[0]
+    q = first.pose.pose.orientation
+    np.testing.assert_allclose(rotation([q.w, q.x, q.y, q.z]), np.eye(3), atol=1e-12)
+    assert first.pose.pose.position.x == pytest.approx(2.)
+    assert first.pose.pose.position.y == pytest.approx(1.)
+    assert first.pose.pose.position.z == pytest.approx(3.)
+    # Source yaw changes by -90 deg (NED), i.e. +90 deg in ROS.
+    node.on_odometry(packet(time_usec=10_001_000))
+    second = node.odom_pub.publish.call_args.args[0]
+    q = second.pose.pose.orientation
+    assert math.atan2(rotation([q.w, q.x, q.y, q.z])[1, 0],
+                      rotation([q.w, q.x, q.y, q.z])[0, 0]) == pytest.approx(math.pi/2)
+
+
+def test_initial_yaw_is_not_latched_before_aiding_status_ready(node):
+    node.flags = 128
+    node.on_odometry(packet(q=[math.sqrt(.5), 0., 0., math.sqrt(.5)]))
+    assert node.initial_yaw_alignment.rotation is None
+    assert node.published_count == 0
+    node.flags = 830
+    node.on_odometry(packet(time_usec=10_001_000))
+    assert node.initial_yaw_alignment.initial_yaw == pytest.approx(0.)
+    assert node.published_count == 1

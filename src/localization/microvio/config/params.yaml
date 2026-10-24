@@ -12,7 +12,8 @@ microvio:
     diagnostics_topic: /microvio/diagnostics # 帧类型、质量、时间戳、重置和估计器状态
     reset_topic: /microvio/reset_event # PX4 重置计数变化/重启事件
     range_topic: /microvio/range # 下视 ToF，单位 m；不作为飞行指令
-    odom_frame: microvio_odom # 与 PX4 NED 同原点、轴转换为 NWU；不自动清零或对齐 map
+    odom_frame: microvio_odom # 原点保持 PX4 原点、Z 向上；默认 X 轴固定为本次启动的初始机头方向
+    initial_yaw_zero: true # 初次有效姿态 yaw=0；后续转动正常跟随，失效/重置不重新归零；不改变飞控原始坐标
     body_frame: microvio_base_link # 机体系 FLU；独立名称防止覆盖现有 TF
     range_frame: microvio_range # 测距传感器坐标名，不猜测安装外参
     publish_tf: true # 只在新里程计通过数值/时间检查时发布，不补造冻结数据

@@ -27,7 +27,7 @@ TF 关系为：
 map → odom → base_link → camera_optical
 ```
 
-`map→odom` 由 modify 节点按配置及 RViz 面板调整发布，`odom→base_link` 由定位桥根据 OpenVINS 输出发布。RViz 使用 `map` 作为 Fixed Frame，EGO 在 `odom` 下规划和控制。
+`map→odom` 由 modify 节点按配置及 RViz 面板调整发布，`odom→base_link` 由定位桥根据 OpenVINS 输出发布。默认将首次接受定位时的机头水平朝向定义为 `odom` 的 +X，因此初始 yaw 为 0；后续转动正常跟随，保留真实 roll/pitch。OpenVINS 和 microvio 包内的 `initial_yaw_zero` 可关闭此约定；该坐标变换不修改飞控原始视觉输入，也不自动修改 `map→odom`。RViz 使用 `map` 作为 Fixed Frame，EGO 在 `odom` 下规划和控制。
 
 ### 目录
 

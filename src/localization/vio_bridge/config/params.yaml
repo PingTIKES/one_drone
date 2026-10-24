@@ -9,6 +9,7 @@ vio_bridge:
     uav_id: null # 预留无人机编号；当前单机坐标框架固定，不用于多机隔离
     px4_ns: null # PX4 DDS 命名空间；启动时由 px4_ns 参数确定
     t_body_imu: null # body←IMU 的 4×4 外参；由启动入口根据标定生成
+    initial_yaw_zero: true # 初次接受定位后固定 ROS odom 的 X 为初始机头方向；只归零 yaw，保留倾斜，不改原始 PX4 视觉输入
     max_age: 0.5 # 图像、IMU、VIO 新鲜度阈值（s）；超过后软降级或拒收
     invalid_age: 2.0 # 持续数据缺口判为 INVALID 的时间阈值（s），应大于 max_age
     future_tolerance: 0.02 # 允许设备时间戳略超前于电脑时钟（s），避免毫秒级校时抖动误锁定；不修改源时间戳

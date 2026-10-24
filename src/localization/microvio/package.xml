@@ -12,6 +12,7 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>tf2_ros_py</exec_depend>
+  <exec_depend>vio_bridge</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

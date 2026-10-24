@@ -16,7 +16,7 @@ from std_srvs.srv import Trigger
 from px4_msgs.msg import VehicleOdometry
 from tf2_ros import TransformBroadcaster
 from vio_bridge.vio_geometry import convert
-from vio_bridge.vio_tf_geometry import FLIP, vio_body_pose
+from vio_bridge.vio_tf_geometry import FLIP, vio_body_pose, InitialYawAlignment
 from vio_bridge.vio_geometry import quaternion
 from vio_bridge.calibration import transform
 from vio_bridge.vio_recovery import VioRecovery, unexplained_rotation
@@ -29,7 +29,7 @@ class VioBridge(Node):
         for k,v in dict(uav_id=1,px4_ns='px4_1',max_age=.5,invalid_age=2.,future_tolerance=.02,max_position_variance=1.,
                         max_orientation_variance=.25,max_velocity_variance=1.,
                         max_speed=4.,max_jump=.4,max_continuous_gap=2.,
-                        expected_world='global',expected_imu='imu',
+                        expected_world='global',expected_imu='imu',initial_yaw_zero=True,
                         recovery_stable_time=.5,recovery_timeout=2.,recovery_max_correction=.75,
                         recovery_max_angle_deg=35.,recovery_sample_gap=.1,recovery_residual=.15,
                         recovery_max_source_gap=3.,recovery_gap_max_correction=2.5,
@@ -56,6 +56,7 @@ class VioBridge(Node):
             raise ValueError('max_continuous_gap must be greater than max_age')
         uid = int(self.p('uav_id'))
         self.odom_frame, self.body_frame = 'odom', 'base_link'
+        self.initial_yaw_alignment = InitialYawAlignment()
         self.extrinsic = transform(np.array(self.p('t_body_imu')).reshape(4,4))
         self.last_stamp = self.last_position = None
         self.last_quat = self.last_velocity = self.last_omega = None
@@ -159,10 +160,18 @@ class VioBridge(Node):
             msg.linear_acceleration.z ** 2)
 
     def publish_vio_odom(self, msg, stamp, position, orientation, velocity, omega, pv, ov, vv):
-        # OpenVINS is the sole odom -> base_link authority. Its first valid
-        # world pose defines odom; PX4's local estimate never shifts this TF.
+        # ROS odom may use a fixed initial heading convention. The raw EV
+        # data sent to PX4 above remains in its original reference frame.
         point, body_rotation = vio_body_pose(position, orientation)
         quat = quaternion(body_rotation)
+        pose_covariance = np.diag((*pv, *ov))
+        if self.p('initial_yaw_zero'):
+            try:
+                point, quat, pose_covariance = self.initial_yaw_alignment.apply(
+                    point, body_rotation, pose_covariance)
+            except ValueError as error:
+                self.get_logger().warn(str(error), throttle_duration_sec=2.)
+                return
         tf = TransformStamped()
         tf.header.stamp = msg.header.stamp
         tf.header.frame_id = self.odom_frame
@@ -177,8 +186,7 @@ class VioBridge(Node):
         odom.pose.pose.position.y = tf.transform.translation.y
         odom.pose.pose.position.z = tf.transform.translation.z
         odom.pose.pose.orientation = tf.transform.rotation
-        for i, variance in enumerate((*pv, *ov)):
-            odom.pose.covariance[i * 6 + i] = float(variance)
+        odom.pose.covariance = pose_covariance.reshape(-1).tolist()
         body_velocity, body_omega = FLIP @ velocity, FLIP @ omega
         odom.twist.twist.linear.x, odom.twist.twist.linear.y, odom.twist.twist.linear.z = map(float, body_velocity)
         odom.twist.twist.angular.x, odom.twist.twist.angular.y, odom.twist.twist.angular.z = map(float, body_omega)
@@ -230,6 +238,8 @@ class VioBridge(Node):
         self.diagnostics.publish(String(data=json.dumps(dict(
             state='LATCHED' if self.latched else ('RECOVERING' if self.recovery.active else health),
             reason=self.reason, reset_counter=self.reset_count,
+            initial_yaw_zero=bool(self.p('initial_yaw_zero')),
+            initial_yaw_rad=self.initial_yaw_alignment.initial_yaw,
             odom_age=None if not math.isfinite(self.last_good) else round(ages[0],4),
             cam0_age=None if not math.isfinite(self.image_at[0]) else round(ages[1],4),
             cam1_age=None if not math.isfinite(self.image_at[1]) else round(ages[2],4),

@@ -1,0 +1,4 @@
+# 笔记本运行 ros2 launch bringup rviz.launch.py；这里只启动显示相关节点。
+remote_rviz:
+  use_sim_time: false # 实机 false；远程观察 Gazebo 仿真时改为 true，并确保接收到 /clock
+  config: remote_navigation.rviz # bringup/rviz 下配置名，也支持绝对路径

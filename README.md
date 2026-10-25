@@ -254,6 +254,38 @@ ros2 launch microvio microvio.launch.py
 
 使用前 source 本工作区并按真机章节统一 RMW 环境。串口、波特率及输出话题放在 `src/localization/microvio/config/params.yaml`，输出为 `/microvio/odom`、`/microvio/health` 和 `/microvio/diagnostics`。独立入口只检查定位，不启动飞控控制；总启动通过上述 `localization_source` 选择定位来源。[接线、启动及导航接入说明](src/localization/microvio/README.md)。
 
+### 笔记本通过网络观察 RK3566
+
+RK3566 运行算法，笔记本运行 RViz。SSH 只用于启动板端程序，ROS 话题通过局域网 DDS 传输，不使用 SSH X11 转发。两端需网络互通、允许 DDS 发现和数据通信，并同步系统时间。
+
+**两端终端均设置相同环境**（下面使用 domain 0，须与飞控 DDS 配置一致）：
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/one_drone/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+```
+
+**RK3566（SSH 终端）**：将板端 `src/bringup/params/launch.yaml` 的 `startup.rviz` 设为 `false`，按实机配置启动：
+
+```bash
+ros2 launch bringup startup.launch.py
+```
+
+**笔记本本地终端**：只启动观察入口，不在笔记本重复启动总 launch：
+
+```bash
+ros2 launch bringup rviz.launch.py
+```
+
+笔记本入口只运行 RViz 和本地 TF 显示过滤器，不打开飞控串口、不启动定位、规划或飞控控制。默认白底、map 俯视，显示先验地图、里程计、导航 TF、全局路径、局部路径和目标；点云及图像默认关闭，可在 Displays 中手动打开。这是纯观察配置，仅保留视角操作；没有 2D Goal Pose、Publish Point 或 MapOdomModify 面板，不发布导航目标或 TF 调整。
+
+远程参数位于 `src/bringup/params/rviz_remote.yaml`，显示配置为 `src/bringup/rviz/remote_navigation.rviz`。实机 `use_sim_time: false`；远程看仿真时改为 `true`，并确保接收 `/clock`。笔记本使用 `rviz_tf_shift` 包中的 TF 显示过滤脚本，不加载 modify 插件。
+
+若没有数据显示，先在笔记本执行 `ros2 topic list`、`ros2 topic hz /ego/odom`，确认能发现并接收板端数据；仅 SSH 连接成功不代表 DDS 网络已经打通。不要在笔记本再启动 map_server 或 modify 发布者来掩盖网络问题。
+
 ## 6. 起飞、打点与降落
 
 启用飞控控制并确认定位、深度与飞控连接正常后，在**新终端 C** 设置与算法相同的环境。仿真使用：

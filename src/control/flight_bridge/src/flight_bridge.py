@@ -334,8 +334,7 @@ class FlightBridge(Node):
 
     def takeoff(self, _request, response):
         missing = self.supervisor.takeoff_blockers(
-            self.state, self.pose_valid(), self.vio_stable(),
-            self.reset_map_ready() and self.map_valid())
+            self.state, self.pose_valid(), self.vio_stable())
         response.success = not missing
         response.message = ('Starting PX4 Offboard takeoff' if response.success else
                             'Takeoff blocked: ' + ', '.join(missing))

@@ -210,14 +210,9 @@ class Microvio(Node):
                 raise ValueError('STALE_OR_FUTURE_SOURCE_STAMP')
             pose = convert(msg, float(self.p('unknown_variance')))
             if self.p('initial_yaw_zero') or self.p('initial_position_zero'):
-                if self.initial_yaw_alignment.rotation is None:
-                    now = time.monotonic()
-                    required = self.required_flags()
-                    if (now - self.heartbeat_at > float(self.p('heartbeat_timeout')) or
-                            now - self.estimator_at > float(self.p('estimator_timeout')) or
-                            self.flags is None or self.flags & required != required or
-                            self.flags & (128 | 2048) or not pose['pose_diagonal_known']):
-                        raise ValueError('WAIT_INITIAL_YAW_REFERENCE')
+                # Coordinate zeroing uses the first finite, timestamp-checked
+                # sample. Estimator aiding flags belong to health diagnostics;
+                # they must not suppress the odometry stream on the ground.
                 pose['position'], pose['quaternion'], pose['pose_covariance'] = self.initial_yaw_alignment.apply(
                     pose['position'], rotation(pose['quaternion']), pose['pose_covariance'])
         except ValueError as error:

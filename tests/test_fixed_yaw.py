@@ -8,6 +8,7 @@ import rclpy
 from nav_msgs.msg import Odometry
 from px4_msgs.msg import VehicleLocalPosition
 from rclpy.parameter import Parameter
+from quadrotor_msgs.msg import PositionCommand
 
 from flight_bridge.flight_bridge import FlightBridge
 from flight_bridge.yaw_manager import YawDecision
@@ -32,9 +33,14 @@ def pose(n, heading, reset=0, delta=0., valid=True):
 
 def ready_trajectory(n, arrival=False):
     n.map_valid = lambda: True
-    n.cmd = object()
+    n.cmd = PositionCommand()
+    n.cmd.header.frame_id = 'odom'
+    n.cmd.header.stamp.sec = 100
+    n.cmd.trajectory_flag = PositionCommand.TRAJECTORY_STATUS_READY
     n.cmd_at = n.ego_odom_at = 100.
     n.ego_odom = Odometry()
+    n.ego_odom.header.frame_id = 'odom'
+    n.ego_odom.header.stamp.sec = 100
     n.ego_odom.pose.pose.orientation.w = 1.
     n.trajectory_controller.track = Mock(return_value=SimpleNamespace(
         world_velocity=(-.3, .2, .1), acceleration=(0., 0., 0.),
@@ -54,14 +60,14 @@ def test_initial_heading_is_valid_latched_and_used_for_position_hold(bridge):
     assert n.initial_heading == pytest.approx(.6)
 
 
-@pytest.mark.parametrize('degraded,arrival', [(False, False), (True, False), (False, True)])
-def test_fixed_heading_bypasses_path_yaw_and_fov_scaling(bridge, degraded, arrival):
+@pytest.mark.parametrize('arrival', [False, True])
+def test_fixed_heading_bypasses_path_yaw_and_fov_scaling(bridge, arrival):
     n = bridge
     n.set_parameters([Parameter('yaw_control', value=False)])
     pose(n, .6)
     pose(n, -.2)
     ready_trajectory(n, arrival)
-    assert n.send_ego_command(degraded=degraded)
+    assert n.send_ego_command()
     n.yaw_manager.decide.assert_not_called()
     call = n.px4_adapter.velocity_body.call_args
     assert call.kwargs['yaw_ned'] == pytest.approx(.6)

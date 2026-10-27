@@ -25,6 +25,4 @@ decision_manager:
     dwell_time: 0.5 # 连续满足位置与速度条件的时间 s；每点停稳，不是高速途经点
     odom_timeout: 0.5 # 里程计接收及消息时间戳最大年龄 s
     status_timeout: 1.0 # PX4 状态最大接收间隔 s
-    health_timeout: 1.0 # VIO 健康消息最大接收间隔 s
-    flight_timeout: 1.0 # flight_state 最大接收间隔 s
     goal_retry_interval: 1.0 # 等待目标管理器确认时重试间隔 s；使用同一请求编号，不重复重规划

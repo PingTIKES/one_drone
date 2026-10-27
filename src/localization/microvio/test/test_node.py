@@ -96,12 +96,20 @@ def test_initial_heading_zero_does_not_freeze_later_body_turns(node):
                       rotation([q.w, q.x, q.y, q.z])[0, 0]) == pytest.approx(math.pi/2)
 
 
-def test_initial_yaw_is_not_latched_before_aiding_status_ready(node):
-    node.flags = 128
+def test_constant_position_mode_is_reported_without_suppressing_odometry(node):
+    node.flags = 431
     node.on_odometry(packet(q=[math.sqrt(.5), 0., 0., math.sqrt(.5)]))
-    assert node.initial_yaw_alignment.rotation is None
-    assert node.published_count == 0
+    assert node.initial_yaw_alignment.initial_yaw == pytest.approx(-math.pi/2)
+    assert node.published_count == 1
+    assert node.health() == ('DEGRADED', 'ESTIMATOR_CONSTANT_POSITION')
     node.flags = 830
     node.on_odometry(packet(time_usec=10_001_000))
-    assert node.initial_yaw_alignment.initial_yaw == pytest.approx(0.)
+    assert node.initial_yaw_alignment.initial_yaw == pytest.approx(-math.pi/2)
+    assert node.published_count == 2
+    assert node.health()[0] == 'VALID'
+
+
+def test_unknown_covariance_still_publishes_with_degraded_diagnostics(node):
+    node.on_odometry(packet(pose_covariance=[float('nan')] * 21))
     assert node.published_count == 1
+    assert node.health() == ('DEGRADED', 'POSE_COVARIANCE_UNKNOWN')

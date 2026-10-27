@@ -248,7 +248,7 @@ ros2 topic hz /odom
 ros2 run tf2_ros tf2_echo odom base_link
 ```
 
-总启动保留先验地图、modify、RViz 和 `/ego/odom`，由 microvio 发布 `/odom`、`/vio_health`、`/vio_diagnostics`、`/vio_reset_event` 及 `odom→base_link`。OpenVINS 和 VIO→PX4 回灌节点互斥关闭。无相机时仍启动 EGO、目标管理和决策，可使用有效 microvio 里程计在地面打点规划；没有深度观测就没有实时障碍信息，PGM 仍仅用于显示和打点。下视 ToF 不能替代前视障碍地图。接回相机后启用 `perception_enabled: true` 并核对深度安装外参，即可更新局部障碍地图。飞控执行仍由控制节点判断，当前深度缺失时不执行导航轨迹。
+总启动保留先验地图、modify、RViz 和 `/ego/odom`，由 microvio 发布 `/odom`、`/vio_health`、`/vio_diagnostics`、`/vio_reset_event` 及 `odom→base_link`。OpenVINS 和 VIO→PX4 回灌节点互斥关闭。无相机时仍启动 EGO、目标管理和决策，可使用有效 microvio 里程计在地面打点规划；没有深度观测就没有实时障碍信息，PGM 仍仅用于显示和打点。下视 ToF 不能替代前视障碍地图。接回相机后启用 `perception_enabled: true` 并核对深度安装外参，即可更新局部障碍地图。控制执行以 PX4 OFFBOARD 为准，无深度不阻止执行有效 EGO 指令。
 
 也可使用独立包读取飞控融合定位（不要与总启动同时运行）：
 
@@ -312,7 +312,11 @@ ros2 topic echo /flight_state
 
 第一条应输出 `std_srvs/srv/Trigger`；若没有服务，先检查算法终端是否启动了 `flight_bridge`。
 
-起飞只依赖有效 PX4 本地位置、持续稳定的 `VALID` VIO 及飞控允许解锁和进入 OFFBOARD，不要求先验地图、EGO 地图或深度相机。起飞期间短暂定位异常后的自动恢复也不依赖地图或深度。到达起飞高度后，无有效地图或深度时保持位置；执行导航轨迹仍按控制节点原有地图、深度和轨迹检查。
+手动起飞后可直接用遥控器切入 OFFBOARD，不需要调用 `/takeoff` 或 `/resume_navigation`。控制节点会提前发布静止设定值及心跳，以满足 PX4 切入 OFFBOARD 的协议要求；在其他飞行模式下不会主动解锁或切换模式。进入 OFFBOARD 后，无可用 EGO 指令时锁定当前位置，有新鲜且数值有效的 EGO 指令和里程计时执行轨迹速度。退出 OFFBOARD 后释放 EGO 控制，取消尚未完成的起飞流程，不会自动切回或重新解锁。
+
+地图、深度、VIO 健康字符串均不作为 OFFBOARD 执行门控，也不等待额外恢复确认。指令或必需里程计过期时保持位置，新指令恢复后自动继续；若 PX4 位置本身不可用，只能请求零速度，不能保证水平定点。VIO 重置或规划器重启会丢弃旧指令，接收新坐标阶段的数据后继续。
+
+`/takeoff` 保留为可选的一键起飞服务：需要有效 PX4 本地位置，用当前高度加 `takeoff_altitude` 计算目标，再请求 OFFBOARD 和解锁。手动已进入 OFFBOARD 时不会重复执行起飞。无定位时人工离地不经过这个服务。microvio 的首次坐标归零不再等待估计器辅助标志；恒定位置模式等状态仍如实发布在健康诊断中。
 
 路径规划与飞控执行独立：有效里程计、TF 和规划器就绪后即可打点，未起飞、无深度相机、`flight_control: false` 均不阻止规划。EGO 始终启动；`perception_enabled` 只控制深度处理。有深度时更新障碍物，没有深度时按未知区域允许通行的原有策略规划，不伪造深度健康状态。
 
@@ -322,7 +326,7 @@ ros2 topic echo /flight_state
 2. 使用 **2D Goal Pose** 在地图上指定目标。
 3. 查看路径和 `/navigation_state`。目标从 `map` 转换到 `odom`，默认目标高度为 2 m，可在目标管理参数中修改。
 
-只有启用飞控控制并调用 `/takeoff`、通过控制节点检查，才会经历 `PRESTREAM → ARMING → TAKEOFF → CRUISE`。控制节点仅在允许执行轨迹的状态下向飞控下发导航指令；生成路径不会自动解锁或起飞。
+`flight_state` 在手动 OFFBOARD 下显示 `HOLD`（保持）或 `CRUISE`（执行 EGO）；其他飞行模式显示 `IDLE`。只有显式调用 `/takeoff` 才执行 `PRESTREAM → ARMING → TAKEOFF`。生成路径不会自动解锁或起飞。
 
 ### 自动航点决策
 
@@ -333,11 +337,11 @@ ros2 topic echo /flight_state
 - `decision_manager.ros__parameters.initial_decision`：当前固定选择的行为，默认为 `decision_1`。
 - `enabled: false`：禁用自动任务，仅使用 RViz 手动打点。
 
-进入 PX4 OFFBOARD 时选择任务；decision 节点等待 `CRUISE` 后提交首个航点，目标管理器在里程计、TF 和规划器就绪后下发给 EGO。这是自动任务的执行时机，不限制 RViz 手动打点规划。节点不主动解锁或起飞，仍使用 `/takeoff`。重复 OFFBOARD 状态消息不会重新开始任务；退出后再次进入 OFFBOARD 则从首点开始。
+进入 PX4 OFFBOARD 时选择任务并提交首个航点，目标管理器在里程计、TF 和规划器就绪后下发给 EGO。decision 不等待 `CRUISE`、深度或 VIO 健康字符串；到点推进依据新鲜里程计。重复 OFFBOARD 状态消息不会重新开始任务；退出后再次进入 OFFBOARD 则从首点开始。decision 不主动解锁或起飞。
 
 每点满足水平距离、高度、低速及持续时间条件后才切换，第一版是**逐点停稳巡航**，不支持高速途经点衔接。决策航点保留各自高度；RViz 二维打点仍采用 `goal_altitude`。导航接收确认使用转换后的 `odom` 目标，到点检查使用新鲜的 `/ego/odom`。
 
-定位暂时异常或控制进入 HOLD 时暂停航点推进；恢复后继续当前航点。VIO 重置会清除当前任务，不会在健康恢复后自动重发旧目标；需退出并重新进入 OFFBOARD 才开始新一轮。RViz 手动打点接管后，当前自动任务取消，本次 OFFBOARD 内不再自动抢回目标。自动任务不会自行降落。
+里程计过期时暂停到点推进，恢复后继续当前航点。VIO 重置会清除当前任务，不会自动重发旧坐标目标；需退出并重新进入 OFFBOARD 才开始新一轮。RViz 手动打点接管后，当前自动任务取消，本次 OFFBOARD 内不再自动抢回目标。自动任务不会自行降落。
 
 查看当前行为、航点索引（从 0 开始）、已完成圈数及等待原因：
 
@@ -379,9 +383,9 @@ ros2 run tf2_ros tf2_echo odom base_link
 ros2 topic echo --once /flight_hold_reason --qos-durability transient_local
 ```
 
-- **打点后无路径**：检查 TF、`/ego/odom`、深度状态、目标高度与地图范围；无需先起飞或进入 `CRUISE`，但必须具备有效里程计、TF 和运行中的规划器。
+- **打点后无路径**：检查 TF、`/ego/odom`、目标高度与地图范围；无需先起飞、启用深度或进入 `CRUISE`，但必须具备有效里程计、TF 和运行中的规划器。
 - **TF 停止更新或定位漂移**：查看 `/vio_diagnostics`，检查双目和 IMU 的帧率、源时间戳、标定及安装外参。不要把停留的 TF 当作当前真实位置。
-- **进入 HOLD**：根据悬停原因检查定位、深度、轨迹和 PX4 状态。普通短时断流恢复后可继续任务；VIO 坐标重置会清除地图、轨迹和旧目标，需要重新打点。`/resume_navigation` 可用于满足恢复条件后的人工恢复。
+- **进入 HOLD**：OFFBOARD 中没有可用 EGO 指令时保持位置；检查轨迹与里程计是否更新，恢复后自动继续，无需 `/resume_navigation`。VIO 坐标重置会清除地图、轨迹和旧目标，需要重新打点。
 - **难以复现的定位或飞控异常**：同步保存左右目、IMU、`/uav1/odomimu`、`/vio_diagnostics`、PX4 状态和本地位置的 rosbag，以及飞控 ULog，用于区分传感器、定位与控制问题。
 
 本项目使用前视感知，未知区域允许通行；没有独立定位备份，VIO 完全失效时无法保证继续自主定位。真机精度与可用速度需要通过实际测试确认。

@@ -8,7 +8,6 @@ from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
 from geometry_msgs.msg import Quaternion
 
-from flight_bridge.flight_supervisor import FlightSupervisor
 from flight_bridge.px4_adapter import Px4Adapter
 from flight_bridge.trajectory_controller import TrajectoryController
 from flight_bridge.trajectory_validator import TrajectoryValidator
@@ -82,15 +81,6 @@ class FlightArchitectureTest(unittest.TestCase):
         result = controller.track(command, odom)
         self.assertTrue(result.arrival_hold)
         self.assertEqual(result.world_velocity[:2], (0., 0.))
-
-    def test_supervisor_holds_and_recovers_only_with_fresh_offboard(self):
-        supervisor = FlightSupervisor()
-        self.assertIsNone(supervisor.safety_hold('CRUISE', True, True, True))
-        self.assertIn('Planner', supervisor.safety_hold('CRUISE', True, True, False))
-        args = ('HOLD', True, True, True, 'CRUISE', True, True,
-                True, True, True, False)
-        self.assertTrue(supervisor.may_auto_recover(*args))
-        self.assertFalse(supervisor.may_auto_recover(*args[:-1], True))
 
 
 if __name__ == '__main__':

@@ -294,17 +294,13 @@ class ResetPipelineTest(unittest.TestCase):
         finally:
             n.destroy_node()
 
-    def test_degraded_hold_does_not_chase_position(self):
-        from px4_msgs.msg import VehicleLocalPosition
+    def test_offboard_hold_does_not_chase_position(self):
+        from px4_msgs.msg import VehicleLocalPosition, VehicleStatus
         n = FlightBridge()
         try:
             n.state = 'CRUISE'
             n.pose_valid = lambda: True
-            n.vio_valid = lambda: False
-            n.vio_degraded = lambda: True
-            n.map_valid = lambda: True
-            n.can_auto_recover = lambda: False
-            n.depth_valid = lambda: False
+            n.on_status(VehicleStatus(nav_state=14, arming_state=2))
             n.send_position = Mock()
             n.position = VehicleLocalPosition(x=0., y=0., z=-2.)
             n.tick()
@@ -348,25 +344,24 @@ class ResetPipelineTest(unittest.TestCase):
         finally:
             n.destroy_node()
 
-    def test_flight_reset_requires_matching_map_epoch(self):
+    def test_flight_reset_discards_old_command_without_map_ack_gate(self):
+        from quadrotor_msgs.msg import PositionCommand
         n = FlightBridge()
         try:
-            n.state = 'CRUISE'
-            n.enter_hold = Mock()
+            n.now = lambda: 100.
             n.cmd = object()
-            n.vio_ok = True
-            n.on_vio_reset(Header(stamp=stamp(time.time()), frame_id='reset2'))
-            n.on_vio(String(data='VALID'))
-            self.assertIsNotNone(n.vio_valid_since)
-            n.enter_hold.assert_called_once()
+            n.on_vio_reset(Header(stamp=stamp(100.), frame_id='reset2'))
             self.assertIsNone(n.cmd)
-            self.assertFalse(n.reset_map_ready())
-            n.on_map_ready(Header(frame_id='reset1'))
-            self.assertFalse(n.reset_map_ready())
-            n.on_map_ready(Header(frame_id='reset2'))
-            self.assertFalse(n.reset_map_ready())
-            n.on_traj_ready(Header(frame_id='reset2'))
-            self.assertTrue(n.reset_map_ready())
+            old = PositionCommand()
+            old.header.frame_id = 'odom'
+            old.header.stamp = stamp(99.9)
+            old.trajectory_flag = PositionCommand.TRAJECTORY_STATUS_READY
+            n.on_position_command(old)
+            self.assertIsNone(n.cmd)
+            n.now = lambda: 100.1
+            old.header.stamp = stamp(100.1)
+            n.on_position_command(old)
+            self.assertIs(n.cmd, old)  # No VIO health or map/depth ACK required.
         finally:
             n.destroy_node()
 

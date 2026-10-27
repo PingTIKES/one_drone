@@ -56,6 +56,7 @@ RViz 的 Fixed Frame 使用 `microvio_odom`，添加 Odometry 显示 `/microvio/
 - `quality=0` 表示未知，不等于质量差；`quality=-1` 才表示失败。PX4 融合 ODOMETRY 的质量字段可能为 0，不能将其误当成模组原始质量。
 - MicoVIO 原始数据使用任意初始航向的 LOCAL_FRD，PX4 1.14.3 接受此航向后会主动将 `cs_yaw_align` 置为 false。这个标志不是本模式的初始化完成条件，也不要求旋转机体或与真北对齐。配置 `external_vision_reference: local_frd` 对应此模式；真正提供 NED 参考的设备才使用 `ned`。不要仅根据飞控融合输出的 frame_id 判断模组原始参考系。
 - 健康消息根据遥测新鲜度和 PX4 `ESTIMATOR_STATUS` 计算。`VALID` 仅代表这些检查通过，**不代表独立验证了模组持续跟踪状态或绝对定位精度**。具体原因及缺失状态位见 diagnostics。
+- 首次坐标归零及里程计发布不等待估计器辅助标志。通过坐标、数值和采样时间检查的遥测仍会发布；恒定位置模式、未知协方差等原因如实反映在健康诊断中，不伪造 `VALID`。
 - PX4 常用 NaN 表示未知交叉协方差；目前输出对角近似，未知对角项使用配置的保守方差，而非填零。
 - `/microvio/range` 仅转发下视测距，单位 m。没有发布猜测的测距传感器安装 TF。
 

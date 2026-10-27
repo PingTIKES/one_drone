@@ -70,7 +70,7 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
         assert not goals
         nav, flight = VehicleStatus.NAVIGATION_STATE_OFFBOARD, 'TAKEOFF'
         pump()
-        assert decision.mission.index == 0 and not goals
+        assert decision.mission.index == 0 and goals
         flight = 'CRUISE'
         pump()
         assert goals[-1].pose.position.z == 2.0
@@ -82,11 +82,8 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
         stale, speed = False, 1.0
         pump()
         assert decision.mission.index == 0
-        speed, health = 0.0, 'INVALID'
-        pump()
-        assert decision.mission.index == 0
-        health = 'VALID'
-        pump(.5)
+        speed, health, flight = 0.0, 'INVALID', 'HOLD'
+        pump(.5)  # Fresh odometry + OFFBOARD are enough; health/state are diagnostic.
         assert decision.mission.index == 1
         assert goals[-1].pose.position.z == 3.0  # RViz altitude must not overwrite decision z.
         # Late acknowledgement for the old waypoint cannot change the active target.

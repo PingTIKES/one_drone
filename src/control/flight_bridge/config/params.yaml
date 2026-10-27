@@ -20,24 +20,15 @@ flight_bridge:
     arrival_position_deadband: 0.15 # 到点水平位置死区（m），同时满足速度条件才生效
     arrival_velocity_deadband: 0.10 # 到点轨迹水平速度阈值（m/s）
     arrival_exit_scale: 1.5 # 到点死区退出阈值倍率；大于 1 可防止边界抖动
-    degraded_speed_scale: 0.4 # VIO 降级时水平速度上限比例（0～1）
-    degraded_max_yaw_rate: 0.10 # VIO 降级时偏航角速度上限（rad/s）
-    reaction_time: 0.8 # 制动距离估算中的反应延迟（s），不是深度超时
-    assumed_braking_deceleration: 0.6 # 制动距离估算采用的减速度（m/s²）
-    safety_margin: 0.5 # 制动距离之外的额外安全距离（m）
-    verified_forward_range: 5.0 # 经过验证的前向可感知距离（m）
     command_timeout: 0.2 # 轨迹指令接收超时（s）；轨迹服务器继续发布旧轨迹时不会触发
     pose_timeout: 0.5 # 位置或里程计接收超时（s）
-    vio_timeout: 0.5 # VIO 健康消息接收超时（s）
-    vio_stable_time: 3.0 # 起飞及 INVALID 恢复所需连续 VALID 时间（s）
-    auto_recover_from_hold: true # 满足 VIO 与 PX4 状态条件后是否自动退出 HOLD
     status_timeout: 1.5 # PX4 状态消息接收超时（s）
-    depth_heartbeat_timeout: 1.2 # 深度健康消息接收超时（s），不是深度图时间戳超时
-    depth_grace: 1.5 # 距最近一次深度健康为 true 的容忍时间（s）
+    depth_heartbeat_timeout: 1.2 # 仅诊断：深度健康消息接收超时（s），不阻止 EGO 执行
+    depth_grace: 1.5 # 仅诊断：距最近一次深度健康为 true 的容忍时间（s）
     takeoff_tolerance: 0.2 # 起飞位置允许误差（m）
-    takeoff_stable_time: 1.0 # 进入巡航前需持续满足起飞误差的时间（s）
-    planner_heartbeat_timeout: 0.75 # 规划器心跳最大真实时间间隔（s），失联进入 HOLD
-    map_timeout: 0.75 # 最近成功融合的深度源时间戳最大年龄（s）
+    takeoff_stable_time: 1.0 # 显式调用 /takeoff 后，到高确认的持续时间（s）；手动接管不经过此流程
+    planner_heartbeat_timeout: 0.75 # 仅诊断：规划器心跳最大真实时间间隔（s）
+    map_timeout: 0.75 # 仅诊断：最近成功融合深度的源时间戳最大年龄（s）
     trajectory_max_sample_age: 0.5 # 接收 EGO 轨迹样本时允许的最大 ROS 时间戳年龄（s）
     trajectory_max_future_stamp: 0.1 # 轨迹样本相对本机 ROS 时间最多可超前的秒数
     trajectory_max_planned_speed: 8.0 # 拒绝明显异常的 EGO 水平速度（m/s），独立于飞控速度限幅

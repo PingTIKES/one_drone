@@ -26,13 +26,12 @@ class DecisionManager(Node):
         defaults = dict(decisions_file='', initial_decision='decision_1', px4_ns='/',
                         enabled=True, check_rate=10.0, xy_tolerance=0.25,
                         z_tolerance=0.20, speed_tolerance=0.20, dwell_time=0.5,
-                        odom_timeout=0.5, status_timeout=1.0, health_timeout=1.0,
-                        flight_timeout=1.0, goal_retry_interval=1.0)
+                        odom_timeout=0.5, status_timeout=1.0,
+                        goal_retry_interval=1.0)
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         for name in ('check_rate', 'xy_tolerance', 'z_tolerance', 'speed_tolerance',
-                     'dwell_time', 'odom_timeout', 'status_timeout', 'health_timeout',
-                     'flight_timeout', 'goal_retry_interval'):
+                     'dwell_time', 'odom_timeout', 'status_timeout', 'goal_retry_interval'):
             if not math.isfinite(float(self.p(name))) or float(self.p(name)) <= 0:
                 raise ValueError(f'{name} must be positive and finite')
         self.decisions = load_decisions(yaml.safe_load(
@@ -42,9 +41,7 @@ class DecisionManager(Node):
         self.mission = None
         self.offboard = False
         self.odom = None
-        self.health = ''
-        self.flight = ''
-        self.status_at = self.odom_at = self.health_at = self.flight_at = -math.inf
+        self.status_at = self.odom_at = -math.inf
         self.request = None
         self.accepted = None
         self.last_request_key = 0
@@ -60,8 +57,6 @@ class DecisionManager(Node):
         status_topic = '/' + (prefix + '/' if prefix else '') + 'fmu/out/vehicle_status'
         self.create_subscription(VehicleStatus, status_topic, self.on_status, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/ego/odom', self.on_odom, qos_profile_sensor_data)
-        self.create_subscription(String, '/vio_health', self.on_health, 10)
-        self.create_subscription(String, '/flight_state', self.on_flight, 10)
         self.create_subscription(PoseStamped, '/decision/accepted_goal', self.on_accepted, 10)
         self.create_subscription(PoseStamped, '/navigation_goal', self.on_manual_goal, 10)
         self.create_subscription(Header, '/vio_reset_event', self.on_reset, latched)
@@ -136,14 +131,6 @@ class DecisionManager(Node):
         self.odom = msg
         self.odom_at = time.monotonic()
 
-    def on_health(self, msg):
-        self.health = msg.data
-        self.health_at = time.monotonic()
-
-    def on_flight(self, msg):
-        self.flight = msg.data
-        self.flight_at = time.monotonic()
-
     def on_manual_goal(self, _msg):
         if self.mission is not None and not self.mission.complete:
             self.clear_pending()
@@ -165,10 +152,6 @@ class DecisionManager(Node):
     def ready(self, now):
         if not self.offboard or now - self.status_at > float(self.p('status_timeout')):
             return 'PAUSED_PX4_STATUS'
-        if self.health != 'VALID' or now - self.health_at > float(self.p('health_timeout')):
-            return 'PAUSED_VIO'
-        if self.flight != 'CRUISE' or now - self.flight_at > float(self.p('flight_timeout')):
-            return 'WAIT_CRUISE' if self.flight == 'TAKEOFF' else 'PAUSED_FLIGHT_STATE'
         if self.odom is None or now - self.odom_at > float(self.p('odom_timeout')):
             return 'PAUSED_ODOMETRY'
         age = (self.get_clock().now().nanoseconds - stamp_key(self.odom.header.stamp)) * 1e-9

@@ -57,7 +57,7 @@ class Px4Adapter:
         return msg
 
     def apply(self, setpoint):
-        """Translate the typed, supervisor-approved setpoint into PX4 uORB."""
+        """Translate the selected, validated setpoint into PX4 uORB."""
         if setpoint.header.frame_id != 'px4_local_ned':
             raise ValueError('flight setpoint must be in PX4 local NED')
         velocity_mode = setpoint.mode == FlightSetpoint.MODE_VELOCITY

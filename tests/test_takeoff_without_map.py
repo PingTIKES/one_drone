@@ -3,7 +3,8 @@ from unittest.mock import Mock
 
 import pytest
 import rclpy
-from px4_msgs.msg import VehicleLocalPosition, VehicleStatus
+from flight_bridge.mavros_adapter import LocalPosition as VehicleLocalPosition
+from mavros_msgs.msg import State
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -12,13 +13,13 @@ from flight_bridge.flight_bridge import FlightBridge
 
 @pytest.fixture
 def bridge(monkeypatch):
-    monkeypatch.setattr('flight_bridge.flight_bridge.Px4Adapter', Mock())
+    monkeypatch.setattr('flight_bridge.flight_bridge.MavrosAdapter', Mock())
     rclpy.init()
     node = FlightBridge()
     node.now = lambda: 100.
     node.on_position(VehicleLocalPosition(
         x=1., y=2., z=-.5, heading=.3, xy_valid=True, z_valid=True))
-    node.on_status(VehicleStatus(arming_state=1, nav_state=2))
+    node.on_status(State(connected=True, armed=False, mode='POSCTL'))
     try:
         yield node
     finally:
@@ -37,10 +38,10 @@ def test_explicit_takeoff_without_map_depth_or_health(bridge):
     n.px4_adapter.command.assert_any_call(176, 1., 6.)
     n.px4_adapter.command.assert_any_call(400, 1., 0.)
     # OFFBOARD can be selected before arming; wait for actual arm confirmation.
-    n.on_status(VehicleStatus(arming_state=1, nav_state=14))
+    n.on_status(State(connected=True, armed=False, mode='OFFBOARD'))
     n.tick()
     assert n.state == 'ARMING'
-    n.on_status(VehicleStatus(arming_state=2, nav_state=14))
+    n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
     n.tick()
     assert n.state == 'TAKEOFF'
     n.px4_adapter.position.assert_called_with((1., 2., -2.5), .3)
@@ -67,11 +68,11 @@ def test_takeoff_requires_position_to_compute_relative_height(bridge):
 def test_rc_exit_cancels_service_takeoff_without_automatic_rearming(bridge):
     n = bridge
     assert n.takeoff(Trigger.Request(), Trigger.Response()).success
-    n.on_status(VehicleStatus(arming_state=2, nav_state=14))
+    n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
     n.tick()
     assert n.state == 'TAKEOFF'
     n.px4_adapter.command.reset_mock()
-    n.on_status(VehicleStatus(arming_state=2, nav_state=2))
+    n.on_status(State(connected=True, armed=True, mode='POSCTL'))
     n.tick()
     assert n.state == 'IDLE' and n.takeoff_target is None
     for _ in range(30):

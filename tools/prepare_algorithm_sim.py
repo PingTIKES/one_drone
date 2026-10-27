@@ -29,17 +29,10 @@ def main():
         commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=px4,text=True).strip()
         if commit!=PX4_SOURCE_COMMIT:
             raise RuntimeError(f'requires MicoAir PX4 1.14.3 source at {PX4_SOURCE_COMMIT}, found {commit}')
-        source=px4/'src/modules/uxrce_dds_client/uxrce_dds_client.cpp'
-        old='\t// latest round trip time (RTT)'
-        new='''#if defined(__PX4_POSIX)
-    // RM27_SIM_CLOCK: /clock is the clock on BOTH sides in algorithm SITL.
-    if (getenv("RM27_SIM_CLOCK") && strcmp(getenv("RM27_SIM_CLOCK"), "1") == 0) {
-        session->time_offset = 0;
-        return;
-    }
-#endif
-'''+old
-        write_checked(source,old,new,'// RM27_SIM_CLOCK:')
+        rc_start=px4/'ROMFS/px4fmu_common/init.d-posix/rcS'
+        old='uxrce_dds_client start -t udp -h 127.0.0.1 -p $uxrce_dds_port $uxrce_dds_ns'
+        new='# RM27_MAVROS_ONLY: the MAVLink Onboard endpoint is used by MAVROS.\nif [ "$RM27_SIM_CLOCK" != "1" ]; then\n    uxrce_dds_client start -t udp -h 127.0.0.1 -p $uxrce_dds_port $uxrce_dds_ns\nfi'
+        write_checked(rc_start,old,new,'# RM27_MAVROS_ONLY:')
         rc=px4/'ROMFS/px4fmu_common/init.d-posix/px4-rc.params'
         text=rc.read_text(encoding='utf-8')
         marker='# RM27_VISION_ONLY'

@@ -15,22 +15,20 @@ from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
 from std_msgs.msg import Bool, String, Header
 from std_srvs.srv import Trigger
-from px4_msgs.msg import VehicleLocalPosition, VehicleStatus
+from geometry_msgs.msg import PoseStamped
+from mavros_msgs.msg import State
 
-from flight_bridge.px4_adapter import Px4Adapter
+from flight_bridge.mavros_adapter import MavrosAdapter, LocalPosition, wrap
 from flight_bridge.trajectory_controller import TrajectoryController
 from flight_bridge.trajectory_validator import TrajectoryValidator
 from flight_bridge.yaw_manager import YawDecision, YawManager, world_to_body
 
 
-NAV_OFFBOARD = 14
-ARMED = 2
-
 
 class FlightBridge(Node):
     def __init__(self):
         super().__init__('flight_bridge')
-        defaults = dict(px4_ns='px4_1', target_system=2, takeoff_altitude=2.,
+        defaults = dict(mavros_ns='/mavros', takeoff_altitude=2.,
                         yaw_control=True,
                         max_horizontal_speed=.5, max_vertical_speed=.3,
                         max_yaw_rate=.35, position_gain=.8,
@@ -108,10 +106,9 @@ class FlightBridge(Node):
         self.trajectory_status = 'WAITING_FOR_TRAJECTORY'
         self.hold_reason = ''
         self.was_offboard = False
-        px4_ns = str(self.p('px4_ns')).strip('/')
-        px4 = '/' + (px4_ns + '/' if px4_ns else '') + 'fmu/'
+        mavros = '/' + str(self.p('mavros_ns')).strip('/')
         qos = qos_profile_sensor_data
-        self.px4_adapter = Px4Adapter(self, px4_ns, self.p('target_system'))
+        self.px4_adapter = MavrosAdapter(self, mavros)
         self.state_pub = self.create_publisher(String, 'flight_state', 10)
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -121,8 +118,8 @@ class FlightBridge(Node):
         self.hold_reason_pub.publish(String(data=''))
         self.safety_pub.publish(String(
             data=f'OFFBOARD_HOLD_OR_EGO max_speed={float(self.p("max_horizontal_speed")):.2f}m/s'))
-        self.create_subscription(VehicleLocalPosition, px4 + 'out/vehicle_local_position', self.on_position, qos)
-        self.create_subscription(VehicleStatus, px4 + 'out/vehicle_status', self.on_status, qos)
+        self.create_subscription(PoseStamped, mavros + '/local_position/pose', self.on_mavros_pose, qos)
+        self.create_subscription(State, mavros + '/state', self.on_status, qos)
         self.create_subscription(PositionCommand, '/ego/position_cmd', self.on_position_command, 20)
         self.create_subscription(Odometry, '/ego/odom', self.on_ego_odom, 20)
         self.create_subscription(String, 'vio_health', self.on_vio, 10)
@@ -143,7 +140,7 @@ class FlightBridge(Node):
                 0 <= self.now() - self.pose_at <= float(self.p('pose_timeout')))
 
     def offboard_active(self):
-        return (self.status is not None and self.status.nav_state == NAV_OFFBOARD and
+        return (self.status is not None and self.status.connected and self.status.mode == 'OFFBOARD' and
                 0 <= self.now() - self.status_at <= float(self.p('status_timeout')))
 
     def heading_valid(self):
@@ -170,7 +167,8 @@ class FlightBridge(Node):
                  f'vio_state={self.vio_state} '
                  f'offboard={self.offboard_active()} vio_age={vio_age:.3f}s '
                  f'depth_valid={self.depth_valid()} depth_age={depth_age:.3f}s '
-                 f'trajectory_status={self.trajectory_status}'))
+                 f'trajectory_status={self.trajectory_status} '
+                 f'mavros_command={self.px4_adapter.last_command_status}'))
 
     def publish_system_status(self):
         msg = SystemStatus()
@@ -187,6 +185,21 @@ class FlightBridge(Node):
                                 self.trajectory_status == 'OK')
         self.system_pub.publish(msg)
 
+    def on_mavros_pose(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if not -0.05 <= self.now() - stamp <= float(self.p('pose_timeout')):
+            return
+        p, q = msg.pose.position, msg.pose.orientation
+        values = (p.x, p.y, p.z, q.w, q.x, q.y, q.z)
+        if not all(math.isfinite(v) for v in values):
+            return
+        norm = math.sqrt(sum(v*v for v in (q.w, q.x, q.y, q.z)))
+        if norm < 1e-6:
+            return
+        w, x, y, z = (v/norm for v in (q.w, q.x, q.y, q.z))
+        yaw_enu = math.atan2(2*(w*z+x*y), 1-2*(y*y+z*z))
+        self.on_position(LocalPosition(p.y, p.x, -p.z, wrap(math.pi/2-yaw_enu)))
+
     def on_position(self, msg):
         resets = (msg.xy_reset_counter, msg.z_reset_counter, msg.heading_reset_counter)
         reset_changed = (self.last_reset is not None and resets != self.last_reset and
@@ -199,8 +212,8 @@ class FlightBridge(Node):
             self.initial_heading = math.atan2(math.sin(heading), math.cos(heading))
         self.last_reset = resets
         self.position = msg
-        # PX4 publishes its boot-relative uORB timestamp. Freshness must use
-        # ROS callback arrival time in both SITL and hardware deployments.
+        # on_mavros_pose has checked the synchronized sample timestamp;
+        # track callback arrival separately to detect a stopped pose stream.
         self.pose_at = self.now()
         if self.initial_heading is None and self.pose_valid():
             self.initial_heading = float(msg.heading)
@@ -217,6 +230,8 @@ class FlightBridge(Node):
         self.reset_sensor_stamp = msg.stamp.sec + msg.stamp.nanosec * 1e-9
         self.ego_odom = None
         self.ego_odom_at = -math.inf
+        self.hold_target = None
+        self.takeoff_target = None
         self.vio_state = "INVALID"
         self.vio_at = -math.inf
         self.clear_command('VIO_RESET', cutoff=True)
@@ -400,7 +415,7 @@ class FlightBridge(Node):
 
     def tick(self):
         active = self.offboard_active()
-        if (self.status is not None and self.status.nav_state == NAV_OFFBOARD and
+        if (self.status is not None and self.status.connected and self.status.mode == 'OFFBOARD' and
                 not active):
             # A missing status update is not evidence of a pilot mode change.
             # Stop tracking and latch a hold instead of chasing each new pose.
@@ -427,7 +442,7 @@ class FlightBridge(Node):
         self.was_offboard = active
 
         if self.state == 'LANDING':
-            if self.status is not None and self.status.arming_state != ARMED:
+            if self.status is not None and not self.status.armed:
                 self.state = 'IDLE'
         elif not active:
             if self.state in ('PRESTREAM', 'ARMING'):
@@ -447,7 +462,7 @@ class FlightBridge(Node):
                 self.standby_setpoint()
         else:
             if self.state in ('PRESTREAM', 'ARMING') and self.takeoff_target is not None:
-                if self.status.arming_state != ARMED:
+                if not self.status.armed:
                     self.state = 'ARMING'
                     self.standby_setpoint()
                     self.prestream_count += 1

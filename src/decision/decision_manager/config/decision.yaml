@@ -24,5 +24,5 @@ decision_manager:
     speed_tolerance: 0.20 # 三维速度低于此值才确认到点 m/s
     dwell_time: 0.5 # 连续满足位置与速度条件的时间 s；每点停稳，不是高速途经点
     odom_timeout: 0.5 # 里程计接收及消息时间戳最大年龄 s
-    status_timeout: 1.0 # PX4 状态最大接收间隔 s
+    status_timeout: 3.0 # MAVROS State 最大接收间隔 s；飞控心跳通常为 1 Hz，预留通信抖动时间
     goal_retry_interval: 1.0 # 等待目标管理器确认时重试间隔 s；使用同一请求编号，不重复重规划

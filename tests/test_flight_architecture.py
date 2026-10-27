@@ -8,7 +8,7 @@ from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
 from geometry_msgs.msg import Quaternion
 
-from flight_bridge.px4_adapter import Px4Adapter
+from flight_bridge.mavros_adapter import MavrosAdapter
 from flight_bridge.trajectory_controller import TrajectoryController
 from flight_bridge.trajectory_validator import TrajectoryValidator
 from flight_bridge.yaw_manager import YawManager
@@ -31,7 +31,7 @@ class FlightArchitectureTest(unittest.TestCase):
         rclpy.init()
         node = rclpy.create_node('flight_adapter_type_test')
         try:
-            adapter = Px4Adapter(node, 'px4_1', 2)
+            adapter = MavrosAdapter(node, '/mavros_test')
             adapter.position((np.float32(1.), np.float32(2.), np.float32(-2.)),
                              np.float32(0.))
         finally:

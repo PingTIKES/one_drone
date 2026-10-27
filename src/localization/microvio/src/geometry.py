@@ -59,31 +59,10 @@ def convert(message, unknown_variance=1000.):
 
 
 class ClockSync:
-    """Estimate ROS-minus-PX4 clock offset using replies to our TIMESYNC requests."""
+    """Map PX4 sampling time using the offset provided by MAVROS timesync."""
     def __init__(self):
-        self.requests = set()
         self.offset_ns = None
         self.last_reply_at = -math.inf
-        self.best_rtt_ns = math.inf
-
-    def request(self, stamp):
-        self.requests.add(stamp)
-        self.requests = {t for t in self.requests if stamp - t < 5_000_000_000}
-
-    def reply(self, tc1, ts1, now_ns, now_mono, max_rtt):
-        if ts1 not in self.requests or tc1 <= 0:
-            return False
-        self.requests.remove(ts1)
-        rtt = now_ns - ts1
-        if not 0 <= rtt <= max_rtt * 1e9:
-            return False
-        offset = (ts1 + now_ns) // 2 - tc1
-        # Keep the lowest-RTT estimate in a short window; do not smear a reboot.
-        if self.offset_ns is None or rtt <= self.best_rtt_ns or now_mono - self.last_reply_at > 5.:
-            self.offset_ns = offset
-            self.best_rtt_ns = rtt
-        self.last_reply_at = now_mono
-        return True
 
     def stamp(self, remote_usec):
         if self.offset_ns is None:

@@ -6,7 +6,7 @@ import pytest
 import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry
-from px4_msgs.msg import VehicleStatus
+from mavros_msgs.msg import State
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -34,7 +34,7 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
         for node in nodes:
             executor.add_node(node)
         pubs = {
-            'px4': fake.create_publisher(VehicleStatus, '/fmu/out/vehicle_status', qos_profile_sensor_data),
+            'px4': fake.create_publisher(State, '/mavros/state', qos_profile_sensor_data),
             'odom': fake.create_publisher(Odometry, '/ego/odom', 10),
             'health': fake.create_publisher(String, '/vio_health', 10),
             'flight': fake.create_publisher(String, '/flight_state', 10),
@@ -44,14 +44,14 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
         }
         goals = []
         fake.create_subscription(PoseStamped, '/ego/goal', goals.append, 10)
-        nav = VehicleStatus.NAVIGATION_STATE_POSCTL
+        nav = 'POSCTL'
         flight, health, x, z, speed, stale = 'CRUISE', 'VALID', 0.0, 2.0, 0.0, False
 
         def pump(duration=.3):
             end = time.monotonic() + duration
             while time.monotonic() < end:
                 stamp = fake.get_clock().now().to_msg()
-                pubs['px4'].publish(VehicleStatus(nav_state=nav))
+                pubs['px4'].publish(State(connected=True, armed=True, mode=nav))
                 odom = Odometry()
                 odom.header.frame_id = 'odom'
                 odom.header.stamp = stamp if not stale else type(stamp)(sec=1)
@@ -68,7 +68,7 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
 
         pump(.5)
         assert not goals
-        nav, flight = VehicleStatus.NAVIGATION_STATE_OFFBOARD, 'TAKEOFF'
+        nav, flight = 'OFFBOARD', 'TAKEOFF'
         pump()
         assert decision.mission.index == 0 and goals
         flight = 'CRUISE'
@@ -121,10 +121,10 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
         # Restore the real decision request before testing OFFBOARD cancellation.
         manager.on_decision_goal(decision.request)
         # Exiting OFFBOARD clears its queue; reentry selects a fresh mission once.
-        nav = VehicleStatus.NAVIGATION_STATE_POSCTL
+        nav = 'POSCTL'
         pump()
         assert decision.mission is None and manager.pending_goal is None
-        nav = VehicleStatus.NAVIGATION_STATE_OFFBOARD
+        nav = 'OFFBOARD'
         pump()
         assert decision.mission.index == 0
         # Reset invalidates the task. Health recovery alone cannot revive old targets.
@@ -132,9 +132,9 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
         decision.on_reset(Header(stamp=fake.get_clock().now().to_msg()))
         pump()
         assert decision.mission is None and manager.pending_goal is None
-        nav = VehicleStatus.NAVIGATION_STATE_POSCTL
+        nav = 'POSCTL'
         pump()
-        nav = VehicleStatus.NAVIGATION_STATE_OFFBOARD
+        nav = 'OFFBOARD'
         pump()
         assert decision.mission is not None
         manual = PoseStamped()

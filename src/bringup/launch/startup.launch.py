@@ -64,7 +64,7 @@ def configure_arguments(context, values):
     sim = LaunchConfiguration('sim').perform(context) == 'true'
     profile = values['simulation' if sim else 'hardware']
     defaults = {**values['startup'], **profile}
-    names = ('localization_source', 'perception_enabled', 'flight_control', 'yaw_control', 'depth_source', 'calibration_dir', 'target_system', 'px4_ns',
+    names = ('localization_source', 'perception_enabled', 'flight_control', 'yaw_control', 'depth_source', 'calibration_dir', 'target_system', 'mavros_ns', 'fcu_url', 'gcs_url',
              'map_file', 'cam0_topic', 'cam1_topic', 'imu_topic', 'depth_topic',
              'depth_info_topic', 'depth_scale')
     return [
@@ -101,7 +101,9 @@ def setup(context):
     if not sim and any(not arg(key) for key in required_topics):
         raise ValueError('selected localization/depth source needs its input topics')
     target_system = int(arg('target_system') or '2')
-    px4_ns = arg('px4_ns') or ('px4_1' if sim else '/')
+    mavros_ns = arg('mavros_ns').strip('/')
+    if not mavros_ns or not arg('fcu_url'):
+        raise ValueError('mavros_ns and fcu_url must be configured')
     if source == 'openvins':
         bringup_prefix = Path(get_package_prefix('bringup')).resolve()
         openvins_prefix = Path(get_package_prefix('ov_msckf')).resolve()
@@ -175,7 +177,7 @@ def setup(context):
             package='vio_bridge', executable='vio_to_px4.py',
             name='vio_bridge', output='screen',
             parameters=[common, node_config('vio_bridge', 'vio_bridge'),
-                        {'px4_ns': px4_ns,
+                        {'target_system': target_system,
                          't_body_imu': t_body_imu.ravel().tolist()}],
             remappings=[('odomimu', '/uav1/odomimu'),
                         ('cam0/image_raw', camera_topics[0]),
@@ -283,7 +285,7 @@ def setup(context):
         package='decision_manager', executable='decision_manager',
         name='decision_manager', output='screen',
         parameters=[decision_params, common,
-                    {'decisions_file': str(decision_config), 'px4_ns': px4_ns}])
+                    {'decisions_file': str(decision_config), 'mavros_ns': '/' + mavros_ns}])
     if perception:
         camera_q = quaternion(t_body_camera[:3, :3])
         camera_optical_tf = Node(
@@ -301,11 +303,17 @@ def setup(context):
             package='microvio', executable='microvio', name='microvio',
             output='screen',
             parameters=[node_config('microvio', 'microvio'), common,
-                        {'target_system': target_system,
+                        {'target_system': target_system, 'mavros_ns': '/' + mavros_ns,
                          'odom_topic': '/odom', 'health_topic': '/vio_health',
                          'diagnostics_topic': '/vio_diagnostics',
                          'reset_topic': '/vio_reset_event',
                          'odom_frame': 'odom', 'body_frame': 'base_link'}])
+    mavros = Node(
+        package='mavros', executable='mavros_node', namespace=mavros_ns,
+        output='screen', # 不设置 name：避免将 MAVROS 内部所有插件节点重命名
+        parameters=[str(bringup / 'params/mavros.yaml'), common,
+                    {'fcu_url': arg('fcu_url'), 'gcs_url': arg('gcs_url'),
+                     'tgt_system': target_system, 'tgt_component': 1}])
     modify_map_to_odom = Node(
         package='modify_map_to_odom', executable='modify_map_to_odom_node',
         name='modify_map_to_odom', output='screen',
@@ -332,7 +340,7 @@ def setup(context):
         name='flight_bridge', output='screen',
         condition=IfCondition(arg('flight_control').lower()),
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
-                    {'target_system': target_system, 'px4_ns': px4_ns,
+                    {'mavros_ns': '/' + mavros_ns,
                      'yaw_control': arg('yaw_control').lower() == 'true'}])
     rviz_tf_filter = Node(
         package='rviz_tf_shift', executable='tf_display_filter.py',
@@ -354,6 +362,7 @@ def setup(context):
     # Startup inventory. Only camera processing depends on perception_enabled.
     return [action for action in [
         startup_mode,
+        mavros,                      # single MAVLink serial/UDP owner
         gazebo_sensors,              # sim: Gazebo camera, IMU, clock bridge
         sensor_relay,                # hardware: measured camera/IMU topics
         openvins,                    # selected OpenVINS estimator

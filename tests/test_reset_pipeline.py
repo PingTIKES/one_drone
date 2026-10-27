@@ -114,7 +114,9 @@ class ResetPipelineTest(unittest.TestCase):
             msg.pose.pose.position.z = 1.
             n.callback(msg)
             raw = n.pub.publish.call_args.args[0]
-            self.assertGreater(sum(v*v for v in raw.position), 1.)
+            from vio_bridge.mavlink_codec import decode_frame
+            raw = decode_frame(raw)
+            self.assertGreater(sum(v*v for v in (raw.x, raw.y, raw.z)), 1.)
             p = n.odom_pub.publish.call_args.args[0].pose.pose.position
             np.testing.assert_allclose([p.x, p.y, p.z], [0., 0., 0.], atol=1e-12)
         finally:
@@ -295,12 +297,13 @@ class ResetPipelineTest(unittest.TestCase):
             n.destroy_node()
 
     def test_offboard_hold_does_not_chase_position(self):
-        from px4_msgs.msg import VehicleLocalPosition, VehicleStatus
+        from flight_bridge.mavros_adapter import LocalPosition as VehicleLocalPosition
+        from mavros_msgs.msg import State
         n = FlightBridge()
         try:
             n.state = 'CRUISE'
             n.pose_valid = lambda: True
-            n.on_status(VehicleStatus(nav_state=14, arming_state=2))
+            n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
             n.send_position = Mock()
             n.position = VehicleLocalPosition(x=0., y=0., z=-2.)
             n.tick()

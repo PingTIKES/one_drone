@@ -9,9 +9,12 @@ os.environ.setdefault('MAVLINK20', '1')
 from pymavlink import mavutil
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
+from mavros_msgs.msg import Mavlink, State, TimesyncStatus
+from mavros_msgs.srv import MessageInterval
+from vio_bridge.mavlink_codec import decode_frame
 from sensor_msgs.msg import Range
 from std_msgs.msg import Header, String
 from tf2_ros import TransformBroadcaster
@@ -23,39 +26,36 @@ from microvio.geometry import ClockSync, convert, rotation
 class Microvio(Node):
     def __init__(self):
         super().__init__('microvio')
-        defaults = dict(device='/dev/ttyACM0', baud=921600, target_system=1,
-                        target_component=1, source_system=245, source_component=191,
+        defaults = dict(mavros_ns='/mavros', target_system=1,
+                        target_component=1,
                         odom_topic='/microvio/odom', health_topic='/microvio/health',
                         diagnostics_topic='/microvio/diagnostics', reset_topic='/microvio/reset_event',
                         range_topic='/microvio/range', odom_frame='microvio_odom',
                         body_frame='microvio_base_link', range_frame='microvio_range',
-                        publish_tf=True, poll_rate=200., reconnect_interval=2.,
+                        publish_tf=True,
                         heartbeat_timeout=3., odom_timeout=.5, estimator_timeout=1.,
-                        timesync_interval=.5, timesync_timeout=5., max_timesync_rtt=.1,
+                        timesync_timeout=5., max_timesync_rtt=.1,
                         future_tolerance=.05, reset_hold_time=1., unknown_variance=1000.,
-                        request_streams=False, odometry_rate=30., required_estimator_flags=47,
+                        request_streams=True, odometry_rate=30., required_estimator_flags=47,
                         expected_estimator_type=8, external_vision_reference='local_frd',
                         initial_yaw_zero=True,initial_position_zero=True)
         for name, value in defaults.items():
             self.declare_parameter(name, value)
-        for name in ('poll_rate', 'reconnect_interval', 'heartbeat_timeout', 'odom_timeout',
-                     'estimator_timeout', 'timesync_interval', 'timesync_timeout',
+        for name in ('heartbeat_timeout', 'odom_timeout',
+                     'estimator_timeout', 'timesync_timeout',
                      'max_timesync_rtt', 'unknown_variance', 'odometry_rate'):
             if not math.isfinite(float(self.p(name))) or float(self.p(name)) <= 0:
                 raise ValueError(f'{name} must be positive and finite')
         if not 1 <= int(self.p('target_system')) <= 255:
             raise ValueError('target_system must be 1..255')
-        if self.p('target_system') == self.p('source_system'):
-            raise ValueError('source_system must differ from target_system')
         if self.p('external_vision_reference') not in ('local_frd', 'ned'):
             raise ValueError('external_vision_reference must be local_frd or ned')
-        self.link = None
+        self.connected = False
         self.sync = ClockSync()
         self.initial_yaw_alignment = InitialYawAlignment(
             zero_position=bool(self.p('initial_position_zero')),
             zero_yaw=bool(self.p('initial_yaw_zero')))
-        self.retry_at = self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
-        self.last_heartbeat_sent = self.last_sync_sent = -math.inf
+        self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
         self.reset_at = -math.inf
         self.remote_stamp = self.odom_stamp = self.reset_counter = None
         self.flags = None
@@ -66,6 +66,8 @@ class Microvio(Node):
         self.reason = 'WAIT_CONNECTION'
         self.armed = False
         self.stream_requested = False
+        self.interval_index = 0
+        self.interval_pending = False
         self.received_count = self.published_count = 0
         self.started_at = time.monotonic()
         self.epoch = uuid.uuid4().hex[:12]
@@ -78,7 +80,13 @@ class Microvio(Node):
         self.reset_pub = self.create_publisher(Header, str(self.p('reset_topic')), latched)
         self.range_pub = self.create_publisher(Range, str(self.p('range_topic')), 10)
         self.tf = TransformBroadcaster(self)
-        self.create_timer(1. / float(self.p('poll_rate')), self.poll)
+        root = '/' + str(self.p('mavros_ns')).strip('/')
+        raw_topic = f'/uas{int(self.p("target_system"))}/mavlink_source'
+        self.create_subscription(Mavlink, raw_topic, self.on_frame, qos_profile_sensor_data)
+        self.create_subscription(State, root + '/state', self.on_mavros_state, latched)
+        self.create_subscription(TimesyncStatus, root + '/timesync_status', self.on_timesync, qos_profile_sensor_data)
+        self.interval_client = self.create_client(MessageInterval, root + '/set_message_interval')
+        self.create_timer(1., self.request_intervals)
         self.create_timer(.1, self.publish_health)
         self.create_timer(1., self.publish_diagnostics)
         self.get_logger().info('Telemetry only: no arming, mode changes, setpoints, or external-vision writes')
@@ -93,57 +101,53 @@ class Microvio(Node):
                                       frame_id=f'microvio:{self.epoch}:{self.reset_index}:{reason}'))
         self.get_logger().warn('PX4 odometry reset: ' + reason)
 
-    def connect(self):
-        try:
-            self.link = mavutil.mavlink_connection(
-                str(self.p('device')), baud=int(self.p('baud')), autoreconnect=False,
-                source_system=int(self.p('source_system')),
-                source_component=int(self.p('source_component')))
+    def on_mavros_state(self, msg):
+        if self.connected and not msg.connected:
             self.sync = ClockSync()
+            self.odom_at = -math.inf
+            self.reset_event('MAVROS_CONNECTION_LOST')
             self.stream_requested = False
-            self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
-            self.remote_stamp = self.odom_stamp = self.reset_counter = None
-            self.last_heartbeat_sent = self.last_sync_sent = -math.inf
-            self.reason = 'WAIT_HEARTBEAT'
-            self.get_logger().info('Opened MAVLink device: ' + str(self.p('device')))
-        except OSError as error:
-            self.reason = 'SERIAL_UNAVAILABLE'
-            self.get_logger().warn(str(error), throttle_duration_sec=5.)
-            self.link = None
+        self.connected = msg.connected
+        self.armed = msg.armed
+        self.flight_mode = msg.mode
 
-    def poll(self):
-        now = time.monotonic()
-        if self.link is None:
-            if now >= self.retry_at:
-                self.retry_at = now + float(self.p('reconnect_interval'))
-                self.connect()
+    def on_timesync(self, msg):
+        if (not math.isfinite(msg.round_trip_time_ms) or
+                not 0 <= msg.round_trip_time_ms <= float(self.p('max_timesync_rtt')) * 1000 or
+                msg.remote_timestamp_ns == 0 or msg.estimated_offset_ns == 0):
+            return
+        self.sync.offset_ns = int(msg.estimated_offset_ns)
+        self.sync.last_reply_at = time.monotonic()
+
+    def on_frame(self, frame):
+        if (frame.sysid != int(self.p('target_system')) or
+                frame.compid != int(self.p('target_component'))):
             return
         try:
-            if now - self.last_heartbeat_sent >= 1.:
-                self.link.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GCS,
-                                            mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
-                self.last_heartbeat_sent = now
-            if now - self.last_sync_sent >= float(self.p('timesync_interval')):
-                stamp = self.get_clock().now().nanoseconds
-                self.sync.request(stamp)
-                self.link.mav.timesync_send(0, stamp)
-                self.last_sync_sent = now
-            deadline = now + .005
-            for _ in range(200):
-                msg = self.link.recv_match(blocking=False)
-                if msg is None:
-                    break
-                if (msg.get_srcSystem() == int(self.p('target_system')) and
-                        msg.get_srcComponent() == int(self.p('target_component'))):
-                    self.handle_message(msg)
-                if time.monotonic() >= deadline:
-                    break
-        except (OSError, ValueError) as error:
-            self.get_logger().warn('MAVLink disconnected: ' + str(error), throttle_duration_sec=5.)
-            self.link.close()
-            self.link = None
-            self.reason = 'SERIAL_DISCONNECTED'
-            self.reset_event('CONNECTION_LOST')
+            self.handle_message(decode_frame(frame))
+        except ValueError as error:
+            self.get_logger().warn(str(error), throttle_duration_sec=2.)
+
+    def request_intervals(self):
+        if (not self.connected or not self.p('request_streams') or
+                self.stream_requested or self.interval_pending or
+                not self.interval_client.service_is_ready()):
+            return
+        intervals = ((32, 30.), (31, 30.), (331, float(self.p('odometry_rate'))), (230, 5.), (132, 10.))
+        message_id, hz = intervals[self.interval_index]
+        self.interval_pending = True
+        future = self.interval_client.call_async(MessageInterval.Request(message_id=message_id, message_rate=hz))
+        def done(result):
+            self.interval_pending = False
+            try:
+                if result.result().success:
+                    self.interval_index += 1
+                    if self.interval_index == len(intervals):
+                        self.stream_requested = True
+                        self.interval_index = 0
+            except Exception as error:
+                self.get_logger().warn(str(error), throttle_duration_sec=2.)
+        future.add_done_callback(done)
 
     def handle_message(self, msg):
         kind = msg.get_type()
@@ -153,15 +157,6 @@ class Microvio(Node):
                 return
             self.heartbeat_at = now
             self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-            if self.p('request_streams') and not self.stream_requested:
-                for message_id, hz in ((331, float(self.p('odometry_rate'))), (230, 5.), (132, 10.)):
-                    self.link.mav.command_long_send(int(self.p('target_system')),
-                        int(self.p('target_component')), mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
-                        0, message_id, 1e6 / hz, 0, 0, 0, 0, 0)
-                self.stream_requested = True
-        elif kind == 'TIMESYNC' and msg.tc1 > 0:
-            self.sync.reply(msg.tc1, msg.ts1, self.get_clock().now().nanoseconds,
-                            now, float(self.p('max_timesync_rtt')))
         elif kind == 'ESTIMATOR_STATUS':
             self.flags, self.estimator_at = int(msg.flags), now
         elif kind == 'ODOMETRY':
@@ -255,8 +250,8 @@ class Microvio(Node):
 
     def health(self):
         now = time.monotonic()
-        if self.link is None:
-            return 'INVALID', self.reason
+        if not self.connected:
+            return 'INVALID', 'MAVROS_DISCONNECTED'
         if now - self.heartbeat_at > float(self.p('heartbeat_timeout')):
             return 'INVALID', 'PX4_HEARTBEAT_STALE'
         if now - self.sync.last_reply_at > float(self.p('timesync_timeout')):
@@ -297,7 +292,7 @@ class Microvio(Node):
                     quality_unknown=self.quality == 0, estimator_type=self.estimator_type,
                     source_pose_frame=self.source_pose_frame, source_velocity_frame=self.source_velocity_frame,
                     frame_id=str(self.p('odom_frame')), body_frame=str(self.p('body_frame')),
-                    armed=self.armed, estimator_flags=self.flags,
+                    armed=self.armed, flight_mode=getattr(self, 'flight_mode', ''), transport='MAVROS', estimator_flags=self.flags,
                     external_vision_reference=str(self.p('external_vision_reference')),
                     initial_yaw_zero=bool(self.p('initial_yaw_zero')),
                     initial_yaw_rad=self.initial_yaw_alignment.initial_yaw,
@@ -317,10 +312,6 @@ class Microvio(Node):
                     twist_diagonal_known=self.twist_diagonal_known)
         self.diag_pub.publish(String(data=json.dumps(data)))
 
-    def destroy_node(self):
-        if self.link is not None:
-            self.link.close()
-        return super().destroy_node()
 
 
 def main(args=None):

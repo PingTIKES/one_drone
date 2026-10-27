@@ -4,7 +4,8 @@ from unittest.mock import Mock
 import pytest
 import rclpy
 from nav_msgs.msg import Odometry
-from px4_msgs.msg import VehicleLocalPosition, VehicleStatus
+from flight_bridge.mavros_adapter import LocalPosition as VehicleLocalPosition
+from mavros_msgs.msg import State
 from quadrotor_msgs.msg import PositionCommand
 from std_msgs.msg import Header, String
 from std_srvs.srv import Trigger
@@ -14,13 +15,13 @@ from flight_bridge.flight_bridge import FlightBridge
 
 @pytest.fixture
 def bridge(monkeypatch):
-    monkeypatch.setattr('flight_bridge.flight_bridge.Px4Adapter', Mock())
+    monkeypatch.setattr('flight_bridge.flight_bridge.MavrosAdapter', Mock())
     rclpy.init()
     n = FlightBridge()
     n.now = lambda: 100.
     n.on_position(VehicleLocalPosition(
         x=1., y=2., z=-1.5, heading=0., xy_valid=True, z_valid=True))
-    n.on_status(VehicleStatus(arming_state=2, nav_state=14))
+    n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
     odom = Odometry()
     odom.header.frame_id = 'odom'
     odom.header.stamp.sec = 100
@@ -92,13 +93,13 @@ def test_mode_exit_releases_tracking_and_reentry_latches_current_position(bridge
     n.on_position_command(command())
     n.tick()
     n.px4_adapter.velocity_body.reset_mock()
-    n.on_status(VehicleStatus(arming_state=2, nav_state=2))
+    n.on_status(State(connected=True, armed=True, mode='POSCTL'))
     n.tick()
     assert n.state == 'IDLE' and n.cmd is None
     n.px4_adapter.velocity_body.assert_not_called()
     n.px4_adapter.command.assert_not_called()
     n.position.x = 5.
-    n.on_status(VehicleStatus(arming_state=2, nav_state=14))
+    n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
     n.tick()
     n.px4_adapter.position.assert_called_with((5., 2., -1.5), 0.)
     assert n.state == 'HOLD'
@@ -106,7 +107,7 @@ def test_mode_exit_releases_tracking_and_reentry_latches_current_position(bridge
 
 def test_standby_stream_does_not_arm_or_change_mode(bridge):
     n = bridge
-    n.on_status(VehicleStatus(arming_state=1, nav_state=2))
+    n.on_status(State(connected=True, armed=False, mode='POSCTL'))
     n.tick()
     assert n.state == 'IDLE'
     n.px4_adapter.position.assert_called_with((1., 2., -1.5), 0.)
@@ -117,9 +118,9 @@ def test_rc_can_reenter_offboard_after_a_landing_request(bridge):
     n = bridge
     n.tick()
     assert n.land(Trigger.Request(), Trigger.Response()).success
-    n.on_status(VehicleStatus(arming_state=2, nav_state=18))
+    n.on_status(State(connected=True, armed=True, mode='AUTO.LAND'))
     n.tick()
-    n.on_status(VehicleStatus(arming_state=2, nav_state=14))
+    n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
     n.tick()
     assert n.state == 'HOLD'
     n.now = lambda: 100.1

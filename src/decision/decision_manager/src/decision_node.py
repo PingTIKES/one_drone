@@ -8,7 +8,7 @@ import rclpy
 import yaml
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from px4_msgs.msg import VehicleStatus
+from mavros_msgs.msg import State
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from std_msgs.msg import Header, String
@@ -23,10 +23,10 @@ def stamp_key(stamp):
 class DecisionManager(Node):
     def __init__(self):
         super().__init__('decision_manager')
-        defaults = dict(decisions_file='', initial_decision='decision_1', px4_ns='/',
+        defaults = dict(decisions_file='', initial_decision='decision_1', mavros_ns='/mavros',
                         enabled=True, check_rate=10.0, xy_tolerance=0.25,
                         z_tolerance=0.20, speed_tolerance=0.20, dwell_time=0.5,
-                        odom_timeout=0.5, status_timeout=1.0,
+                        odom_timeout=0.5, status_timeout=3.0,
                         goal_retry_interval=1.0)
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -53,9 +53,9 @@ class DecisionManager(Node):
         self.state_pub = self.create_publisher(String, '/decision/state', latched)
         self.goal_pub = self.create_publisher(PoseStamped, '/decision/goal', 10)
         self.cancel_pub = self.create_publisher(Header, '/decision/clear_pending', 10)
-        prefix = str(self.p('px4_ns')).strip('/')
-        status_topic = '/' + (prefix + '/' if prefix else '') + 'fmu/out/vehicle_status'
-        self.create_subscription(VehicleStatus, status_topic, self.on_status, qos_profile_sensor_data)
+        prefix = str(self.p('mavros_ns')).strip('/')
+        status_topic = '/' + prefix + '/state'
+        self.create_subscription(State, status_topic, self.on_status, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/ego/odom', self.on_odom, qos_profile_sensor_data)
         self.create_subscription(PoseStamped, '/decision/accepted_goal', self.on_accepted, 10)
         self.create_subscription(PoseStamped, '/navigation_goal', self.on_manual_goal, 10)
@@ -87,7 +87,7 @@ class DecisionManager(Node):
 
     def on_status(self, msg):
         self.status_at = time.monotonic()
-        offboard = msg.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD
+        offboard = msg.connected and msg.mode == 'OFFBOARD'
         entered = offboard and not self.offboard
         self.offboard = offboard
         if not self.p('enabled'):

@@ -1,0 +1,23 @@
+# MAVROS 独占飞控串口。禁止再由 microvio 或 QGroundControl 打开同一设备。
+/**:
+  ros__parameters:
+    plugin_allowlist: [sys_status, sys_time, command, imu, local_position, setpoint_raw]
+    startup_px4_usb_quirk: false
+/**/sys:
+  ros__parameters:
+    heartbeat_rate: 1.0 # MAVROS 自身的 MAVLink 心跳 Hz；OFFBOARD 保活来自 20 Hz 设定值
+    conn_timeout: 3.0 # 飞控心跳超时 s
+/**/time:
+  ros__parameters:
+    timesync_mode: MAVLINK # 通过 MAVLink 估计飞控启动时钟与 ROS 时钟偏移
+    timesync_rate: 10.0 # 时间同步请求 Hz
+    system_time_rate: 1.0 # 系统时间报文 Hz
+/**/local_position:
+  ros__parameters:
+    frame_id: mavros_local_enu # MAVROS 原始本地 ENU；不属于项目 map→odom→base_link TF 链
+    tf.send: false # 不与 modify、定位节点争抢 TF
+    tf.frame_id: mavros_local_enu
+    tf.child_frame_id: mavros_base_link
+/**/imu:
+  ros__parameters:
+    frame_id: mavros_base_link # MAVROS 中的机体 FLU

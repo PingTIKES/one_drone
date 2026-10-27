@@ -49,7 +49,7 @@ worlds/             # 仿真场景
 
 ## 2. 安装与编译
 
-运行环境：**Ubuntu 22.04、ROS 2 Humble、PX4 1.14.3**。真机相机使用 D435i，还需要安装并配置 RealSense ROS 2 驱动及 librealsense。
+运行环境：**Ubuntu 22.04、ROS 2 Humble、MAVROS / MAVLink**。真机接入目标为 PX4 1.17；项目仿真使用固定版本 PX4 1.14.3 SITL。真机相机使用 D435i，还需要安装并配置 RealSense ROS 2 驱动及 librealsense。
 
 首次安装：
 
@@ -90,13 +90,14 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | `hardware.localization_source` | `openvins` 使用相机定位；`microvio` 读取飞控 USB 融合定位 |
 | `hardware.perception_enabled` | `false` 关闭深度处理，仍启动 EGO、目标管理和决策；有相机时设 `true` 更新障碍物 |
 | `hardware.calibration_dir` | 当前设备的标定目录 |
-| `hardware.target_system`、`hardware.px4_ns` | 飞控编号及 DDS 名称空间 |
+| `hardware.target_system`、`hardware.mavros_ns` | 飞控编号及 MAVROS 名称空间 |
+| `hardware.fcu_url`、`hardware.gcs_url` | MAVROS 串口/UDP 连接及可选地面站转发 |
 | `hardware.cam0_topic`、`cam1_topic`、`imu_topic` | 与标定对应的左右目和 IMU 输入 |
 | `hardware.depth_source`、`depth_topic`、`depth_info_topic` | 深度来源及匹配的 CameraInfo |
 
 启动模式以 `launch.yaml` 的实际值为准。仿真飞行将 `startup.sim` 和 `startup.flight_control` 都设为 `true`；真机定位台架检查使用 `sim: false`、`flight_control: false`。
 
-`yaw_control: false` 会在首次收到有效 PX4 本地位置时锁定机头方向，位置保持、起飞和轨迹跟踪都使用该固定 yaw；平移仍独立执行，不再按路径朝向或前视角度缩放水平速度，因此允许侧向和后向移动。定位暂时恢复或 HOLD 不重新锁定；PX4 航向参考重置时修正固定参考值，保持同一物理方向。`true` 保持原有解耦 yaw 策略。修改后重启控制节点生效，此参数不改变 map→odom 或 RViz TF。
+`yaw_control: false` 会在首次收到有效 PX4 本地位置时锁定机头方向，位置保持、起飞和轨迹跟踪都使用该固定 yaw；平移仍独立执行，不再按路径朝向或前视角度缩放水平速度，因此允许侧向和后向移动。定位暂时恢复或 HOLD 不重新锁定；固定 yaw 使用飞控本地参考系，MAVROS Pose 不提供航向重置增量。`true` 保持原有解耦 yaw 策略。修改后重启控制节点生效，此参数不改变 map→odom 或 RViz TF。
 
 
 ### 参数文件位置
@@ -133,7 +134,7 @@ startup:
 
 `flight_control: false` 不启动 `/takeoff` 服务，调用时会一直等待。修改配置后需要重启算法；已有实机节点应先在其启动终端按 `Ctrl+C` 退出。
 
-**终端 A：启动 Gazebo、PX4 和 DDS Agent。**
+**终端 A：启动 Gazebo 和 PX4（MAVROS 随算法启动）。**
 
 ```bash
 cd ~/one_drone
@@ -157,7 +158,7 @@ ros2 launch bringup startup.launch.py
 
 ## 5. 真机启动
 
-使用 OpenVINS 和深度导航时，在 `launch.yaml` 中设置 `startup.sim: false`、`hardware.localization_source: openvins`、`hardware.perception_enabled: true`，核对相机话题、标定目录、飞控编号及 DDS 名称空间。初次检查定位时保持 `startup.flight_control: false`。
+使用 OpenVINS 和深度导航时，在 `launch.yaml` 中设置 `startup.sim: false`、`hardware.localization_source: openvins`、`hardware.perception_enabled: true`，核对相机话题、标定目录、飞控编号及 MAVROS 名称空间。初次检查定位时保持 `startup.flight_control: false`。
 
 ### 标定文件
 
@@ -197,33 +198,39 @@ export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 ros2 param set /camera/camera depth_module.emitter_enabled 0
 ```
 
-### 飞控通信
+### 飞控通信：MAVROS / MAVLink
 
-飞行控制使用 PX4 uXRCE-DDS 客户端与电脑上的 Micro XRCE-DDS Agent。当前 MicoVIO 占用 TELEM2，飞控原生 USB 使用 MAVLink（供 microvio/QGroundControl），不能将这个 USB 设备直接当作 DDS 串口。
+飞控通信统一使用 MAVROS，不需要 Micro XRCE-DDS Agent 或与固件版本绑定的 `px4_msgs`。MicoVIO 继续接飞控 TELEM2；飞控 USB 接电脑或 RK3566。**MAVROS 是这个 USB 串口的唯一使用者**，microvio 只订阅 MAVROS 转发的 MAVLink 遥测，不再独立打开串口。
 
-推荐将空闲 **TELEM1** 接到电脑的 **3.3 V USB-TTL** 转换器（TX→RX、RX→TX、GND→GND），或接 RK3566 上电平匹配且已启用的 UART。按飞控接口定义确认引脚，不将 RS-232 电平直接接入飞控。
+在 `src/bringup/params/launch.yaml` 的 `hardware` 中配置：
 
-通过飞控原生 USB 在 QGroundControl 参数页面设置并保存：
-
-| 参数 | 值 | 含义 |
-| --- | --- | --- |
-| `MAV_0_CONFIG` | `0` | 当前它占用 TELEM1，先释放；其他 MAVLink 实例也不能占用 TELEM1 |
-| `UXRCE_DDS_CFG` | `101`（TELEM1） | DDS 客户端串口 |
-| `SER_TEL1_BAUD` | `921600` | 两端串口波特率 |
-| `UXRCE_DDS_DOM_ID` | `0` | 与电脑 ROS_DOMAIN_ID 一致 |
-| `UXRCE_DDS_KEY` | `1` | 单机客户端标识，不能为 0 |
-
-**保留 TELEM2 的 MAVLink 配置，不要禁用 MicoVIO 链路。** 重启飞控后，在 QGroundControl 的 MAVLink Console 执行 `uxrce_dds_client status` 查看运行状态。操作参数前先停止占用飞控 USB 的 microvio；参数配置完成后退出 QGroundControl，再使用 microvio 读取该 USB。
-
-电脑端启动 Agent，下面 `/dev/ttyUSB0` 是新 USB-TTL 转换器的示例设备名，须替换为实际路径（推荐 `/dev/serial/by-id/...`），与飞控原生 USB 的 `/dev/ttyACM0` 不同：
-
-```bash
-MicroXRCEAgent serial --dev /dev/ttyUSB0 -b 921600
+```yaml
+mavros_ns: /mavros
+fcu_url: /dev/serial/by-id/usb-MicoAir_MicoAir743v2_0-if00:921600
+gcs_url: ''
+target_system: 1
 ```
 
-各 ROS 终端 `export ROS_DOMAIN_ID=0` 并统一 RMW 环境，确认 `/fmu/out/vehicle_status`、`/fmu/out/vehicle_local_position` 持续发布。有 DDS 前缀时使用实际名称空间，并同步填写 `hardware.px4_ns`。`px4_msgs` 必须匹配飞控固件；当前项目对应 PX4 1.14。仅运行 microvio 独立 USB 定位检查时无需 DDS Agent。
+串口路径以实际设备为准；UART 两端波特率必须一致。用户需要串口访问权限（通常加入 `dialout` 组后重新登录）。MAVROS 已包含在总启动中，不要再启动第二个 MAVROS、microvio 串口读取程序或 Agent。QGroundControl 不能同时打开这个串口；可在需要时配置 `gcs_url` 通过 UDP 转发。
 
-参数依据：[PX4 1.14 DDS 配置](https://docs.px4.io/v1.14/en/middleware/uxrce_dds)。本节说明的是接线和配置步骤，不表示检测到新 TELEM1 链路已接通。
+依赖由 `setup_env.sh` 安装。已有系统可执行：
+
+```bash
+sudo apt install ros-humble-mavros ros-humble-mavros-extras
+sudo bash /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
+```
+
+GeographicLib 数据集为 MAVROS 运行依赖，即使不使用 GPS 也需安装。无需改动模组所在 TELEM2；飞控 USB 需保持 MAVLink。MAVROS 启动后检查：
+
+```bash
+ros2 topic echo /mavros/state
+ros2 topic hz /mavros/local_position/pose
+ros2 topic hz /mavros/setpoint_raw/local
+```
+
+`connected: true` 表示 MAVROS 收到飞控心跳，`mode` 是飞控实际模式，`armed` 是实际解锁状态。`/flight_state` 是项目内部控制状态。控制节点在 OFFBOARD 之前持续发布 20 Hz 静止设定值，以满足 PX4 切入要求；不在后台主动解锁或切模式。只有调用 `/takeoff` 才请求切 OFFBOARD 和解锁，只有调用 `/land` 才请求自动降落。服务请求发出不等于飞控已接受，实际结果仍看 `/mavros/state`。
+
+MAVROS 的 ROS 本地坐标是 **ENU/FLU**。控制适配器负责 ENU 与飞控 NED 的转换，项目 `/odom` 仍使用初始机头方向为 X 的局部坐标，`map→odom→base_link` 不变。OpenVINS 通过 MAVROS 的 MAVLink 路由发送外部视觉 ODOMETRY；microvio 模式关闭回灌，避免将飞控融合结果反馈给自己。
 
 ### 终端 B：算法与 RViz
 
@@ -239,7 +246,7 @@ ros2 launch bringup startup.launch.py
 
 ### MicoVIO 模组定位检查
 
-当前真机配置为无相机定位检查：`sim: false`、`flight_control: false`、`hardware.localization_source: microvio`、`hardware.perception_enabled: false`。MicoVIO 接飞控 TELEM2，电脑 USB 接飞控。在 source 工作区并统一 RMW 环境后启动：
+当前真机配置为无相机定位检查：`sim: false`、`flight_control: false`、`hardware.localization_source: microvio`、`hardware.perception_enabled: false`。MicoVIO 接飞控 TELEM2，电脑 USB 接飞控，MAVROS 随总启动一起运行。在 source 工作区并统一 RMW 环境后启动：
 
 ```bash
 ros2 launch bringup startup.launch.py
@@ -256,13 +263,13 @@ ros2 run tf2_ros tf2_echo odom base_link
 ros2 launch microvio microvio.launch.py
 ```
 
-使用前 source 本工作区并按真机章节统一 RMW 环境。串口、波特率及输出话题放在 `src/localization/microvio/config/params.yaml`，输出为 `/microvio/odom`、`/microvio/health` 和 `/microvio/diagnostics`。独立入口只检查定位，不启动飞控控制；总启动通过上述 `localization_source` 选择定位来源。[接线、启动及导航接入说明](src/localization/microvio/README.md)。
+使用前 source 本工作区并按真机章节统一 RMW 环境，确保 MAVROS 已连接。MAVROS 名称空间、目标系统编号及输出话题放在 `src/localization/microvio/config/params.yaml`，输出为 `/microvio/odom`、`/microvio/health` 和 `/microvio/diagnostics`；串口与波特率由总启动的 `hardware.fcu_url` 配置。独立入口只启动定位适配节点；总启动通过上述 `localization_source` 选择定位来源。[接线、启动及导航接入说明](src/localization/microvio/README.md)。
 
 ### 笔记本通过网络观察 RK3566
 
-RK3566 运行算法，笔记本运行 RViz。SSH 只用于启动板端程序，ROS 话题通过局域网 DDS 传输，不使用 SSH X11 转发。两端需网络互通、允许 DDS 发现和数据通信，并同步系统时间。
+RK3566 运行算法，笔记本运行 RViz。SSH 只用于启动板端程序，ROS 2 话题通过局域网 RMW/DDS 传输（不涉及飞控 DDS Agent），不使用 SSH X11 转发。两端需网络互通、允许 DDS 发现和数据通信，并同步系统时间。
 
-**两端终端均设置相同环境**（下面使用 domain 0，须与飞控 DDS 配置一致）：
+**两端终端均设置相同环境**（下面使用 domain 0，笔记本和 3566 保持一致；与飞控 MAVLink 无关）：
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -310,7 +317,7 @@ ros2 service call /takeoff std_srvs/srv/Trigger '{}'
 ros2 topic echo /flight_state
 ```
 
-第一条应输出 `std_srvs/srv/Trigger`；若没有服务，先检查算法终端是否启动了 `flight_bridge`。
+第一条应输出 `std_srvs/srv/Trigger`；若没有服务，先检查算法终端是否启动了 `flight_bridge`。MAVROS 的 `/mavros/state` 应持续显示 `connected: true`。
 
 手动起飞后可直接用遥控器切入 OFFBOARD，不需要调用 `/takeoff` 或 `/resume_navigation`。控制节点会提前发布静止设定值及心跳，以满足 PX4 切入 OFFBOARD 的协议要求；在其他飞行模式下不会主动解锁或切换模式。进入 OFFBOARD 后，无可用 EGO 指令时锁定当前位置，有新鲜且数值有效的 EGO 指令和里程计时执行轨迹速度。退出 OFFBOARD 后释放 EGO 控制，取消尚未完成的起飞流程，不会自动切回或重新解锁。
 

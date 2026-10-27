@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 import rclpy
 from nav_msgs.msg import Odometry
-from px4_msgs.msg import VehicleLocalPosition
+from flight_bridge.mavros_adapter import LocalPosition as VehicleLocalPosition
 from rclpy.parameter import Parameter
 from quadrotor_msgs.msg import PositionCommand
 
@@ -102,17 +102,16 @@ def test_px4_heading_reset_updates_reference_once_without_relatching(bridge):
 
 
 def test_fixed_yaw_reaches_px4_velocity_setpoint(bridge):
-    from flight_bridge.px4_adapter import Px4Adapter
-    adapter = Px4Adapter(bridge, 'yaw_test', 1)
-    adapter.mode_pub = Mock()
+    from flight_bridge.mavros_adapter import MavrosAdapter
+    adapter = MavrosAdapter(bridge, '/yaw_test')
     adapter.setpoint_pub = Mock()
     adapter.audit_pub = Mock()
     adapter.velocity_body((1., 0., .2), 0., math.pi/2, 12, 1., yaw_ned=.6)
     msg = adapter.setpoint_pub.publish.call_args.args[0]
-    assert msg.yaw == pytest.approx(.6)
-    assert msg.yawspeed == 0.
-    assert msg.velocity == pytest.approx([0., 1., -.2], abs=1e-6)
+    assert msg.yaw == pytest.approx(math.pi/2 - .6)
+    assert msg.yaw_rate == 0.
+    assert (msg.velocity.x, msg.velocity.y, msg.velocity.z) == pytest.approx([1., 0., .2], abs=1e-6)
     adapter.velocity_body((1., 0., 0.), .2, 0., 13, 1.)
     msg = adapter.setpoint_pub.publish.call_args.args[0]
-    assert math.isnan(msg.yaw)
-    assert msg.yawspeed == pytest.approx(-.2)
+    assert msg.type_mask & msg.IGNORE_YAW
+    assert msg.yaw_rate == pytest.approx(.2)

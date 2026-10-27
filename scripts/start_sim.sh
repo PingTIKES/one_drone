@@ -22,7 +22,6 @@ SPAWN_POSE="${SPAWN_POSE:-1.3,9.4,0.5,0,0,-1.5707963267948966}"
 }
 [[ -x "$PX4_BIN" ]] || { echo "Build SITL first: cd $PX4_DIR && DONT_RUN=1 make px4_sitl_default" >&2; exit 1; }
 command -v gz >/dev/null || { echo 'Gazebo gz command is missing.' >&2; exit 1; }
-command -v MicroXRCEAgent >/dev/null || { echo 'MicroXRCEAgent is missing.' >&2; exit 1; }
 
 if [[ "$WORLD" == default ]]; then
     WORLD_SDF="$PX4_DIR/Tools/simulation/gz/worlds/default.sdf"
@@ -114,8 +113,7 @@ for i in 1; do
     sleep 5
 done
 
-MicroXRCEAgent udp4 -p 8888 > /tmp/microxrce_agent.log 2>&1 & PIDS+=("$!")
 echo "[sim] Ready. Source /tmp/one_drone_gz_env.sh in the algorithm terminal."
-echo "[sim] Start algorithms: PYTHONNOUSERSITE=1 ros2 launch bringup startup.launch.py sim:=true rviz:=true"
-echo "[sim] Ctrl+C stops Gazebo, PX4 and the agent."
+echo "[sim] Start algorithms: ros2 launch bringup startup.launch.py sim:=true rviz:=true"
+echo "[sim] Ctrl+C stops Gazebo and PX4; MAVROS starts with bringup."
 wait

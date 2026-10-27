@@ -7,7 +7,7 @@ openvins:
 vio_bridge:
   ros__parameters:
     uav_id: null # 预留无人机编号；当前单机坐标框架固定，不用于多机隔离
-    px4_ns: null # PX4 DDS 命名空间；启动时由 px4_ns 参数确定
+    target_system: 1 # MAVROS 目标系统编号；总启动按实机/仿真配置覆盖
     t_body_imu: null # body←IMU 的 4×4 外参；由启动入口根据标定生成
     initial_yaw_zero: true # 初次接受定位后固定 ROS odom 的 X 为初始机头方向；只归零 yaw，保留倾斜，不改原始 PX4 视觉输入
     initial_position_zero: true # 首次有效机体位置设为 odom 原点（XYZ=0）；仅启动时锁定，定位恢复/重置不重新归零

@@ -8,12 +8,14 @@ startup:
   depth_scale: 0.001 # 16UC1 深度单位转换到 m 的比例；32FC1 深度已是 m
 
 hardware:
-  localization_source: microvio # microvio 读取飞控 USB 定位；openvins 使用双目和 IMU
+  localization_source: microvio # microvio 订阅 MAVROS 转发的定位；openvins 使用双目和 IMU
   perception_enabled: false # false 只关闭相机深度处理，EGO/打点/决策仍启动；无深度时没有实时障碍信息
   depth_source: hardware # hardware 使用 D435i 深度；software 使用项目软件双目
   calibration_dir: ~/one_drone/deploy/calibration/uav1 # 已导入的真机标定目录，支持 ~
   target_system: 1 # 实际飞控 MAV_SYS_ID，接入前核对
-  px4_ns: / # 飞控 DDS 命名空间；/ 对应 /fmu/...，有前缀时填实际命名空间
+  mavros_ns: /mavros # MAVROS 状态、设定值与服务的 ROS 名称空间
+  fcu_url: /dev/serial/by-id/usb-MicoAir_MicoAir743v2_0-if00:921600 # MAVROS 独占的飞控串口及波特率
+  gcs_url: '' # 可选转发给地面站的 MAVLink UDP 地址；留空关闭
   cam0_topic: /camera/camera/infra1/image_rect_raw # 左红外，必须对应标定 cam0
   cam1_topic: /camera/camera/infra2/image_rect_raw # 右红外，必须对应标定 cam1
   imu_topic: /camera/camera/imu # 相机组合 IMU，使用驱动线性插值合并
@@ -26,7 +28,9 @@ simulation:
   depth_source: software # 仿真使用图像计算深度
   calibration_dir: '' # 仿真自动使用 vio_bridge/config/openvins_sim
   target_system: 2 # 当前仿真飞控 MAV_SYS_ID
-  px4_ns: px4_1 # 当前仿真飞控 DDS 命名空间
+  mavros_ns: /mavros # 仿真也采用 MAVROS，不启动 DDS Agent
+  fcu_url: udp://:14541@127.0.0.1:14581 # PX4 SITL instance=1 的 MAVLink Onboard 端口
+  gcs_url: '' # 仿真地面站转发，留空关闭
   cam0_topic: '' # 仿真传感器由 Gazebo 桥直接发布，无需真机输入话题
   cam1_topic: '' # 同上
   imu_topic: '' # 同上

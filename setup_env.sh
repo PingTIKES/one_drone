@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ubuntu 22.04 / ROS 2 Humble setup for the one_drone PX4 1.14.3 EGO-Planner stack.
+# Ubuntu 22.04 / ROS 2 Humble setup for one_drone MAVROS / EGO-Planner.
 # Usage: ./setup_env.sh sim | ./setup_env.sh onboard
 set -euo pipefail
 
@@ -12,7 +12,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot-1.14.3}"
 OPENVINS_DIR="$ROOT_DIR/src/localization/open_vins"
 PX4_COMMIT=08310a5e8ac64d02edb41523460e7dc267298deb
-PX4_MSGS_COMMIT=ffb6e80e1c17e5714395611a020c282a87af8fa4
 
 if [[ ! -f /opt/ros/humble/setup.bash ]]; then
     echo 'Install ROS 2 Humble before running setup_env.sh.' >&2
@@ -28,7 +27,7 @@ sudo apt install -y python3-colcon-common-extensions python3-rosdep python3-nump
     python3-yaml python3-opencv python3-pip python3-dev python3-matplotlib python3-serial python3-lxml python3-future git curl build-essential cmake \
     ros-humble-cv-bridge ros-humble-rmw-cyclonedds-cpp ros-humble-pcl-conversions \
     libpcl-dev libeigen3-dev libceres-dev libboost-all-dev libopencv-dev libopencv-contrib-dev \
-    ros-humble-image-transport ros-humble-tf2-geometry-msgs
+    ros-humble-image-transport ros-humble-tf2-geometry-msgs ros-humble-mavros ros-humble-mavros-extras
 
 # microvio reads PX4 MAVLink telemetry. Install only this protocol library;
 # keep ROS/OpenCV on the distribution NumPy rather than pulling a pip NumPy.
@@ -42,43 +41,16 @@ if [[ ! -f "$OPENVINS_DIR/ov_msckf/src/core/VioManager.h" ]]; then
     exit 1
 fi
 
+# MAVROS requires the geoid dataset even when no GPS is used.
+if [[ ! -f /usr/share/GeographicLib/geoids/egm96-5.pgm ]]; then
+    sudo bash /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
+fi
+# Old DDS-only dependencies are no longer exposed to colcon.
+if [[ -L "$ROOT_DIR/src/px4_msgs" ]]; then
+    unlink "$ROOT_DIR/src/px4_msgs"
+fi
 mkdir -p "$ROOT_DIR/third_party"
-# colcon scans the whole workspace recursively. px4_msgs is exposed through
-# src/px4_msgs below, so do not discover the same package a second time here.
 touch "$ROOT_DIR/third_party/COLCON_IGNORE"
-if [[ ! -d "$ROOT_DIR/third_party/px4_msgs/.git" ]]; then
-    git clone --branch release/1.14 https://github.com/PX4/px4_msgs.git \
-        "$ROOT_DIR/third_party/px4_msgs"
-    git -C "$ROOT_DIR/third_party/px4_msgs" checkout "$PX4_MSGS_COMMIT"
-fi
-if [[ "$(git -C "$ROOT_DIR/third_party/px4_msgs" rev-parse HEAD)" != "$PX4_MSGS_COMMIT" ]]; then
-    echo "px4_msgs must be release/1.14 commit $PX4_MSGS_COMMIT." >&2
-    exit 1
-fi
-PX4_MSGS_LINK="$ROOT_DIR/src/px4_msgs"
-PX4_MSGS_RELATIVE_TARGET="../third_party/px4_msgs"
-if [[ -L "$PX4_MSGS_LINK" ]]; then
-    if [[ "$(readlink "$PX4_MSGS_LINK")" != "$PX4_MSGS_RELATIVE_TARGET" ]]; then
-        unlink "$PX4_MSGS_LINK"
-        ln -s "$PX4_MSGS_RELATIVE_TARGET" "$PX4_MSGS_LINK"
-    fi
-elif [[ -e "$PX4_MSGS_LINK" ]]; then
-    echo "$PX4_MSGS_LINK exists but is not the managed px4_msgs symlink." >&2
-    exit 1
-else
-    ln -s "$PX4_MSGS_RELATIVE_TARGET" "$PX4_MSGS_LINK"
-fi
-
-if ! command -v MicroXRCEAgent >/dev/null 2>&1; then
-    AGENT_DIR="${AGENT_DIR:-$HOME/Micro-XRCE-DDS-Agent}"
-    if [[ ! -d "$AGENT_DIR/.git" ]]; then
-        git clone --branch v2.4.3 https://github.com/eProsima/Micro-XRCE-DDS-Agent.git "$AGENT_DIR"
-    fi
-    cmake -S "$AGENT_DIR" -B "$AGENT_DIR/build"
-    cmake --build "$AGENT_DIR/build" -j "$(nproc)"
-    sudo cmake --install "$AGENT_DIR/build"
-    sudo ldconfig
-fi
 
 if [[ "$MODE" == sim ]]; then
     if ! ros2 pkg prefix ros_gz_bridge >/dev/null 2>&1; then
@@ -116,5 +88,5 @@ env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="/usr/local/bin:/usr/bin:/bin
         cd "$ROOT_DIR"
         colcon build --symlink-install --executor sequential --cmake-clean-cache'
 
-echo "Ready: one_drone PX4 1.14.3 workspace ($MODE)."
+echo "Ready: one_drone MAVROS workspace ($MODE; SITL uses PX4 1.14.3)."
 echo "Source $ROOT_DIR/install/setup.bash in each terminal."

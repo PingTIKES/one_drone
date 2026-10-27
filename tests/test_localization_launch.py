@@ -84,3 +84,19 @@ def test_launch_passes_yaw_control_to_flight_bridge(startup, enabled):
     for group in evaluate_parameters(context, nodes['flight_bridge']._Node__parameters):
         merged.update(group)
     assert merged['yaw_control'] is enabled
+
+
+def test_mavros_keeps_internal_plugin_names_and_is_single_fcu_owner(startup):
+    context, nodes = launch_nodes(startup, False, 'microvio', False, flight_control=True)
+    mavros = nodes['mavros_node']
+    # A process-wide __node remap would rename every MAVROS plugin node,
+    # breaking per-plugin YAML matching and private service resolution.
+    assert mavros._Node__node_name is None
+    groups = evaluate_parameters(context, mavros._Node__parameters)
+    merged = {}
+    for group in groups:
+        if isinstance(group, dict):
+            merged.update(group)
+    assert merged['tgt_system'] == 1
+    assert merged['fcu_url'].endswith(':921600')
+    assert not any('Agent' in executable for executable in nodes)

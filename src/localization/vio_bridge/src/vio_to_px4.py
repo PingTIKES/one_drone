@@ -13,7 +13,9 @@ from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import String, Header
 from std_srvs.srv import Trigger
-from px4_msgs.msg import VehicleOdometry
+from mavros_msgs.msg import Mavlink
+from pymavlink.dialects.v20 import common as mavlink
+from vio_bridge.mavlink_codec import encode_frame
 from tf2_ros import TransformBroadcaster
 from vio_bridge.vio_geometry import convert
 from vio_bridge.vio_tf_geometry import FLIP, vio_body_pose, InitialYawAlignment
@@ -26,7 +28,7 @@ from vio_bridge.vio_quality import normalized_covariance, quality_state
 class VioBridge(Node):
     def __init__(self):
         super().__init__('vio_to_px4')
-        for k,v in dict(uav_id=1,px4_ns='px4_1',max_age=.5,invalid_age=2.,future_tolerance=.02,max_position_variance=1.,
+        for k,v in dict(uav_id=1,target_system=1,max_age=.5,invalid_age=2.,future_tolerance=.02,max_position_variance=1.,
                         max_orientation_variance=.25,max_velocity_variance=1.,
                         max_speed=4.,max_jump=.4,max_continuous_gap=2.,
                         expected_world='global',expected_imu='imu',initial_yaw_zero=True,initial_position_zero=True,
@@ -79,9 +81,8 @@ class VioBridge(Node):
         self.quality_acceleration = 0.0
         self.covariance_ratio = math.inf
         self.position_covariance = self.orientation_covariance = self.velocity_covariance = math.inf
-        px4_ns = str(self.p('px4_ns')).strip('/')
-        px4_root = '/' + (px4_ns + '/' if px4_ns else '') + 'fmu/'
-        self.pub = self.create_publisher(VehicleOdometry,px4_root + 'in/vehicle_visual_odometry',qos_profile_sensor_data)
+        self.ev_sequence = 0
+        self.pub = self.create_publisher(Mavlink, f'/uas{int(self.p("target_system"))}/mavlink_sink', qos_profile_sensor_data)
         self.odom_pub = self.create_publisher(Odometry, 'odom', QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE))
         self.reset_pub = self.create_publisher(Header, '/vio_reset_event',
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -336,17 +337,26 @@ class VioBridge(Node):
             self.recovery = self.new_recovery()
             self.reason = 'RECOVERED_WITH_RESET'
             self.notify_reset(self.reason)
-            self.get_logger().info('VIO stable again; publishing EV reset_counter')
-        out = VehicleOdometry()
-        # Hardware uses XRCE clock conversion. Algorithm SITL uses /clock on
-        # both sides via the PX4-side RM27_SIM_CLOCK patch; do not offset twice.
-        out.timestamp, out.timestamp_sample = int(now*1e6),int(stamp*1e6)
-        out.pose_frame = VehicleOdometry.POSE_FRAME_FRD
-        out.velocity_frame = VehicleOdometry.VELOCITY_FRAME_BODY_FRD
-        out.position,out.q,out.velocity,out.angular_velocity = pos.tolist(),quat.tolist(),vel.tolist(),omega.tolist()
-        out.position_variance,out.orientation_variance,out.velocity_variance = pv.tolist(),ov.tolist(),vv.tolist()
-        out.reset_counter,out.quality = self.reset_count,100
-        self.pub.publish(out)
+            self.get_logger().info('VIO stable again; publishing MAVLink EV reset_counter')
+        # MAVROS routes the MAVLink ODOMETRY packet and owns the only FCU
+        # connection. Preserve arbitrary-heading FRD and the EV reset counter.
+        pose_cov = [0.] * 21
+        twist_cov = [0.] * 21
+        for index, value in zip((0, 6, 11, 15, 18, 20), list(pv) + list(ov)):
+            pose_cov[index] = float(value)
+        for index, value in zip((0, 6, 11, 15, 18, 20), list(vv) + [math.nan] * 3):
+            twist_cov[index] = float(value)
+        packet = mavlink.MAVLink_odometry_message(
+            time_usec=int(stamp*1e6), frame_id=mavlink.MAV_FRAME_LOCAL_FRD,
+            child_frame_id=mavlink.MAV_FRAME_BODY_FRD,
+            x=float(pos[0]), y=float(pos[1]), z=float(pos[2]), q=quat.tolist(),
+            vx=float(vel[0]), vy=float(vel[1]), vz=float(vel[2]),
+            rollspeed=float(omega[0]), pitchspeed=float(omega[1]), yawspeed=float(omega[2]),
+            pose_covariance=pose_cov, velocity_covariance=twist_cov,
+            reset_counter=self.reset_count, estimator_type=mavlink.MAV_ESTIMATOR_TYPE_VIO, quality=100)
+        self.pub.publish(encode_frame(packet, self.get_clock().now().to_msg(),
+                         source_system=int(self.p('target_system')), sequence=self.ev_sequence))
+        self.ev_sequence = (self.ev_sequence + 1) % 256
         self.publish_vio_odom(msg,stamp,pos,quat,vel,omega,pv,ov,vv)
         self.last_stamp,self.last_position,self.last_good = stamp,pos,stamp
         self.last_quat,self.last_velocity,self.last_omega = quat,vel,omega

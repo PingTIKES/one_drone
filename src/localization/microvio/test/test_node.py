@@ -14,7 +14,7 @@ from test_geometry import packet
 def node():
     rclpy.init()
     n = Microvio()
-    n.link = SimpleNamespace(close=lambda: None)
+    n.connected = True
     n.heartbeat_at = n.estimator_at = time.monotonic()
     n.flags = 47
     n.sync.offset_ns = n.get_clock().now().nanoseconds - 10_000_000_000
@@ -70,11 +70,27 @@ def test_stale_samples_and_duplicate_stamps_never_make_new_tf(node):
     assert node.health()[0] == 'INVALID'
 
 
-def test_no_flight_commands_sent_by_default_poll(node):
-    mav = Mock()
-    node.link = SimpleNamespace(mav=mav, recv_match=lambda **kwargs: None, close=lambda: None)
-    node.poll()
-    assert {call[0] for call in mav.method_calls} == {'heartbeat_send', 'timesync_send'}
+def test_mavros_is_the_only_serial_owner(node):
+    assert not hasattr(node, 'connect')
+    assert not hasattr(node, 'poll')
+    assert not hasattr(node, 'link')
+    from mavros_msgs.msg import State
+    node.on_mavros_state(State(connected=True, armed=False, mode='POSCTL'))
+    assert node.flight_mode == 'POSCTL'
+
+
+def test_mavros_timesync_rejects_high_latency_and_clears_on_disconnect(node):
+    from mavros_msgs.msg import State, TimesyncStatus
+    before = node.sync.offset_ns
+    node.on_timesync(TimesyncStatus(remote_timestamp_ns=10_000_000_000,
+                                    estimated_offset_ns=1234, round_trip_time_ms=200.))
+    assert node.sync.offset_ns == before
+    node.on_timesync(TimesyncStatus(remote_timestamp_ns=10_000_000_000,
+                                    estimated_offset_ns=1234, round_trip_time_ms=2.))
+    assert node.sync.offset_ns == 1234
+    node.on_mavros_state(State(connected=False))
+    assert node.sync.offset_ns is None
+    assert node.reset_index == 1
 
 
 def test_initial_heading_zero_does_not_freeze_later_body_turns(node):

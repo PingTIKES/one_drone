@@ -53,12 +53,9 @@ def test_unknown_covariance_is_not_filled_with_false_certainty():
     np.testing.assert_allclose(np.diag(out['pose_covariance']), [123.]*6)
 
 
-def test_timesync_only_accepts_matching_low_rtt_replies():
+def test_source_timestamp_requires_mavros_offset():
     sync = ClockSync()
-    assert not sync.reply(100, 10, 20, 0., .1)
-    sync.request(1_000_000_000)
-    assert sync.reply(100_000_000, 1_000_000_000, 1_020_000_000, 1., .1)
-    assert sync.offset_ns == 910_000_000
+    with pytest.raises(ValueError, match='WAIT_TIMESYNC'):
+        sync.stamp(110_000)
+    sync.offset_ns = 910_000_000
     assert sync.stamp(110_000) == 1_020_000_000
-    sync.request(2_000_000_000)
-    assert not sync.reply(200_000_000, 2_000_000_000, 2_200_000_000, 2., .1)

@@ -23,7 +23,7 @@ from flight_bridge.flight_supervisor import FlightSupervisor
 from flight_bridge.trajectory_controller import TrajectoryController
 from flight_bridge.trajectory_validator import TrajectoryValidator
 from flight_bridge.velocity_math import required_forward_clearance
-from flight_bridge.yaw_manager import YawManager, world_to_body
+from flight_bridge.yaw_manager import YawDecision, YawManager, world_to_body
 
 
 NAV_OFFBOARD = 14
@@ -34,6 +34,7 @@ class FlightBridge(Node):
     def __init__(self):
         super().__init__('flight_bridge')
         defaults = dict(px4_ns='px4_1', target_system=2, takeoff_altitude=2.,
+                        yaw_control=True,
                         max_horizontal_speed=.5, max_vertical_speed=.3,
                         max_yaw_rate=.35, position_gain=.8,
                         yaw_soft_limit_deg=30., yaw_hard_limit_deg=100.,
@@ -96,6 +97,7 @@ class FlightBridge(Node):
         self.required_clearance = required_clearance
         self.state = 'IDLE'
         self.position = None
+        self.initial_heading = None
         self.status = None
         self.pose_at = self.status_at = self.vio_at = self.cmd_at = self.obstacle_at = -math.inf
         self.last_obstacle_good = -math.inf
@@ -193,6 +195,8 @@ class FlightBridge(Node):
                  f'max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
                  f'required_clearance={self.required_clearance:.2f}m '
                  f'command_clamped={self.command_clamped} '
+                 f'yaw_control={self.p("yaw_control")} '
+                 f'initial_heading={self.initial_heading} '
                  f'yaw_mode={self.yaw_mode} translation_scale={self.translation_scale:.2f} '
                  f'vio_state={self.vio_state} '
                  f'hold_auto_recover={self.hold_auto_recover} '
@@ -222,11 +226,19 @@ class FlightBridge(Node):
         resets = (msg.xy_reset_counter, msg.z_reset_counter, msg.heading_reset_counter)
         reset_changed = (self.last_reset is not None and resets != self.last_reset and
                          self.state in ('TAKEOFF', 'CRUISE', 'HOLD'))
+        if (self.initial_heading is not None and self.last_reset is not None and
+                resets[2] != self.last_reset[2] and math.isfinite(msg.delta_heading)):
+            # A PX4 estimator reset changes its local yaw basis, not the intended
+            # physical heading. Express the same reference in the new basis.
+            heading = self.initial_heading + msg.delta_heading
+            self.initial_heading = math.atan2(math.sin(heading), math.cos(heading))
         self.last_reset = resets
         self.position = msg
         # PX4 publishes its boot-relative uORB timestamp. Freshness must use
         # ROS callback arrival time in both SITL and hardware deployments.
         self.pose_at = self.now()
+        if self.initial_heading is None and self.pose_valid():
+            self.initial_heading = float(msg.heading)
         if reset_changed:
             self.hold_target = (msg.x, msg.y, msg.z)
             if self.state == 'HOLD':
@@ -363,8 +375,13 @@ class FlightBridge(Node):
 
     def send_position(self, target):
         self.velocity_active = False
-        self.px4_adapter.position(target,
-                                  self.position.heading if self.pose_valid() else math.nan)
+        if not self.p('yaw_control'):
+            if self.initial_heading is None:
+                return
+            heading = self.initial_heading
+        else:
+            heading = self.position.heading if self.pose_valid() else math.nan
+        self.px4_adapter.position(target, heading)
 
     def send_ego_command(self, degraded=False):
         if (not self.reset_map_ready() or not self.map_valid() or
@@ -372,13 +389,20 @@ class FlightBridge(Node):
                 self.cmd is None or self.ego_odom is None or
                 not 0 <= self.now() - self.ego_odom_at <= float(self.p('pose_timeout'))):
             return False
+        fixed_heading = not self.p('yaw_control')
+        if fixed_heading and self.initial_heading is None:
+            return False
         speed_scale = float(self.p('degraded_speed_scale')) if degraded else 1.0
         tracking = self.trajectory_controller.track(self.cmd, self.ego_odom, speed_scale)
         self.arrival_hold = tracking.arrival_hold
-        decision = self.yaw_manager.decide(
-            tracking.world_velocity, tracking.acceleration,
-            self.ego_odom.pose.pose.orientation, degraded,
-            tracking.arrival_hold)
+        if fixed_heading:
+            decision = YawDecision(0. if tracking.arrival_hold else 1., 0.,
+                                   'INITIAL_YAW_HOLD', 0.)
+        else:
+            decision = self.yaw_manager.decide(
+                tracking.world_velocity, tracking.acceleration,
+                self.ego_odom.pose.pose.orientation, degraded,
+                tracking.arrival_hold)
         bx, by, bz = world_to_body(tracking.world_velocity,
                                    self.ego_odom.pose.pose.orientation)
         bx *= decision.translation_scale
@@ -389,10 +413,11 @@ class FlightBridge(Node):
         self.command_clamped = (tracking.arrival_hold or
                                 decision.translation_scale < .999 or
                                 tracking.speed_limited)
+        yaw_reference = {'yaw_ned': self.initial_heading} if fixed_heading else {}
         self.px4_adapter.velocity_body(
             (bx, by, bz), decision.yaw_rate_flu,
             self.position.heading, tracking.trajectory_id,
-            .4 if degraded else 1.)
+            .4 if degraded else 1., **yaw_reference)
         return True
 
     def enter_hold(self, reason, auto_recover=False):

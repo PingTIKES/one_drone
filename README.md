@@ -85,6 +85,7 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | --- | --- |
 | `startup.sim` | `true` 使用仿真配置；`false` 使用真机配置 |
 | `startup.rviz` | 是否打开 RViz |
+| `startup.yaw_control` | `true` 使用现有平移/yaw 解耦策略；`false` 固定首次有效 PX4 航向，不随路径转向 |
 | `startup.flight_control` | `false` 只测试感知、定位和规划；`true` 启动飞控控制节点及起飞/降落服务 |
 | `hardware.localization_source` | `openvins` 使用相机定位；`microvio` 读取飞控 USB 融合定位 |
 | `hardware.perception_enabled` | `false` 关闭深度处理，仍启动 EGO、目标管理和决策；有相机时设 `true` 更新障碍物 |
@@ -94,6 +95,9 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | `hardware.depth_source`、`depth_topic`、`depth_info_topic` | 深度来源及匹配的 CameraInfo |
 
 启动模式以 `launch.yaml` 的实际值为准。仿真飞行将 `startup.sim` 和 `startup.flight_control` 都设为 `true`；真机定位台架检查使用 `sim: false`、`flight_control: false`。
+
+`yaw_control: false` 会在首次收到有效 PX4 本地位置时锁定机头方向，位置保持、起飞和轨迹跟踪都使用该固定 yaw；平移仍独立执行，不再按路径朝向或前视角度缩放水平速度，因此允许侧向和后向移动。定位暂时恢复或 HOLD 不重新锁定；PX4 航向参考重置时修正固定参考值，保持同一物理方向。`true` 保持原有解耦 yaw 策略。修改后重启控制节点生效，此参数不改变 map→odom 或 RViz TF。
+
 
 ### 参数文件位置
 

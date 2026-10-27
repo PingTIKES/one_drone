@@ -86,15 +86,15 @@ class Px4Adapter:
             heading if math.isfinite(heading) else math.nan, math.nan))
 
     def velocity_body(self, body_velocity, yaw_rate_flu, heading_ned,
-                      trajectory_id, confidence):
+                      trajectory_id, confidence, yaw_ned=math.nan):
         north, east = body_flu_to_ned(body_velocity[0], body_velocity[1],
                                       heading_ned)
         self.velocity_ned((north, east, -body_velocity[2]),
-                          -yaw_rate_flu, trajectory_id, confidence)
+                          -yaw_rate_flu, trajectory_id, confidence, yaw_ned)
 
     def velocity_ned(self, velocity, yaw_rate_ned=math.nan,
-                     trajectory_id=0, confidence=0.):
+                     trajectory_id=0, confidence=0., yaw_ned=math.nan):
         self.apply(self._setpoint(
             FlightSetpoint.MODE_VELOCITY,
             (math.nan, math.nan, math.nan), velocity,
-            math.nan, yaw_rate_ned, trajectory_id, confidence))
+            yaw_ned, yaw_rate_ned, trajectory_id, confidence))

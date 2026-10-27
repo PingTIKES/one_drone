@@ -64,7 +64,7 @@ def configure_arguments(context, values):
     sim = LaunchConfiguration('sim').perform(context) == 'true'
     profile = values['simulation' if sim else 'hardware']
     defaults = {**values['startup'], **profile}
-    names = ('localization_source', 'perception_enabled', 'flight_control', 'depth_source', 'calibration_dir', 'target_system', 'px4_ns',
+    names = ('localization_source', 'perception_enabled', 'flight_control', 'yaw_control', 'depth_source', 'calibration_dir', 'target_system', 'px4_ns',
              'map_file', 'cam0_topic', 'cam1_topic', 'imu_topic', 'depth_topic',
              'depth_info_topic', 'depth_scale')
     return [
@@ -332,7 +332,8 @@ def setup(context):
         name='flight_bridge', output='screen',
         condition=IfCondition(arg('flight_control').lower()),
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
-                    {'target_system': target_system, 'px4_ns': px4_ns}])
+                    {'target_system': target_system, 'px4_ns': px4_ns,
+                     'yaw_control': arg('yaw_control').lower() == 'true'}])
     rviz_tf_filter = Node(
         package='rviz_tf_shift', executable='tf_display_filter.py',
         name='rviz_tf_filter', output='screen',

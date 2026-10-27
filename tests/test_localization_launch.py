@@ -21,11 +21,11 @@ def startup():
     return module
 
 
-def launch_nodes(startup, sim, source, perception):
+def launch_nodes(startup, sim, source, perception, flight_control=False, yaw_control=True):
     values = yaml.safe_load((Path(get_package_share_directory('bringup')) /
                             'params/launch.yaml').read_text())
     params = {**values['startup'], **values['simulation' if sim else 'hardware']}
-    params.update(sim=sim, rviz=False, flight_control=False,
+    params.update(sim=sim, rviz=False, flight_control=flight_control, yaw_control=yaw_control,
                   localization_source=source, perception_enabled=perception)
     if not perception and source == 'microvio':
         # A camera-free check must not read or require any camera calibration.
@@ -74,3 +74,13 @@ def test_camera_navigation_keeps_planning_and_selects_one_estimator(startup, sim
     assert ('run_subscribe_msckf' in nodes) == (source == 'openvins')
     assert ('vio_to_px4.py' in nodes) == (source == 'openvins')
     assert ('microvio' in nodes) == (source == 'microvio')
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_launch_passes_yaw_control_to_flight_bridge(startup, enabled):
+    context, nodes = launch_nodes(startup, False, 'microvio', False,
+                                  flight_control=True, yaw_control=enabled)
+    merged = {}
+    for group in evaluate_parameters(context, nodes['flight_bridge']._Node__parameters):
+        merged.update(group)
+    assert merged['yaw_control'] is enabled

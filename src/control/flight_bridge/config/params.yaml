@@ -3,6 +3,7 @@ flight_bridge:
   ros__parameters:
     px4_ns: px4_1 # PX4 DDS 命名空间；启动时由 px4_ns 参数确定
     target_system: 2 # 飞控 MAVLink 系统编号；启动参数优先，真机必须显式指定
+    yaw_control: true # 总启动由 bringup/params/launch.yaml 覆盖；false 锁定初始机头方向，true 沿用解耦 yaw
     takeoff_altitude: 2.0 # 相对起飞高度（m）
     max_horizontal_speed: 0.5 # 最大水平速度（m/s）；须与 EGO 三处速度上限一起调整
     max_vertical_speed: 0.3 # 最大升降速度（m/s）

@@ -7,7 +7,6 @@
 #include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
-#include <random>
 #include <nav_msgs/msg/odometry.hpp>
 #include <queue>
 #include <rclcpp/rclcpp.hpp>
@@ -68,7 +67,7 @@ struct MappingParameters
   /* time out */
 
   /* depth image projection filtering */
-  double depth_filter_maxdist_, depth_filter_mindist_, depth_filter_tolerance_;
+  double depth_filter_maxdist_, depth_filter_mindist_;
   int depth_filter_margin_;
   bool use_depth_filter_;
   double k_depth_scaling_factor_;
@@ -84,8 +83,7 @@ struct MappingParameters
   int local_map_margin_;
 
   /* visualization and computation time display */
-  double visualization_truncate_height_, virtual_ceil_height_, ground_height_, virtual_ceil_yp_, virtual_ceil_yn_;
-  bool show_occ_time_;
+  double visualization_truncate_height_, virtual_ceil_height_, ground_height_;
 
   /* active mapping */
   double unknown_flag_;
@@ -102,14 +100,13 @@ struct MappingData
 
   // camera position and pose data
 
-  Eigen::Vector3d camera_pos_, last_camera_pos_;
-  Eigen::Matrix3d camera_r_m_, last_camera_r_m_;
+  Eigen::Vector3d camera_pos_;
+  Eigen::Matrix3d camera_r_m_;
   Eigen::Matrix4d cam2body_;
 
   // depth image data
 
-  cv::Mat depth_image_, last_depth_image_;
-  int image_cnt_;
+  cv::Mat depth_image_;
 
   // flags of map state
 
@@ -133,11 +130,6 @@ struct MappingData
   // range of updating grid
 
   Eigen::Vector3i local_bound_min_, local_bound_max_;
-
-  // computation time
-
-  double fuse_time_, max_fuse_time_;
-  int update_num_;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
@@ -213,12 +205,12 @@ private:
   MappingData md_;
 
   // get depth image and camera pose
-  void depthPoseCallback(const sensor_msgs::msg::Image::ConstPtr &img,
-                         const geometry_msgs::msg::PoseStamped::ConstPtr &pose);
-  void extrinsicCallback(const nav_msgs::msg::Odometry::ConstPtr &odom);
-  void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstPtr &info);
-  void depthOdomCallback(const sensor_msgs::msg::Image::ConstPtr &img, const nav_msgs::msg::Odometry::ConstPtr &odom);
-  void cloudCallback(const sensor_msgs::msg::PointCloud2::ConstPtr &img);
+  void depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &img,
+                         const geometry_msgs::msg::PoseStamped::ConstSharedPtr &pose);
+  void extrinsicCallback(const nav_msgs::msg::Odometry::ConstSharedPtr &odom);
+  void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr &info);
+  void depthOdomCallback(const sensor_msgs::msg::Image::ConstSharedPtr &img, const nav_msgs::msg::Odometry::ConstSharedPtr &odom);
+  void cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &img);
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom);
 
   // update occupancy by raycasting
@@ -264,9 +256,6 @@ private:
   rclcpp::TimerBase::SharedPtr vis_timer_;
 
   //
-  uniform_real_distribution<double> rand_noise_;
-  normal_distribution<double> rand_noise2_;
-  default_random_engine eng_;
 };
 
 /* ============================== definition of inline function

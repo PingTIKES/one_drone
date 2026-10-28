@@ -18,13 +18,13 @@ class DepthFilters:
         self.min_neighbors = int(hole_min_neighbors)
         self.previous = None
 
-    def apply(self, depth):
+    def apply(self, depth, fill_holes=False):
         depth = np.asarray(depth, dtype=np.float32)
         if depth.ndim != 2:
             raise ValueError('depth image must be two-dimensional')
         valid = np.isfinite(depth) & (depth > 0)
         values = np.where(valid, depth, 0.0)
-        if self.kernel > 1:
+        if fill_holes and self.kernel > 1:
             median = cv2.medianBlur(values, self.kernel)
             neighbor_count = cv2.boxFilter(
                 valid.astype(np.float32), -1, (self.kernel, self.kernel),

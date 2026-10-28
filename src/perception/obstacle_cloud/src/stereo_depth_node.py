@@ -23,7 +23,6 @@ class StereoDepthNode(Node):
         super().__init__('stereo_depth_node')
 
         # ---- 参数 ----
-        self.declare_parameter('uav_id', 1)        # frame_id = base_link
         # 深度相机内参（默认 = worlds/models/d435i/model.sdf 的 depth 传感器：
         # 640x480, hfov 1.5184 rad → fx=fy≈337.2, 主点取中心）
         self.declare_parameter('fx', 337.2)
@@ -36,14 +35,12 @@ class StereoDepthNode(Node):
         self.declare_parameter('cam_rotation', [0., 0., 1., -1., 0., 0., 0., -1., 0.])
         self.declare_parameter('depth_scale', .001)
         self.declare_parameter('require_camera_info', False)
-        self.declare_parameter('preserve_stamp', True)
         self.declare_parameter('step', 2)              # 像素抽稀步长（2→320x240）
         self.declare_parameter('frame_decimation', 3)  # 每 k 帧处理 1 帧（15→5Hz）
         self.declare_parameter('min_range', 0.3)       # 盲区/噪声截断 m
         self.declare_parameter('max_range', 8.0)       # 远界 m
         self.declare_parameter('self_mask_model', 'none')  # 仅仿真 x500 可选；真机须实测机架
 
-        uid = int(self.get_parameter('uav_id').value)
         self.frame_id = 'base_link'
         self.fx = float(self.get_parameter('fx').value)
         self.fy = float(self.get_parameter('fy').value)
@@ -55,7 +52,6 @@ class StereoDepthNode(Node):
             raise ValueError('cam_rotation must be a proper optical-to-body rotation')
         self.depth_scale = float(self.get_parameter('depth_scale').value)
         self.require_info = bool(self.get_parameter('require_camera_info').value)
-        self.preserve_stamp = bool(self.get_parameter('preserve_stamp').value)
         self.info_shape = None
         self.last_info_warning = -float('inf')
         self.step = int(self.get_parameter('step').value)
@@ -63,6 +59,12 @@ class StereoDepthNode(Node):
         self.min_r = float(self.get_parameter('min_range').value)
         self.max_r = float(self.get_parameter('max_range').value)
         self.self_mask_model = str(self.get_parameter('self_mask_model').value)
+        if (self.step < 1 or self.decim < 1 or
+                not np.all(np.isfinite([self.fx, self.fy, self.cx, self.cy, self.depth_scale,
+                                        self.min_r, self.max_r, *self.cam_xyz])) or
+                self.fx <= 0 or self.fy <= 0 or self.depth_scale <= 0 or
+                not 0 < self.min_r < self.max_r):
+            raise ValueError('invalid depth projection, range or subsampling parameters')
         if self.self_mask_model not in ('none', 'x500'):
             raise ValueError('self_mask_model must be none or x500')
 
@@ -132,7 +134,7 @@ class StereoDepthNode(Node):
         if not np.any(valid):
             now = self.get_clock().now().nanoseconds * 1e-9
             if now - self._last_empty_warning >= 5:
-                self.get_logger().warn('深度图已到达，但 0.3–8 m 内没有有效像素；检查双目纹理、视差和深度单位')
+                self.get_logger().warn(f'深度图已到达，但 {self.min_r:g}–{self.max_r:g} m 内没有有效像素；检查双目纹理、视差和深度单位')
                 self._last_empty_warning = now
             return
         z = z[valid]
@@ -153,7 +155,7 @@ class StereoDepthNode(Node):
             return
         # 深度图、地图与 TF 使用同一 ROS 时钟。
         hdr = Header()
-        hdr.stamp = msg.header.stamp if self.preserve_stamp else self.get_clock().now().to_msg()
+        hdr.stamp = msg.header.stamp
         hdr.frame_id = self.frame_id
         out = point_cloud2.create_cloud_xyz32(hdr, cloud)
         self.pub.publish(out)

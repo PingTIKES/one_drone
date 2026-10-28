@@ -6,7 +6,6 @@ openvins:
     publish_calibration_tf: false # OpenVINS 标定 TF 开关；启动入口固定关闭以避免重复 TF
 vio_bridge:
   ros__parameters:
-    uav_id: null # 预留无人机编号；当前单机坐标框架固定，不用于多机隔离
     target_system: 1 # MAVROS 目标系统编号；总启动按实机/仿真配置覆盖
     t_body_imu: null # body←IMU 的 4×4 外参；由启动入口根据标定生成
     initial_yaw_zero: true # 初次接受定位后固定 ROS odom 的 X 为初始机头方向；只归零 yaw，保留倾斜，不改原始 PX4 视觉输入
@@ -37,7 +36,6 @@ vio_bridge:
     quality_angular_rate_warn: 0.6 # 里程计角速度模长软降级阈值（rad/s）
     expected_world: global # 接受的 OpenVINS 世界坐标 frame_id
     expected_imu: imu # 接受的 OpenVINS IMU child_frame_id
-    match_tol: 0.1 # 保留兼容参数；当前节点未使用，修改不生效
     feature_downsample: 2 # 质量统计图像缩小步长（正整数）；改变后应重调角点阈值
     feature_max_corners: 200 # 质量统计最多检测的角点数；不是 OpenVINS 的 num_pts
     feature_quality_level: 0.01 # 角点相对质量阈值（0～1）；降低可检测更多弱角点

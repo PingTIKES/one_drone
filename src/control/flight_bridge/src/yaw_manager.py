@@ -27,14 +27,13 @@ def world_to_body(vector, orientation):
 
 class YawManager:
     def __init__(self, soft_deg, hard_deg, reverse_deg, min_speed_scale,
-                 max_yaw_rate, degraded_max_yaw_rate, rate_gain,
+                 max_yaw_rate, rate_gain,
                  camera_hfov_deg, lookahead_time, outside_fov_speed_scale):
         self.hold_angle = math.radians(soft_deg)
         self.hard_angle = math.radians(hard_deg)
         self.reverse_angle = math.radians(reverse_deg)
         self.min_speed_scale = min_speed_scale
         self.max_yaw_rate = max_yaw_rate
-        self.degraded_max_yaw_rate = degraded_max_yaw_rate
         self.rate_gain = rate_gain
         self.half_fov = math.radians(camera_hfov_deg) / 2
         self.lookahead_time = lookahead_time
@@ -42,12 +41,10 @@ class YawManager:
         yaw_policy(0., self.hold_angle, self.hard_angle, self.reverse_angle,
                    self.min_speed_scale, self.max_yaw_rate, self.rate_gain)
         if not (0 < camera_hfov_deg < 180 and lookahead_time >= 0 and
-                0 <= outside_fov_speed_scale <= 1 and
-                0 < degraded_max_yaw_rate <= max_yaw_rate):
+                0 <= outside_fov_speed_scale <= 1):
             raise ValueError('invalid camera FOV or yaw policy parameters')
 
-    def decide(self, world_velocity, acceleration, orientation, degraded=False,
-               arrival_hold=False):
+    def decide(self, world_velocity, acceleration, orientation, arrival_hold=False):
         if arrival_hold:
             return YawDecision(0., 0., 'ARRIVAL_HOLD', 0.)
         bx, by, _ = world_to_body(world_velocity, orientation)
@@ -63,7 +60,7 @@ class YawManager:
         scale, rate, mode = yaw_policy(
             angle, self.hold_angle, self.hard_angle, self.reverse_angle,
             self.min_speed_scale,
-            self.degraded_max_yaw_rate if degraded else self.max_yaw_rate,
+            self.max_yaw_rate,
             self.rate_gain)
         if abs(angle) > self.half_fov and scale > self.outside_fov_speed_scale:
             scale, mode = self.outside_fov_speed_scale, 'YAW_FOV_LIMIT'

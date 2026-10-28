@@ -2,7 +2,6 @@
 import json
 import time
 
-import pytest
 import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry

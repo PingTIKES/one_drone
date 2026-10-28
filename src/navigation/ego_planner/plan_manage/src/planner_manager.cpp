@@ -20,7 +20,6 @@ namespace ego_planner
     node->declare_parameter("manager/control_points_distance", -1.0);
     node->declare_parameter("manager/planning_horizon", 5.0);
     node->declare_parameter("manager/use_distinctive_trajs", false);
-    node->declare_parameter("manager/drone_id", -1);
 
     node->get_parameter("manager/max_vel", pp_.max_vel_);
     node->get_parameter("manager/max_acc", pp_.max_acc_);
@@ -29,7 +28,6 @@ namespace ego_planner
     node->get_parameter("manager/control_points_distance", pp_.ctrl_pt_dist);
     node->get_parameter("manager/planning_horizon", pp_.planning_horizen_);
     node->get_parameter("manager/use_distinctive_trajs", pp_.use_distinctive_trajs);
-    node->get_parameter("manager/drone_id", pp_.drone_id);
 
     local_data_.traj_id_ = 0;
     grid_map_.reset(new GridMap);
@@ -39,7 +37,7 @@ namespace ego_planner
     bspline_optimizer_.reset(new BsplineOptimizer);
     // bspline_optimizer_->setParam(nh);
     bspline_optimizer_->setParam(node);
-    bspline_optimizer_->setEnvironment(grid_map_, obj_predictor_);
+    bspline_optimizer_->setEnvironment(grid_map_);
     bspline_optimizer_->a_star_.reset(new AStar);
     bspline_optimizer_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(100, 100, 100));
 
@@ -51,7 +49,7 @@ namespace ego_planner
                                         Eigen::Vector3d local_target_vel, bool flag_polyInit, bool flag_randomPolyTraj)
   {
     static int count = 0;
-    printf("\033[47;30m\n[drone %d replan %d]==============================================\033[0m\n", pp_.drone_id, count++);
+    RCLCPP_DEBUG(node_->get_logger(), "Replan %d", count++);
 
     if ((start_pt - local_target_pt).norm() < 0.2)
     {
@@ -294,8 +292,6 @@ namespace ego_planner
     pos.setPhysicalLimits(pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
 
     /*** STEP 3: REFINE(RE-ALLOCATE TIME) IF NECESSARY ***/
-    // Note: Only adjust time in single drone mode. But we still allow drone_0 to adjust its time profile.
-    if (pp_.drone_id <= 0)
     {
 
       double ratio;
@@ -315,15 +311,6 @@ namespace ego_planner
         printf("\033[34mThis refined trajectory hits obstacles. It doesn't matter if appeares occasionally. But if continously appearing, Increase parameter \"lambda_fitness\".\n\033[0m");
         continous_failures_count_++;
         return false;
-      }
-    }
-    else
-    {
-      static bool print_once = true;
-      if (print_once)
-      {
-        print_once = false;
-        RCLCPP_ERROR(rclcpp::get_logger("ego_planner"), "IN SWARM MODE, REFINE DISABLED!");
       }
     }
 
@@ -357,106 +344,6 @@ namespace ego_planner
     }
 
     updateTrajInfo(UniformBspline(control_points, 3, 1.0), node_->now());
-
-    return true;
-  }
-
-  bool EGOPlannerManager::checkCollision(int drone_id)
-  {
-    // if (local_data_.start_time_.toSec() < 1e9) // It means my first planning has not started
-    if (local_data_.start_time_.seconds() < 1e9)
-      return false;
-
-    // double my_traj_start_time = local_data_.start_time_.toSec();
-    // double other_traj_start_time = swarm_trajs_buf_[drone_id].start_time_.toSec();
-    double my_traj_start_time = local_data_.start_time_.seconds();
-    double other_traj_start_time = swarm_trajs_buf_[drone_id].start_time_.seconds();
-
-    double t_start = max(my_traj_start_time, other_traj_start_time);
-    double t_end = min(my_traj_start_time + local_data_.duration_ * 2 / 3, other_traj_start_time + swarm_trajs_buf_[drone_id].duration_);
-
-    for (double t = t_start; t < t_end; t += 0.03)
-    {
-      if ((local_data_.position_traj_.evaluateDeBoorT(t - my_traj_start_time) - swarm_trajs_buf_[drone_id].position_traj_.evaluateDeBoorT(t - other_traj_start_time)).norm() < bspline_optimizer_->getSwarmClearance())
-      {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  bool EGOPlannerManager::planGlobalTrajWaypoints(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
-                                                  const std::vector<Eigen::Vector3d> &waypoints, const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc)
-  {
-
-    // generate global reference trajectory
-
-    vector<Eigen::Vector3d> points;
-    points.push_back(start_pos);
-
-    for (size_t wp_i = 0; wp_i < waypoints.size(); wp_i++)
-    {
-      points.push_back(waypoints[wp_i]);
-    }
-
-    double total_len = 0;
-    total_len += (start_pos - waypoints[0]).norm();
-    for (size_t i = 0; i < waypoints.size() - 1; i++)
-    {
-      total_len += (waypoints[i + 1] - waypoints[i]).norm();
-    }
-
-    // insert intermediate points if too far
-    vector<Eigen::Vector3d> inter_points;
-    double dist_thresh = max(total_len / 8, 4.0);
-
-    for (size_t i = 0; i < points.size() - 1; ++i)
-    {
-      inter_points.push_back(points.at(i));
-      double dist = (points.at(i + 1) - points.at(i)).norm();
-
-      if (dist > dist_thresh)
-      {
-        int id_num = floor(dist / dist_thresh) + 1;
-
-        for (int j = 1; j < id_num; ++j)
-        {
-          Eigen::Vector3d inter_pt =
-              points.at(i) * (1.0 - double(j) / id_num) + points.at(i + 1) * double(j) / id_num;
-          inter_points.push_back(inter_pt);
-        }
-      }
-    }
-
-    inter_points.push_back(points.back());
-
-    int pt_num = inter_points.size();
-    Eigen::MatrixXd pos(3, pt_num);
-    for (int i = 0; i < pt_num; ++i)
-      pos.col(i) = inter_points[i];
-
-    Eigen::Vector3d zero(0, 0, 0);
-    Eigen::VectorXd time(pt_num - 1);
-    for (int i = 0; i < pt_num - 1; ++i)
-    {
-      time(i) = (pos.col(i + 1) - pos.col(i)).norm() / (pp_.max_vel_);
-    }
-
-    time(0) *= 2.0;
-    time(time.rows() - 1) *= 2.0;
-
-    PolynomialTraj gl_traj;
-    if (pos.cols() >= 3)
-      gl_traj = PolynomialTraj::minSnapTraj(pos, start_vel, end_vel, start_acc, end_acc, time);
-    else if (pos.cols() == 2)
-      gl_traj = PolynomialTraj::one_segment_traj_gen(start_pos, start_vel, start_acc, pos.col(1), end_vel, end_acc, time(0));
-    else
-      return false;
-
-    auto time_now = node_->now();
-
-    global_data_.setGlobalTraj(gl_traj, time_now);
 
     return true;
   }

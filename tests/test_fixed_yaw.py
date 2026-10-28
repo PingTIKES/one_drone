@@ -25,14 +25,12 @@ def bridge():
     rclpy.shutdown()
 
 
-def pose(n, heading, reset=0, delta=0., valid=True):
-    m = VehicleLocalPosition(xy_valid=valid, z_valid=valid, heading=heading,
-                             heading_reset_counter=reset, delta_heading=delta)
+def pose(n, heading, valid=True):
+    m = VehicleLocalPosition(x=0. if valid else math.nan, heading=heading)
     n.on_position(m)
 
 
 def ready_trajectory(n, arrival=False):
-    n.map_valid = lambda: True
     n.cmd = PositionCommand()
     n.cmd.header.frame_id = 'odom'
     n.cmd.header.stamp.sec = 100
@@ -44,7 +42,7 @@ def ready_trajectory(n, arrival=False):
     n.ego_odom.pose.pose.orientation.w = 1.
     n.trajectory_controller.track = Mock(return_value=SimpleNamespace(
         world_velocity=(-.3, .2, .1), acceleration=(0., 0., 0.),
-        arrival_hold=arrival, speed_limited=False, trajectory_id=12))
+        arrival_hold=arrival, speed_limited=False))
     n.yaw_manager.decide = Mock(return_value=YawDecision(.5, .2, 'DECOUPLED', .3))
 
 
@@ -93,25 +91,16 @@ def test_enabled_mode_preserves_decoupled_policy(bridge):
     assert n.px4_adapter.position.call_args.args[1] == pytest.approx(-.2)
 
 
-def test_px4_heading_reset_updates_reference_once_without_relatching(bridge):
-    pose(bridge, .6)
-    pose(bridge, 1.7, reset=1, delta=1.1)
-    assert bridge.initial_heading == pytest.approx(1.7)
-    pose(bridge, 1.8, reset=1, delta=1.1)
-    assert bridge.initial_heading == pytest.approx(1.7)
-
-
 def test_fixed_yaw_reaches_px4_velocity_setpoint(bridge):
     from flight_bridge.mavros_adapter import MavrosAdapter
     adapter = MavrosAdapter(bridge, '/yaw_test')
     adapter.setpoint_pub = Mock()
-    adapter.audit_pub = Mock()
-    adapter.velocity_body((1., 0., .2), 0., math.pi/2, 12, 1., yaw_ned=.6)
+    adapter.velocity_body((1., 0., .2), 0., math.pi/2, yaw_ned=.6)
     msg = adapter.setpoint_pub.publish.call_args.args[0]
     assert msg.yaw == pytest.approx(math.pi/2 - .6)
     assert msg.yaw_rate == 0.
     assert (msg.velocity.x, msg.velocity.y, msg.velocity.z) == pytest.approx([1., 0., .2], abs=1e-6)
-    adapter.velocity_body((1., 0., 0.), .2, 0., 13, 1.)
+    adapter.velocity_body((1., 0., 0.), .2, 0.)
     msg = adapter.setpoint_pub.publish.call_args.args[0]
     assert msg.type_mask & msg.IGNORE_YAW
     assert msg.yaw_rate == pytest.approx(.2)

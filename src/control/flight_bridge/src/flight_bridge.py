@@ -4,13 +4,11 @@ VIO health, map and depth are diagnostics, not navigation interlocks.
 The optional takeoff service is separate from manual airborne takeover.
 """
 import math
-import time
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
-from flight_interfaces.msg import SystemStatus
 from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
 from std_msgs.msg import Bool, String, Header
@@ -24,7 +22,6 @@ from flight_bridge.trajectory_controller import TrajectoryController
 from flight_bridge.trajectory_validator import TrajectoryValidator
 from flight_bridge.yaw_manager import YawDecision, YawManager, world_to_body
 from flight_bridge.bootstrap_takeoff import BootstrapHeightController
-
 
 
 class FlightBridge(Node):
@@ -52,10 +49,8 @@ class FlightBridge(Node):
                         arrival_velocity_deadband=.10,
                         arrival_exit_scale=1.5,
                         command_timeout=.2, pose_timeout=.5,
-                        depth_heartbeat_timeout=.5, depth_grace=.8,
                         takeoff_tolerance=.2, takeoff_stable_time=1.,
                         status_timeout=1.5,
-                        planner_heartbeat_timeout=.75, map_timeout=.75,
                         camera_hfov_deg=87., yaw_lookahead_time=.3,
                         yaw_outside_fov_speed_scale=.25,
                         trajectory_max_sample_age=.5,
@@ -85,7 +80,6 @@ class FlightBridge(Node):
             float(self.p('yaw_hard_limit_deg')),
             float(self.p('yaw_reverse_limit_deg')),
             float(self.p('yaw_min_speed_scale')),
-            float(self.p('max_yaw_rate')),
             float(self.p('max_yaw_rate')),
             float(self.p('yaw_rate_gain')),
             float(self.p('camera_hfov_deg')),
@@ -120,20 +114,14 @@ class FlightBridge(Node):
         self.position = None
         self.initial_heading = None
         self.status = None
-        self.pose_at = self.status_at = self.vio_at = self.cmd_at = self.obstacle_at = -math.inf
-        self.last_obstacle_good = -math.inf
-        self.obstacle_ok = False
-        self.vio_state = 'INVALID'
+        self.pose_at = self.status_at = self.cmd_at = -math.inf
         self.cmd = None
         self.ego_odom = None
         self.ego_odom_at = -math.inf
         self.takeoff_target = self.hold_target = None
         self.takeoff_reached_since = None
         self.prestream_count = 0
-        self.last_reset = None
         self.planner_instance = None
-        self.map_stamp = -math.inf
-        self.planner_at = -math.inf
         self.create_subscription(Header, '/ego/map_heartbeat', self.on_map_heartbeat, 1)
         self.reset_command_cutoff = -math.inf
         self.reset_sensor_stamp = -math.inf
@@ -143,7 +131,6 @@ class FlightBridge(Node):
         self.velocity_active = False
         self.command_clamped = False
         self.yaw_mode = 'YAW_HOLD'
-        self.arrival_hold = False
         self.translation_scale = 1.0
         self.trajectory_status = 'WAITING_FOR_TRAJECTORY'
         self.hold_reason = ''
@@ -151,13 +138,14 @@ class FlightBridge(Node):
         self.landing_mode_seen = False
         mavros = '/' + str(self.p('mavros_ns')).strip('/')
         qos = qos_profile_sensor_data
-        self.px4_adapter = MavrosAdapter(self, mavros)
+        self.px4_adapter = MavrosAdapter(
+            self, mavros, request_feedback=(self.p('bootstrap_takeoff') and
+                                           self.p('localization_source') != 'microvio'))
         self.state_pub = self.create_publisher(String, 'flight_state', 10)
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.hold_reason_pub = self.create_publisher(String, 'flight_hold_reason', latched)
         self.safety_pub = self.create_publisher(String, 'flight_safety_status', latched)
-        self.system_pub = self.create_publisher(SystemStatus, 'system_status', latched)
         self.ready_pub = self.create_publisher(Bool, '/flight_navigation_ready', latched)
         self.ready_pub.publish(Bool(data=False))
         self.hold_reason_pub.publish(String(data=''))
@@ -172,10 +160,7 @@ class FlightBridge(Node):
         self.create_subscription(Bool, '/microvio/navigation_ready', self.on_localization_ready, 10)
         self.create_subscription(PositionCommand, '/ego/position_cmd', self.on_position_command, 20)
         self.create_subscription(Odometry, '/ego/odom', self.on_ego_odom, 20)
-        self.create_subscription(String, 'vio_health', self.on_vio, 10)
-        self.create_subscription(Bool, '/ego/depth_fresh', self.on_obstacle, 10)
         self.create_service(Trigger, 'takeoff', self.takeoff)
-        self.create_service(Trigger, 'resume_navigation', self.resume)
         self.create_service(Trigger, 'land', self.land)
         self.create_timer(.05, self.tick)
         self.create_timer(1., self.publish_safety_status)
@@ -185,7 +170,7 @@ class FlightBridge(Node):
 
     def pose_valid(self):
         p = self.position
-        return (p is not None and p.xy_valid and p.z_valid and
+        return (p is not None and
                 all(math.isfinite(v) for v in (p.x, p.y, p.z, p.heading)) and
                 0 <= self.now() - self.pose_at <= float(self.p('pose_timeout')))
 
@@ -197,43 +182,17 @@ class FlightBridge(Node):
         return (self.position is not None and math.isfinite(self.position.heading) and
                 0 <= self.now() - self.pose_at <= float(self.p('pose_timeout')))
 
-    def depth_valid(self):
-        # Software stereo can occasionally skip a frame. Require a recent
-        # positive depth heartbeat, with a bounded grace period for one skip.
-        return (0 <= self.now() - self.obstacle_at <= float(self.p('depth_heartbeat_timeout')) and
-                0 <= self.now() - self.last_obstacle_good <= float(self.p('depth_grace')))
-
     def publish_safety_status(self):
-        now = self.now()
-        vio_age = now - self.vio_at if math.isfinite(self.vio_at) else math.inf
-        depth_age = now - self.last_obstacle_good if math.isfinite(self.last_obstacle_good) else math.inf
         self.safety_pub.publish(String(
-            data=f'ego_tracking=true '
+            data=f'state={self.state} offboard={self.offboard_active()} '
+                 f'navigation_ready={self.navigation_ready} '
                  f'max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
                  f'command_clamped={self.command_clamped} '
                  f'yaw_control={self.p("yaw_control")} '
                  f'initial_heading={self.initial_heading} '
                  f'yaw_mode={self.yaw_mode} translation_scale={self.translation_scale:.2f} '
-                 f'vio_state={self.vio_state} '
-                 f'offboard={self.offboard_active()} vio_age={vio_age:.3f}s '
-                 f'depth_valid={self.depth_valid()} depth_age={depth_age:.3f}s '
                  f'trajectory_status={self.trajectory_status} '
                  f'mavros_command={self.px4_adapter.last_command_status}'))
-
-    def publish_system_status(self):
-        msg = SystemStatus()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.flight_state = self.state
-        msg.vio_state = self.vio_state
-        msg.hold_reason = self.hold_reason
-        msg.px4_position_valid = self.pose_valid()
-        msg.px4_offboard = self.offboard_active()
-        msg.depth_valid = self.depth_valid()
-        msg.map_valid = self.map_valid()
-        msg.trajectory_valid = (self.cmd is not None and
-                                0 <= self.now() - self.cmd_at <= float(self.p('command_timeout')) and
-                                self.trajectory_status == 'OK')
-        self.system_pub.publish(msg)
 
     def on_mavros_pose(self, msg):
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
@@ -330,26 +289,10 @@ class FlightBridge(Node):
                 sum(v*v for v in (q.w, q.x, q.y, q.z)) > 1e-12)
 
     def on_position(self, msg):
-        resets = (msg.xy_reset_counter, msg.z_reset_counter, msg.heading_reset_counter)
-        reset_changed = (self.last_reset is not None and resets != self.last_reset and
-                         self.state in ('TAKEOFF', 'CRUISE', 'HOLD'))
-        if (self.initial_heading is not None and self.last_reset is not None and
-                resets[2] != self.last_reset[2] and math.isfinite(msg.delta_heading)):
-            # A PX4 estimator reset changes its local yaw basis, not the intended
-            # physical heading. Express the same reference in the new basis.
-            heading = self.initial_heading + msg.delta_heading
-            self.initial_heading = math.atan2(math.sin(heading), math.cos(heading))
-        self.last_reset = resets
         self.position = msg
-        # on_mavros_pose has checked the synchronized sample timestamp;
-        # track callback arrival separately to detect a stopped pose stream.
         self.pose_at = self.now()
         if self.initial_heading is None and self.pose_valid():
             self.initial_heading = float(msg.heading)
-        if reset_changed:
-            self.hold_target = (msg.x, msg.y, msg.z)
-            self.takeoff_target = None
-            self.clear_command('PX4_ESTIMATE_RESET', cutoff=True)
 
     def on_status(self, msg):
         self.status = msg
@@ -365,19 +308,11 @@ class FlightBridge(Node):
             self.abort_takeoff('LOCALIZATION_RESET_DURING_TAKEOFF')
         elif not self.takeoff_pending:
             self.takeoff_target = None
-        self.vio_state = "INVALID"
-        self.vio_at = -math.inf
         self.clear_command('VIO_RESET', cutoff=True)
-
-    def map_valid(self):
-        return (self.map_stamp > 0 and -0.02 <= self.now() - self.map_stamp <= float(self.p('map_timeout')) and
-                time.monotonic() - self.planner_at <= float(self.p('planner_heartbeat_timeout')))
 
     def on_map_heartbeat(self, msg):
         changed = self.planner_instance is not None and self.planner_instance != msg.frame_id
         self.planner_instance = msg.frame_id
-        self.map_stamp = msg.stamp.sec + msg.stamp.nanosec * 1e-9
-        self.planner_at = time.monotonic()
         if changed:
             self.clear_command('PLANNER_RESTARTED', cutoff=True)
 
@@ -407,16 +342,6 @@ class FlightBridge(Node):
             return
         self.ego_odom = msg
         self.ego_odom_at = self.now()
-
-    def on_vio(self, msg):
-        self.vio_state = msg.data
-        self.vio_at = self.now()
-
-    def on_obstacle(self, msg):
-        self.obstacle_ok = bool(msg.data)
-        self.obstacle_at = self.now()
-        if self.obstacle_ok:
-            self.last_obstacle_good = self.obstacle_at
 
     def takeoff(self, _request, response):
         missing = []
@@ -462,27 +387,17 @@ class FlightBridge(Node):
             self.state = 'PRESTREAM'
         return response
 
-    def resume(self, _request, response):
-        # Compatibility endpoint: recovery no longer requires a service call.
-        response.success = self.offboard_active()
-        response.message = ('OFFBOARD automatically follows fresh EGO commands' if response.success
-                            else 'PX4 is not in OFFBOARD')
-        return response
-
     def land(self, _request, response):
         response.success = self.state in ('TAKEOFF', 'CRUISE', 'HOLD', 'BOOTSTRAP_TAKEOFF')
         response.message = 'Land commanded' if response.success else 'Not airborne in this controller'
         if response.success:
-            self.vehicle_command(21)
+            self.px4_adapter.set_mode('AUTO.LAND')
             self.state = 'LANDING'
             self.landing_mode_seen = False
             self.takeoff_pending = False
             self.bootstrap = None
             self.navigation_ready = False
         return response
-
-    def vehicle_command(self, command, p1=0., p2=0.):
-        self.px4_adapter.command(command, p1, p2)
 
     def send_position(self, target):
         self.velocity_active = False
@@ -520,7 +435,6 @@ class FlightBridge(Node):
         if fixed_heading and self.initial_heading is None:
             return False
         tracking = self.trajectory_controller.track(self.cmd, self.ego_odom)
-        self.arrival_hold = tracking.arrival_hold
         if fixed_heading:
             decision = YawDecision(0. if tracking.arrival_hold else 1., 0.,
                                    'INITIAL_YAW_HOLD', 0.)
@@ -542,8 +456,7 @@ class FlightBridge(Node):
         yaw_reference = {'yaw_ned': self.initial_heading} if fixed_heading else {}
         self.px4_adapter.velocity_body(
             (bx, by, bz), decision.yaw_rate_flu,
-            self.position.heading, tracking.trajectory_id,
-            1., **yaw_reference)
+            self.position.heading, **yaw_reference)
         self.trajectory_status = 'OK'
         return True
 
@@ -578,12 +491,25 @@ class FlightBridge(Node):
             self.px4_adapter.velocity_ned((0., 0., 0.))
 
     def tick(self):
+        self.step()
+        self.publish_flight_state()
+
+    def step(self):
         active = self.offboard_active()
         if self.bootstrap is not None:
             self.tick_bootstrap(active)
             self.was_offboard = active
-            self.publish_flight_state()
             return
+        if self.state in ('PRESTREAM', 'ARMING'):
+            reason = ('TAKEOFF_POSITION_UNAVAILABLE' if not self.pose_valid() else
+                      'ARMING_TIMEOUT' if self.now() - self.takeoff_requested_at > float(self.p('arming_timeout')) else '')
+            if reason:
+                self.takeoff_target = self.hold_target = None
+                self.takeoff_pending = False
+                self.state = 'IDLE'
+                self.clear_command(reason, cutoff=True)
+                self.standby_setpoint()
+                return
         if (self.status is not None and self.status.connected and self.status.mode == 'OFFBOARD' and
                 not active):
             # A missing status update is not evidence of a pilot mode change.
@@ -591,7 +517,6 @@ class FlightBridge(Node):
             self.clear_command('PX4_STATUS_STALE', cutoff=True)
             self.takeoff_target = None
             self.hold_position('PX4_STATUS_STALE')
-            self.publish_flight_state()
             return
         if self.was_offboard and not active:
             # RC mode changes always release EGO control. Never automatically
@@ -624,26 +549,15 @@ class FlightBridge(Node):
                 self.send_position(self.hold_target)
                 self.prestream_count += 1
                 if self.prestream_count % 20 == 0:
-                    self.vehicle_command(21)
+                    self.px4_adapter.set_mode('AUTO.LAND')
         elif not active:
             if self.state in ('PRESTREAM', 'ARMING'):
                 # Only an explicit /takeoff request may arm or change mode.
-                if not self.pose_valid():
-                    self.takeoff_target = None
-                    self.takeoff_pending = False
-                    self.state = 'IDLE'
-                elif self.now() - self.takeoff_requested_at > float(self.p('arming_timeout')):
-                    self.takeoff_target = None
-                    self.takeoff_pending = False
-                    self.state = 'IDLE'
-                    self.clear_command('ARMING_TIMEOUT', cutoff=True)
-                else:
-                    self.send_position(self.hold_target)
-                    self.prestream_count += 1
-                    if self.prestream_count >= 20 and self.prestream_count % 20 == 0:
-                        self.vehicle_command(176, 1., 6.)
-                        self.vehicle_command(400, 1.)
-                        self.state = 'ARMING'
+                self.send_position(self.hold_target)
+                self.prestream_count += 1
+                if self.prestream_count >= 20 and self.prestream_count % 20 == 0:
+                    self.px4_adapter.set_mode('OFFBOARD')
+                    self.state = 'ARMING'
             else:
                 self.state = 'IDLE'
                 self.standby_setpoint()
@@ -654,8 +568,7 @@ class FlightBridge(Node):
                     self.standby_setpoint()
                     self.prestream_count += 1
                     if self.prestream_count % 20 == 0:
-                        self.vehicle_command(400, 1.)
-                    self.publish_flight_state()
+                        self.px4_adapter.arm()
                     return
                 self.state = 'TAKEOFF'
             if self.state == 'TAKEOFF' and self.takeoff_target is not None:
@@ -685,7 +598,6 @@ class FlightBridge(Node):
                     self.hold_reason_pub.publish(String(data=''))
             else:
                 self.hold_position(self.trajectory_status)
-        self.publish_flight_state()
 
     def publish_flight_state(self):
         self.navigation_ready = (self.offboard_active() and self.status.armed and
@@ -693,7 +605,6 @@ class FlightBridge(Node):
                                  self.navigation_odometry_ready())
         self.ready_pub.publish(Bool(data=self.navigation_ready))
         self.state_pub.publish(String(data=self.state))
-        self.publish_system_status()
 
     def abort_takeoff(self, reason):
         self.hold_reason = reason
@@ -705,7 +616,7 @@ class FlightBridge(Node):
         self.takeoff_target = self.hold_target = None
         # Continue no attitude thrust after abort. PX4 owns the landing/failsafe.
         if self.status is not None and self.status.armed:
-            self.vehicle_command(21)
+            self.px4_adapter.set_mode('AUTO.LAND')
             self.state = 'LANDING'
             self.landing_mode_seen = False
         else:
@@ -731,10 +642,10 @@ class FlightBridge(Node):
             self.prestream_count += 1
             if not active:
                 if self.prestream_count >= 25 and self.prestream_count % 20 == 5:
-                    self.vehicle_command(176, 1., 6.)
+                    self.px4_adapter.set_mode('OFFBOARD')
             elif not self.status.armed:
                 if self.prestream_count % 20 == 5:
-                    self.vehicle_command(400, 1.)
+                    self.px4_adapter.arm()
             else:
                 self.bootstrap_started = self.now()
                 self.bootstrap_last_tick = self.now()
@@ -777,7 +688,6 @@ class FlightBridge(Node):
             self.send_position(self.takeoff_target)
         else:
             self.px4_adapter.attitude(self.bootstrap_yaw, thrust)
-
 
 def main(args=None):
     rclpy.init(args=args)

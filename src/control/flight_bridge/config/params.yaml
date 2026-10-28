@@ -41,12 +41,8 @@ flight_bridge:
     command_timeout: 0.2 # 轨迹指令接收超时（s）；轨迹服务器继续发布旧轨迹时不会触发
     pose_timeout: 0.5 # 位置或里程计接收超时（s）
     status_timeout: 1.5 # PX4 状态消息接收超时（s）
-    depth_heartbeat_timeout: 1.2 # 仅诊断：深度健康消息接收超时（s），不阻止 EGO 执行
-    depth_grace: 1.5 # 仅诊断：距最近一次深度健康为 true 的容忍时间（s）
     takeoff_tolerance: 0.2 # 起飞位置允许误差（m）
     takeoff_stable_time: 1.0 # 显式调用 /takeoff 后，到高确认的持续时间（s）；手动接管不经过此流程
-    planner_heartbeat_timeout: 0.75 # 仅诊断：规划器心跳最大真实时间间隔（s）
-    map_timeout: 0.75 # 仅诊断：最近成功融合深度的源时间戳最大年龄（s）
     trajectory_max_sample_age: 0.5 # 接收 EGO 轨迹样本时允许的最大 ROS 时间戳年龄（s）
     trajectory_max_future_stamp: 0.1 # 轨迹样本相对本机 ROS 时间最多可超前的秒数
     trajectory_max_planned_speed: 8.0 # 拒绝明显异常的 EGO 水平速度（m/s），独立于飞控速度限幅

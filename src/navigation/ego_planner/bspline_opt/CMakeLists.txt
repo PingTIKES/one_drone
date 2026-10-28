@@ -51,7 +51,6 @@ ament_export_include_directories(include)
 add_library( bspline_opt
     src/uniform_bspline.cpp
     src/bspline_optimizer.cpp
-    src/gradient_descent_optimizer.cpp
     )
 
 ament_target_dependencies(bspline_opt

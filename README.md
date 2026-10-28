@@ -27,7 +27,7 @@ TF 关系为：
 map → odom → base_link → camera_optical
 ```
 
-`map→odom` 由 modify 按配置及 RViz 面板调整发布；无需人工确认门控。`odom→base_link` 由定位节点发布。OpenVINS 默认以首次有效位置和机头方向定义原点；MicoVIO 在水平定位有效后才锁定 XY 原点与机头方向，离地后初始化时保留相对地面的高度，不把空中高度归零。地面未初始化的遥测可用于观察，不能视为导航就绪。后续定位重置不偷偷重新归零；RViz 在 `map` 下显示，EGO 在 `odom` 下规划。
+`map→odom` 由 modify 按配置及 RViz 面板调整发布；无需人工确认门控。每次启动采用 `modify_map_to_odom/config/config.yaml` 的初值，面板通过 `/map_odom/set` 调整，通过 `/map_odom/current` 读取当前值，支持跨设备使用。`odom→base_link` 由定位节点发布。OpenVINS 默认以首次有效位置和机头方向定义原点；MicoVIO 在水平定位有效后才锁定 XY 原点与机头方向，离地后初始化时保留相对地面的高度，不把空中高度归零。地面未初始化的遥测可用于观察，不能视为导航就绪。后续定位重置不偷偷重新归零；RViz 在 `map` 下显示，EGO 在 `odom` 下规划。
 
 ### 目录
 
@@ -320,7 +320,7 @@ ros2 topic echo /flight_state
 
 第一条应输出 `std_srvs/srv/Trigger`；若没有服务，先检查算法终端是否启动了 `flight_bridge`。MAVROS 的 `/mavros/state` 应持续显示 `connected: true`。
 
-手动起飞后可直接用遥控器切入 OFFBOARD，不需要调用 `/takeoff` 或 `/resume_navigation`。控制节点会提前发布静止设定值及心跳，以满足 PX4 切入 OFFBOARD 的协议要求；在其他飞行模式下不会主动解锁或切换模式。进入 OFFBOARD 后，无可用 EGO 指令时锁定当前位置，有新鲜且数值有效的 EGO 指令和里程计时执行轨迹速度。退出 OFFBOARD 后释放 EGO 控制，取消尚未完成的起飞流程，不会自动切回或重新解锁。
+手动起飞后可直接用遥控器切入 OFFBOARD，不需要调用 `/takeoff`。控制节点会提前发布静止设定值及心跳，以满足 PX4 切入 OFFBOARD 的协议要求；在其他飞行模式下不会主动解锁或切换模式。进入 OFFBOARD 后，无可用 EGO 指令时锁定当前位置，有新鲜且数值有效的 EGO 指令和里程计时执行轨迹速度。退出 OFFBOARD 后释放 EGO 控制，取消尚未完成的起飞流程，不会自动切回或重新解锁。
 
 地图、深度、VIO 健康字符串均不作为 OFFBOARD 执行门控，也不等待额外恢复确认。指令或必需里程计过期时保持位置，新指令恢复后自动继续；若 PX4 位置本身不可用，只能请求零速度，不能保证水平定点。VIO 重置或规划器重启会丢弃旧指令，接收新坐标阶段的数据后继续。
 
@@ -420,7 +420,7 @@ ros2 topic echo --once /flight_hold_reason --qos-durability transient_local
 
 - **打点后无路径**：检查 TF、`/ego/odom`、目标高度与地图范围；无需先起飞、启用深度或进入 `CRUISE`，但必须具备有效里程计、TF 和运行中的规划器。
 - **TF 停止更新或定位漂移**：查看 `/vio_diagnostics`，检查双目和 IMU 的帧率、源时间戳、标定及安装外参。不要把停留的 TF 当作当前真实位置。
-- **进入 HOLD**：OFFBOARD 中没有可用 EGO 指令时保持位置；检查轨迹与里程计是否更新，恢复后自动继续，无需 `/resume_navigation`。VIO 坐标重置会清除地图、轨迹和旧目标，需要重新打点。
+- **进入 HOLD**：OFFBOARD 中没有可用 EGO 指令时保持位置；检查轨迹与里程计是否更新，恢复后自动继续。VIO 坐标重置会清除地图、轨迹和旧目标，需要重新打点。
 - **难以复现的定位或飞控异常**：同步保存左右目、IMU、`/uav1/odomimu`、`/vio_diagnostics`、PX4 状态和本地位置的 rosbag，以及飞控 ULog，用于区分传感器、定位与控制问题。
 
 本项目使用前视感知，未知区域允许通行；没有独立定位备份，VIO 完全失效时无法保证继续自主定位。真机精度与可用速度需要通过实际测试确认。

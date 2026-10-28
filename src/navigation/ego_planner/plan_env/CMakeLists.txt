@@ -56,7 +56,6 @@ ament_export_include_directories(include)
 add_library( plan_env SHARED
     src/grid_map.cpp
     src/raycast.cpp
-    src/obj_predictor.cpp
     )
 
 ament_target_dependencies(plan_env std_msgs visualization_msgs geometry_msgs nav_msgs sensor_msgs rclcpp Eigen3 PCL cv_bridge message_filters pcl_conversions)

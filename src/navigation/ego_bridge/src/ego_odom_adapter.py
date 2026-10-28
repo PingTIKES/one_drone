@@ -1,5 +1,6 @@
-"""Adapt body-frame OpenVINS twist to EGO-Planner world-frame odometry."""
+"""Adapt body-frame localization twist to EGO-Planner world-frame odometry."""
 import math
+from copy import deepcopy
 
 import rclpy
 from rclpy.node import Node
@@ -61,22 +62,21 @@ class EgoOdomAdapter(Node):
             return
         q = msg.pose.pose.orientation
         norm = math.sqrt(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z)
-        if norm < 1e-6:
+        p, v = msg.pose.pose.position, msg.twist.twist.linear
+        if (not math.isfinite(norm) or norm < 1e-6 or
+                not all(math.isfinite(value) for value in (p.x, p.y, p.z, v.x, v.y, v.z))):
             return
         w, x, y, z = q.w/norm, q.x/norm, q.y/norm, q.z/norm
         r00, r01, r02 = 1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)
         r10, r11, r12 = 2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)
         r20, r21, r22 = 2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)
-        # Snapshot before assigning the output fields. ROS Python message
-        # assignment can retain the same nested object; mutating out.x first
-        # must not change the input used to calculate out.y and out.z.
         v = msg.twist.twist.linear
         vx, vy, vz = v.x, v.y, v.z
         out = Odometry()
         out.header = msg.header
         out.child_frame_id = msg.child_frame_id
         out.pose = msg.pose
-        out.twist = msg.twist
+        out.twist = deepcopy(msg.twist)
         out.twist.twist.linear.x = r00*vx + r01*vy + r02*vz
         out.twist.twist.linear.y = r10*vx + r11*vy + r12*vz
         out.twist.twist.linear.z = r20*vx + r21*vy + r22*vz

@@ -28,7 +28,7 @@ from vio_bridge.vio_quality import normalized_covariance, quality_state
 class VioBridge(Node):
     def __init__(self):
         super().__init__('vio_to_px4')
-        for k,v in dict(uav_id=1,target_system=1,max_age=.5,invalid_age=2.,future_tolerance=.02,max_position_variance=1.,
+        for k,v in dict(target_system=1,max_age=.5,invalid_age=2.,future_tolerance=.02,max_position_variance=1.,
                         max_orientation_variance=.25,max_velocity_variance=1.,
                         max_speed=4.,max_jump=.4,max_continuous_gap=2.,
                         expected_world='global',expected_imu='imu',initial_yaw_zero=True,initial_position_zero=True,
@@ -56,7 +56,6 @@ class VioBridge(Node):
             raise ValueError('VIO future_tolerance must be finite and within [0, max_age)')
         if self.p('max_continuous_gap') <= self.p('max_age'):
             raise ValueError('max_continuous_gap must be greater than max_age')
-        uid = int(self.p('uav_id'))
         self.odom_frame, self.body_frame = 'odom', 'base_link'
         self.initial_yaw_alignment = InitialYawAlignment(
             zero_position=bool(self.p('initial_position_zero')),
@@ -94,10 +93,6 @@ class VioBridge(Node):
         for i in range(2):
             self.create_subscription(Image,f'cam{i}/image_raw',lambda msg,index=i:self.image(msg,index),qos_profile_sensor_data)
         self.create_subscription(Imu, 'imu0', self.imu, qos_profile_sensor_data)
-        self.estimator_epoch = None
-        self.create_subscription(Header, '/estimator_reset', self.estimator_reset,
-            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
-                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_service(Trigger,'reset_vio_bridge',self.reset)
         self.create_timer(.1,self.watchdog)
         self.notify_reset('BRIDGE_START')
@@ -196,12 +191,6 @@ class VioBridge(Node):
         for i, variance in enumerate(vv):
             odom.twist.covariance[i * 6 + i] = float(variance)
         self.odom_pub.publish(odom)
-
-    def estimator_reset(self, msg):
-        if msg.frame_id == self.estimator_epoch:
-            return
-        self.estimator_epoch = msg.frame_id
-        self.reset(None, Trigger.Response(), reason='ESTIMATOR_RESET:' + msg.frame_id)
 
     def reset(self,request,response,reason='MANUAL_RESET'):
         self.last_stamp = self.last_position = None

@@ -50,7 +50,7 @@ class CoreGeometryTest(unittest.TestCase):
                                temporal_max_delta=2., hole_min_neighbors=5)
         first = np.ones((3, 3), np.float32)
         first[1, 1] = np.nan
-        self.assertAlmostEqual(float(filters.apply(first)[1, 1]), 1.)
+        self.assertAlmostEqual(float(filters.apply(first, fill_holes=True)[1, 1]), 1.)
         second = np.full((3, 3), 2., np.float32)
         self.assertTrue(np.allclose(filters.apply(second), 1.5))
 

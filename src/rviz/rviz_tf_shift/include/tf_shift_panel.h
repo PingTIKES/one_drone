@@ -1,15 +1,11 @@
 #ifndef TF_SHIFT_PANEL_HPP
 #define TF_SHIFT_PANEL_HPP
 
-#include <QApplication>
 #include <QDoubleSpinBox>
-#include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
-#include <QSharedMemory>
-#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -17,13 +13,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rviz_common/panel.hpp>
 
-#include <chrono>
-#include <map>
 #include <memory>
-#include <mutex>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace tf_shift_panel
 {
@@ -33,7 +23,6 @@ class DirectionalControlWidget : public QWidget
     Q_OBJECT
 public:
     explicit DirectionalControlWidget(QWidget *parent = nullptr);
-    ~DirectionalControlWidget() override;
 
 public slots:
     void forcePublishValues(double x, double y, double yaw);
@@ -47,7 +36,6 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
-    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
     enum class PressBtnType
@@ -70,12 +58,9 @@ private:
     QPainterPath cwPath_;
 
     double directionArray[3] = {0.0, 0.0, 0.0};
-    int QSharedMemoryLen = 3;
-    QSharedMemory XYR_memory_list;
-    bool ensureSharedMemoryAttached();
-    bool writeDirection(double x, double y, double yaw);
 public:
-    bool readDirection(double (&values)[3]);
+    void setDirection(double x, double y, double yaw);
+    void readDirection(double (&values)[3]) const;
 private:
     void createTwist(int switchXYR, double delta);
 
@@ -92,6 +77,9 @@ public:
     explicit Rviz2Panel(QWidget *parent = nullptr);
     void onInitialize() override;
 
+signals:
+    void alignmentReceived(double x, double y, double yaw);
+
 private:
     DirectionalControlWidget *controlWidget_{nullptr};
     QDoubleSpinBox *xSpinBox_{nullptr};
@@ -100,10 +88,9 @@ private:
     QPushButton *forceYamlButton_{nullptr};
     rclcpp::Node::SharedPtr node_;
     rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr alignmentPub_;
-    double alignment_[3] = {0.0, 0.0, 0.0};
+    rclcpp::Subscription<geometry_msgs::msg::Pose2D>::SharedPtr alignmentSub_;
     void publishAlignment();
-    bool loadYamlConfig(double &x, double &y, double &yaw) const;
-    void loadYamlConfigToInputs();
+
 };
 
 }  // namespace tf_shift_panel

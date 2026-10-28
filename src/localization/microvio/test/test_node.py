@@ -1,6 +1,5 @@
 import math
 import time
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -148,3 +147,10 @@ def test_airborne_initial_origin_preserves_tof_height_after_ekf_z_reset(node):
     np.testing.assert_allclose([out.pose.pose.position.x, out.pose.pose.position.y,
                                out.pose.pose.position.z], [0., 0., .7], atol=1e-9)
     assert node.reset_index == 1
+
+
+def test_unknown_covariance_cannot_mask_estimator_accelerometer_error(node):
+    node.on_odometry(packet(pose_covariance=[float('nan')] * 21))
+    node.flags |= 2048
+    assert node.health() == ('INVALID', 'ESTIMATOR_ACCEL_ERROR')
+    assert not node.aiding_ready()

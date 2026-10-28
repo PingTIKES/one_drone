@@ -11,7 +11,6 @@ class TrackingResult:
     acceleration: tuple
     arrival_hold: bool
     speed_limited: bool
-    trajectory_id: int
 
 
 class TrajectoryController:
@@ -36,9 +35,7 @@ class TrajectoryController:
     def reset(self):
         self.arrival_hold = False
 
-    def track(self, command, odom, speed_scale=1.0):
-        if not math.isfinite(speed_scale) or not 0 < speed_scale <= 1:
-            raise ValueError('invalid tracking speed scale')
+    def track(self, command, odom):
         actual = odom.pose.pose.position
         error = (command.position.x - actual.x,
                  command.position.y - actual.y,
@@ -54,7 +51,7 @@ class TrajectoryController:
         if self.arrival_hold:
             world[0] = world[1] = 0.0
         horizontal = math.hypot(world[0], world[1])
-        limit = self.max_horizontal_speed * speed_scale
+        limit = self.max_horizontal_speed
         limited = horizontal > limit
         if limited:
             world[0] *= limit / horizontal
@@ -62,4 +59,4 @@ class TrajectoryController:
         world[2] = max(-self.max_vertical_speed, min(self.max_vertical_speed, world[2]))
         return TrackingResult(tuple(world),
                               (command.acceleration.x, command.acceleration.y, command.acceleration.z),
-                              self.arrival_hold, limited, int(command.trajectory_id))
+                              self.arrival_hold, limited)

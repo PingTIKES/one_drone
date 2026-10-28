@@ -196,7 +196,6 @@ namespace ego_planner
     double feasibility_tolerance_;        // permitted ratio of vel/acc exceeding limits
     double planning_horizen_;
     bool use_distinctive_trajs;
-    int drone_id; // single drone: drone_id <= -1, swarm: drone_id >= 0
 
     /* processing time */
     double time_search_ = 0.0;
@@ -214,19 +213,6 @@ namespace ego_planner
     Eigen::Vector3d start_pos_;
     UniformBspline position_traj_, velocity_traj_, acceleration_traj_;
   };
-
-  struct OneTrajDataOfSwarm
-  {
-    /* info of generated traj */
-
-    int drone_id;
-    double duration_;
-    rclcpp::Time start_time_;
-    Eigen::Vector3d start_pos_;
-    UniformBspline position_traj_;
-  };
-
-  typedef std::vector<OneTrajDataOfSwarm> SwarmTrajData;
 
 } // namespace ego_planner
 

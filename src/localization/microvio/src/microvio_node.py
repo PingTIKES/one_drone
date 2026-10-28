@@ -305,10 +305,10 @@ class Microvio(Node):
         if now - self.estimator_at > float(self.p('estimator_timeout')):
             return 'DEGRADED', 'ESTIMATOR_STATUS_STALE'
         required = self.required_flags()
-        if not self.pose_diagonal_known:
-            return 'DEGRADED', 'POSE_COVARIANCE_UNKNOWN'
         if self.flags & 2048:
             return 'INVALID', 'ESTIMATOR_ACCEL_ERROR'
+        if not self.pose_diagonal_known:
+            return 'DEGRADED', 'POSE_COVARIANCE_UNKNOWN'
         if self.flags & 128:
             return 'DEGRADED', 'ESTIMATOR_CONSTANT_POSITION'
         if self.flags & required != required:

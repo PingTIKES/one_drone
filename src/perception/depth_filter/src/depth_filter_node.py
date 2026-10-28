@@ -89,10 +89,7 @@ class DepthFilterNode(Node):
             else:
                 raise ValueError(f'unsupported depth encoding {msg.encoding}')
             depth[(depth < self.min_range) | (depth > self.max_range)] = np.nan
-            filtered = self.filters.apply(depth)
-            if not self.fill_holes:
-                filtered[~np.isfinite(depth) | (depth <= 0)] = np.nan
-                self.filters.previous = filtered.copy()
+            filtered = self.filters.apply(depth, fill_holes=self.fill_holes)
         except (ValueError, TypeError) as exc:
             self.get_logger().warn(f'depth frame rejected: {exc}')
             return

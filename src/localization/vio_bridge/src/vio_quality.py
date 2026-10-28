@@ -1,8 +1,6 @@
 """Low-cost quality signals around OpenVINS without changing its estimator."""
 import math
 
-import numpy as np
-
 
 def normalized_covariance(position, orientation, velocity, limits):
     """Return the largest covariance-to-hard-limit ratio."""

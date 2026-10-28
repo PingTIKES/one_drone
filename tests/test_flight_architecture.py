@@ -1,6 +1,7 @@
 """Safety contracts for the refactored single-writer flight chain."""
 import math
 import unittest
+from unittest.mock import Mock
 import numpy as np
 import rclpy
 
@@ -27,13 +28,19 @@ def sample(stamp=99.95):
 
 
 class FlightArchitectureTest(unittest.TestCase):
-    def test_px4_audit_accepts_numpy_coordinates_from_sensor_messages(self):
+    def test_mavros_accepts_numpy_coordinates_and_converts_ned_to_enu(self):
         rclpy.init()
         node = rclpy.create_node('flight_adapter_type_test')
         try:
             adapter = MavrosAdapter(node, '/mavros_test')
+            adapter.setpoint_pub = Mock()
             adapter.position((np.float32(1.), np.float32(2.), np.float32(-2.)),
                              np.float32(0.))
+            msg = adapter.setpoint_pub.publish.call_args.args[0]
+            self.assertEqual((msg.position.x, msg.position.y, msg.position.z), (2., 1., 2.))
+            self.assertAlmostEqual(msg.yaw, math.pi/2)
+            self.assertTrue(msg.type_mask & msg.IGNORE_VX)
+            self.assertFalse(msg.type_mask & msg.IGNORE_PX)
         finally:
             node.destroy_node()
             rclpy.shutdown()
@@ -54,7 +61,7 @@ class FlightArchitectureTest(unittest.TestCase):
                          'TRAJECTORY_TRACKING_ERROR')
 
     def test_yaw_looks_ahead_and_limits_translation_outside_camera_fov(self):
-        yaw = YawManager(30., 100., 150., .25, .35, .10, .8,
+        yaw = YawManager(30., 100., 150., .25, .35, .8,
                          87., .3, .25)
         orientation = Quaternion(w=1.)
         forward = yaw.decide((.5, 0., 0.), (0., 0., 0.), orientation)

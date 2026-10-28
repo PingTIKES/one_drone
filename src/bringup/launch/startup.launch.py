@@ -100,7 +100,7 @@ def setup(context):
         required_topics += ['cam0_topic', 'depth_topic', 'depth_info_topic']
     if not sim and any(not arg(key) for key in required_topics):
         raise ValueError('selected localization/depth source needs its input topics')
-    target_system = int(arg('target_system') or '2')
+    target_system = int(arg('target_system'))
     mavros_ns = arg('mavros_ns').strip('/')
     if not mavros_ns or not arg('fcu_url'):
         raise ValueError('mavros_ns and fcu_url must be configured')
@@ -229,13 +229,10 @@ def setup(context):
                          'cx': float(matcher.p[0, 2]) if matcher else 319.5,
                          'cy': float(matcher.p[1, 2]) if matcher else 239.5,
                          'require_camera_info': mode == 'hardware',
-                         'preserve_stamp': True,
                          'depth_scale': float(arg('depth_scale')),
                          'self_mask_model': 'x500' if sim else 'none',
                          'frame_decimation': node_config('obstacle_cloud', 'stereo_depth_node').get('frame_decimation', 1 if mode == 'software' else 3)}],
             remappings=depth_remaps)
-        ego_depth_topic = '/uav1/d435i/depth/image_filtered'
-        ego_info_topic = depth_info_topic
     ego_odom_adapter = Node(
         package='ego_bridge', executable='ego_odom_adapter',
         name='ego_odom_adapter', output='screen',

@@ -10,8 +10,6 @@
 rclcpp::Publisher<quadrotor_msgs::msg::PositionCommand>::SharedPtr pos_cmd_pub;
 
 quadrotor_msgs::msg::PositionCommand cmd;
-double pos_gain[3] = {0, 0, 0};
-double vel_gain[3] = {0, 0, 0};
 
 using ego_planner::UniformBspline;
 
@@ -21,7 +19,7 @@ rclcpp::Node::SharedPtr node_;
 rclcpp::Time heartbeat_at_(0, 0, RCL_STEADY_TIME);
 double heartbeat_timeout_;
 std::string planner_instance_;
-bool mapHealthy()
+bool plannerAlive()
 {
   // Planner liveness is independent of whether a depth sensor is connected.
   return !planner_instance_.empty() &&
@@ -38,12 +36,10 @@ double traj_duration_;
 rclcpp::Time start_time_;
 int traj_id_;
 
-// yaw control
-double last_yaw_;
 
 void bsplineCallback(traj_utils::msg::Bspline::ConstSharedPtr msg)
 {
-  if (!mapHealthy() || rclcpp::Time(msg->start_time).seconds() <= reset_cutoff_) return;
+  if (!plannerAlive() || rclcpp::Time(msg->start_time).seconds() <= reset_cutoff_) return;
   // parse pos traj
 
   Eigen::MatrixXd pos_pts(3, msg->pos_pts.size());
@@ -64,15 +60,6 @@ void bsplineCallback(traj_utils::msg::Bspline::ConstSharedPtr msg)
   UniformBspline pos_traj(pos_pts, msg->order, 0.1);
   pos_traj.setKnot(knots);
 
-  // parse yaw traj
-
-  // Eigen::MatrixXd yaw_pts(msg->yaw_pts.size(), 1);
-  // for (int i = 0; i < msg->yaw_pts.size(); ++i) {
-  //   yaw_pts(i, 0) = msg->yaw_pts[i];
-  // }
-
-  // UniformBspline yaw_traj(yaw_pts, msg->order, msg->yaw_dt);
-
   start_time_ = msg->start_time;
   traj_id_ = msg->traj_id;
 
@@ -88,7 +75,7 @@ void bsplineCallback(traj_utils::msg::Bspline::ConstSharedPtr msg)
 
 void cmdCallback()
 {
-  if (!mapHealthy())
+  if (!plannerAlive())
   {
     invalidateTrajectory();
     return;
@@ -142,10 +129,9 @@ void cmdCallback()
   cmd.acceleration.y = acc(1);
   cmd.acceleration.z = acc(2);
 
-  cmd.yaw = last_yaw_;
+  cmd.yaw = 0.0;
   cmd.yaw_dot = 0.0;
 
-  last_yaw_ = cmd.yaw;
 
   pos_cmd_pub->publish(cmd);
 }
@@ -186,19 +172,6 @@ int main(int argc, char **argv)
   auto cmd_timer = node->create_wall_timer(
       std::chrono::milliseconds(10),
       cmdCallback);
-
-  /* control parameter */
-  cmd.kx[0] = pos_gain[0];
-  cmd.kx[1] = pos_gain[1];
-  cmd.kx[2] = pos_gain[2];
-
-  cmd.kv[0] = vel_gain[0];
-  cmd.kv[1] = vel_gain[1];
-  cmd.kv[2] = vel_gain[2];
-
-  last_yaw_ = 0.0;
-
-  rclcpp::sleep_for(std::chrono::seconds(1));
 
   RCLCPP_WARN(node->get_logger(), "[Traj server]: ready.");
 

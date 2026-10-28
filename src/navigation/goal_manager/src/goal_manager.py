@@ -1,5 +1,6 @@
 """Accept RViz map goals and publish odom-frame targets to EGO-Planner."""
 import math
+from copy import deepcopy
 import time
 
 import rclpy
@@ -93,7 +94,7 @@ class GoalManager(Node):
         goal = PoseStamped()
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.header.frame_id = msg.header.frame_id
-        goal.pose = msg.pose
+        goal.pose = deepcopy(msg.pose)
         if not decision:
             self.decision_cutoff = max(self.decision_cutoff, self.get_clock().now().nanoseconds)
             goal.pose.position.z = float(self.get_parameter('goal_altitude').value)

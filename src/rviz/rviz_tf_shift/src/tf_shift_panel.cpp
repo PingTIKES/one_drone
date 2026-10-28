@@ -1,7 +1,5 @@
 #include "tf_shift_panel.h"
-#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <pluginlib/class_list_macros.hpp>
-#include <yaml-cpp/yaml.h>
 
 #include <QFormLayout>
 
@@ -9,9 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <exception>
 #include <iostream>
-#include <string>
 
 namespace tf_shift_panel
 {
@@ -23,46 +19,14 @@ namespace tf_shift_panel
         setFixedSize(200, 200);
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
-        XYR_memory_list.setKey(QString::fromStdString("one_drone_direction"));
-    }
-
-    DirectionalControlWidget::~DirectionalControlWidget()
-    {
-        if (XYR_memory_list.isAttached())
-        {
-            XYR_memory_list.detach();
-        }
-    }
-
-    bool DirectionalControlWidget::eventFilter(QObject *obj, QEvent *event)
-    {
-        if (obj != this)
-            return QWidget::eventFilter(obj, event);
-
-        if (event->type() == QEvent::KeyPress)
-        {
-            QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
-            keyPressEvent(keyEvent);
-            return true;
-        }
-        else if (event->type() == QEvent::KeyRelease)
-        {
-            QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
-            keyReleaseEvent(keyEvent);
-            return true;
-        }
-        return QWidget::eventFilter(obj, event);
     }
 
     void DirectionalControlWidget::forcePublishValues(double x, double y, double yaw)
     {
-        if (writeDirection(x, y, yaw))
-        {
-            emit directionChanged();
-            setFocus();
-            std::cout << "Force published TF params: X=" << x
-                      << " Y=" << y << " Rotation=" << yaw << std::endl;
-        }
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(yaw)) return;
+        setDirection(x, y, yaw);
+        emit directionChanged();
+        setFocus();
     }
 
     void DirectionalControlWidget::paintEvent(QPaintEvent *event)
@@ -298,101 +262,21 @@ namespace tf_shift_panel
         return path;
     }
 
-    void DirectionalControlWidget::createTwist(int switchXYR, double delta)
+    void DirectionalControlWidget::createTwist(int axis, double delta)
     {
-        if (ensureSharedMemoryAttached())
-        {
-
-            XYR_memory_list.lock();
-
-            double *data = static_cast<double *>(XYR_memory_list.data());
-            if (data)
-            {
-                data[switchXYR] += delta;
-            }
-            XYR_memory_list.unlock();
-        }
-        else
-        {
-            std::cerr << "Failed to attach shared memory: " << XYR_memory_list.errorString().toStdString() << std::endl;
-        }
+        directionArray[axis] += delta;
     }
 
-    bool DirectionalControlWidget::ensureSharedMemoryAttached()
+    void DirectionalControlWidget::setDirection(double x, double y, double yaw)
     {
-        if (XYR_memory_list.isAttached())
-        {
-            return true;
-        }
-
-        if (XYR_memory_list.attach())
-        {
-            return true;
-        }
-
-        if (XYR_memory_list.create(sizeof(double) * QSharedMemoryLen))
-        {
-            XYR_memory_list.lock();
-            double *data = static_cast<double *>(XYR_memory_list.data());
-            if (data)
-            {
-                data[0] = directionArray[0];
-                data[1] = directionArray[1];
-                data[2] = directionArray[2];
-            }
-            XYR_memory_list.unlock();
-            return true;
-        }
-
-        if (XYR_memory_list.error() == QSharedMemory::AlreadyExists && XYR_memory_list.attach())
-        {
-            return true;
-        }
-
-        std::cerr << "Failed to attach/create shared memory: "
-                  << XYR_memory_list.errorString().toStdString() << std::endl;
-        return false;
-    }
-
-    bool DirectionalControlWidget::writeDirection(double x, double y, double yaw)
-    {
-        if (!ensureSharedMemoryAttached())
-        {
-            return false;
-        }
-
-        XYR_memory_list.lock();
-        double *data = static_cast<double *>(XYR_memory_list.data());
-        if (!data)
-        {
-            XYR_memory_list.unlock();
-            std::cerr << "Shared memory data is null" << std::endl;
-            return false;
-        }
-
-        data[0] = x;
-        data[1] = y;
-        data[2] = yaw;
         directionArray[0] = x;
         directionArray[1] = y;
         directionArray[2] = yaw;
-        XYR_memory_list.unlock();
-        return true;
     }
 
-    bool DirectionalControlWidget::readDirection(double (&values)[3])
+    void DirectionalControlWidget::readDirection(double (&values)[3]) const
     {
-        if (!ensureSharedMemoryAttached() || !XYR_memory_list.lock())
-        {
-            return false;
-        }
-        const auto *data = static_cast<const double *>(XYR_memory_list.constData());
-        if (data != nullptr)
-        {
-            std::copy(data, data + 3, values);
-        }
-        XYR_memory_list.unlock();
-        return data != nullptr;
+        std::copy(directionArray, directionArray + 3, values);
     }
 
     Rviz2Panel::Rviz2Panel(QWidget *parent)
@@ -420,15 +304,21 @@ namespace tf_shift_panel
         layout->addLayout(form);
         layout->addWidget(forceYamlButton_);
         layout->addStretch();
-        controlWidget_->installEventFilter(controlWidget_);
         controlWidget_->setFocus();
-        loadYamlConfigToInputs();
         connect(forceYamlButton_, &QPushButton::clicked, this, [this]() {
             controlWidget_->forcePublishValues(
                 xSpinBox_->value(), ySpinBox_->value(), rotationSpinBox_->value());
         });
         connect(controlWidget_, &DirectionalControlWidget::directionChanged,
                 this, &Rviz2Panel::publishAlignment);
+        // ROS callbacks can run outside the GUI thread.
+        connect(this, &Rviz2Panel::alignmentReceived, this,
+                [this](double x, double y, double yaw) {
+                    controlWidget_->setDirection(x, y, yaw);
+                    xSpinBox_->setValue(x);
+                    ySpinBox_->setValue(y);
+                    rotationSpinBox_->setValue(yaw);
+                }, Qt::QueuedConnection);
     }
 
     void Rviz2Panel::onInitialize()
@@ -441,14 +331,22 @@ namespace tf_shift_panel
         node_ = abstraction->get_raw_node();
         alignmentPub_ = node_->create_publisher<geometry_msgs::msg::Pose2D>(
             "/map_odom/set", rclcpp::QoS(10));
+        alignmentSub_ = node_->create_subscription<geometry_msgs::msg::Pose2D>(
+            "/map_odom/current", rclcpp::QoS(1).transient_local(),
+            [this](const geometry_msgs::msg::Pose2D::SharedPtr value) {
+                if (std::isfinite(value->x) && std::isfinite(value->y) && std::isfinite(value->theta))
+                    emit alignmentReceived(value->x, value->y, value->theta);
+            });
     }
 
     void Rviz2Panel::publishAlignment()
     {
-        if (!alignmentPub_ || !controlWidget_->readDirection(alignment_))
+        if (!alignmentPub_)
         {
             return;
         }
+        double alignment_[3];
+        controlWidget_->readDirection(alignment_);
         geometry_msgs::msg::Pose2D msg;
         msg.x = alignment_[0];
         msg.y = alignment_[1];
@@ -456,42 +354,6 @@ namespace tf_shift_panel
         alignmentPub_->publish(msg);
     }
 
-    bool Rviz2Panel::loadYamlConfig(double &x, double &y, double &yaw) const
-    {
-        try
-        {
-            const std::string path =
-                ament_index_cpp::get_package_share_directory("modify_map_to_odom") +
-                "/config/config.yaml";
-            const YAML::Node root = YAML::LoadFile(path);
-            const YAML::Node params = root["/**"] ? root["/**"]["ros__parameters"]
-                                                     : root["ros__parameters"];
-            if (!params || !params["X"] || !params["Y"] || !params["Rotation"])
-            {
-                return false;
-            }
-            x = params["X"].as<double>();
-            y = params["Y"].as<double>();
-            yaw = params["Rotation"].as<double>();
-            return true;
-        }
-        catch (const std::exception &error)
-        {
-            std::cerr << "Failed to load map→odom config: " << error.what() << std::endl;
-            return false;
-        }
-    }
-
-    void Rviz2Panel::loadYamlConfigToInputs()
-    {
-        double x = 0.0, y = 0.0, yaw = 0.0;
-        if (loadYamlConfig(x, y, yaw))
-        {
-            xSpinBox_->setValue(x);
-            ySpinBox_->setValue(y);
-            rotationSpinBox_->setValue(yaw);
-        }
-    }
 }
 
 PLUGINLIB_EXPORT_CLASS(tf_shift_panel::Rviz2Panel, rviz_common::Panel)

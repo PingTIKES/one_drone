@@ -9,15 +9,6 @@ def body_flu_to_ned(vx, vy, heading_ned):
     return c * vx + s * vy, s * vx - c * vy
 
 
-def required_forward_clearance(speed, reaction_time, deceleration, margin):
-    """Conservative reaction plus braking distance for planar cruise."""
-    if (not all(math.isfinite(v) for v in
-                (speed, reaction_time, deceleration, margin)) or
-            speed < 0 or reaction_time < 0 or deceleration <= 0 or margin < 0):
-        raise ValueError('invalid stopping-distance input')
-    return speed * reaction_time + speed * speed / (2.0 * deceleration) + margin
-
-
 def arrival_deadband_active(active, position_error, planned_speed,
                             position_deadband, velocity_deadband, exit_scale):
     """Latch an arrival deadband with hysteresis for quiet endpoint hover."""

@@ -20,7 +20,7 @@ def bridge(monkeypatch):
     n = FlightBridge()
     n.now = lambda: 100.
     n.on_position(VehicleLocalPosition(
-        x=1., y=2., z=-1.5, heading=0., xy_valid=True, z_valid=True))
+        x=1., y=2., z=-1.5, heading=0.))
     n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
     odom = Odometry()
     odom.header.frame_id = 'odom'
@@ -53,22 +53,20 @@ def test_manual_offboard_latches_airborne_position_without_takeoff(bridge):
     n.position.z = -1.4
     n.tick()
     n.px4_adapter.position.assert_called_with((1., 2., -1.5), 0.)
-    n.px4_adapter.command.assert_not_called()
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
     assert n.takeoff_target is None
     assert not n.takeoff(Trigger.Request(), Trigger.Response()).success
 
 
-@pytest.mark.parametrize('health', [None, 'INVALID', 'DEGRADED'])
-def test_fresh_ego_runs_without_health_map_depth_or_resume_service(bridge, health):
+def test_fresh_ego_runs_without_health_map_depth_or_resume_service(bridge):
     n = bridge
-    if health is not None:
-        n.on_vio(String(data=health))
-    assert not n.map_valid() and not n.depth_valid()
     n.on_position_command(command())
     n.tick()
     assert n.state == 'CRUISE'
     assert n.px4_adapter.velocity_body.call_args.args[0] == pytest.approx((.3, 0., 0.))
-    n.px4_adapter.command.assert_not_called()
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
 
 
 def test_command_loss_latches_stop_then_fresh_command_resumes(bridge):
@@ -97,7 +95,8 @@ def test_mode_exit_releases_tracking_and_reentry_latches_current_position(bridge
     n.tick()
     assert n.state == 'IDLE' and n.cmd is None
     n.px4_adapter.velocity_body.assert_not_called()
-    n.px4_adapter.command.assert_not_called()
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
     n.position.x = 5.
     n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
     n.tick()
@@ -111,7 +110,8 @@ def test_standby_stream_does_not_arm_or_change_mode(bridge):
     n.tick()
     assert n.state == 'IDLE'
     n.px4_adapter.position.assert_called_with((1., 2., -1.5), 0.)
-    n.px4_adapter.command.assert_not_called()
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
 
 
 def test_rc_can_reenter_offboard_after_a_landing_request(bridge):

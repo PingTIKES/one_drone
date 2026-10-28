@@ -122,6 +122,31 @@ class ResetPipelineTest(unittest.TestCase):
         finally:
             n.destroy_node()
 
+    def test_odom_rotation_preserves_source_and_rejects_nonfinite_input(self):
+        n = Adapter()
+        try:
+            n.odom_pub = Mock()
+            msg = Odometry()
+            msg.header.frame_id = 'odom'
+            msg.pose.pose.orientation.w = math.sqrt(.5)
+            msg.pose.pose.orientation.z = math.sqrt(.5)
+            msg.twist.twist.linear.x = 1.
+            n.on_odom(msg)
+            out = n.odom_pub.publish.call_args.args[0]
+            self.assertAlmostEqual(out.twist.twist.linear.x, 0.)
+            self.assertAlmostEqual(out.twist.twist.linear.y, 1.)
+            self.assertEqual(msg.twist.twist.linear.x, 1.)
+            self.assertEqual(msg.twist.twist.linear.y, 0.)
+            msg.pose.pose.orientation.w = math.nan
+            n.on_odom(msg)
+            self.assertEqual(n.odom_pub.publish.call_count, 1)
+            msg.pose.pose.orientation.w = math.sqrt(.5)
+            msg.twist.twist.linear.z = math.inf
+            n.on_odom(msg)
+            self.assertEqual(n.odom_pub.publish.call_count, 1)
+        finally:
+            n.destroy_node()
+
     def test_filter_preserves_holes_and_reset_drops_history(self):
         n = DepthFilterNode()
         try:
@@ -138,30 +163,6 @@ class ResetPipelineTest(unittest.TestCase):
             n.publisher.reset_mock()
             n.callback(msg)
             n.publisher.publish.assert_not_called()
-        finally:
-            n.destroy_node()
-
-    def test_orb_epoch_clears_bridge_and_deduplicates(self):
-        n = VioBridge()
-        try:
-            n.reset_pub = Mock()
-            n.last_stamp = 42.
-            n.last_position = np.ones(3)
-            n.latched = True
-            count = n.reset_count
-            event = Header(frame_id='ORB:process-a:1:MAP_CORRECTION')
-            n.estimator_reset(event)
-            self.assertIsNone(n.last_stamp)
-            self.assertIsNone(n.last_position)
-            self.assertFalse(n.latched)
-            self.assertEqual(n.reset_count, (count + 1) % 256)
-            n.reset_pub.publish.assert_called_once()
-            n.estimator_reset(event)
-            n.reset_pub.publish.assert_called_once()
-            # A restarted estimator is a new epoch even with the same local counter.
-            event.frame_id = 'ORB:process-b:1:START'
-            n.estimator_reset(event)
-            self.assertEqual(n.reset_pub.publish.call_count, 2)
         finally:
             n.destroy_node()
 
@@ -233,6 +234,7 @@ class ResetPipelineTest(unittest.TestCase):
             goal.pose.position.x = 3.
             goal.pose.orientation.w = 1.
             n.on_goal(goal)
+            self.assertEqual(goal.pose.position.z, 0.)  # Caller retains its original RViz goal.
             n.goal_pub.publish.assert_called_once()
             sent = n.goal_pub.publish.call_args.args[0]
             self.assertEqual(sent.pose.position.x, 3.)
@@ -249,12 +251,13 @@ class ResetPipelineTest(unittest.TestCase):
             n.cmd_at = n.now()
             n.send_position = Mock()
             n.send_ego_command = Mock()
-            n.vehicle_command = Mock()
+            n.px4_adapter = Mock()
             n.tick()
             self.assertEqual(n.state, 'IDLE')
             n.send_position.assert_not_called()
             n.send_ego_command.assert_not_called()
-            n.vehicle_command.assert_not_called()
+            n.px4_adapter.arm.assert_not_called()
+            n.px4_adapter.set_mode.assert_not_called()
         finally:
             n.destroy_node()
 
@@ -314,19 +317,19 @@ class ResetPipelineTest(unittest.TestCase):
         finally:
             n.destroy_node()
 
-    def test_map_freshness_is_based_on_fused_stamp(self):
+    def test_planner_restart_discards_command_without_map_freshness_gate(self):
         n = FlightBridge()
         try:
             n.now = lambda: 100.
-            n.on_map_heartbeat(Header(stamp=stamp(99.9), frame_id='planner1'))
-            self.assertTrue(n.map_valid())
-            # Fresh heartbeat with old fusion timestamp must still be invalid.
-            n.now = lambda: 102.
-            n.on_map_heartbeat(Header(stamp=stamp(99.9), frame_id='planner1'))
-            self.assertFalse(n.map_valid())
-            n.on_map_heartbeat(Header(stamp=stamp(102.), frame_id='planner1'))
-            n.planner_at -= 2.
-            self.assertFalse(n.map_valid())
+            command = object()
+            n.on_map_heartbeat(Header(stamp=stamp(90.), frame_id='planner1'))
+            n.cmd = command
+            n.on_map_heartbeat(Header(stamp=stamp(90.), frame_id='planner1'))
+            self.assertIs(n.cmd, command)
+            n.on_map_heartbeat(Header(stamp=stamp(100.), frame_id='planner2'))
+            self.assertIsNone(n.cmd)
+            self.assertEqual(n.trajectory_status, 'PLANNER_RESTARTED')
+            self.assertEqual(n.reset_command_cutoff, 100.)
         finally:
             n.destroy_node()
 

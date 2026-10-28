@@ -5,17 +5,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
 find_package(ament_cmake_auto REQUIRED)
-find_package(ament_cmake REQUIRED)
-find_package(Qt5 REQUIRED COMPONENTS Core)
-
-
 ament_auto_find_build_dependencies()
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
-include_directories(${Qt5Core_INCLUDE_DIRS} ${Qt5Widgets_INCLUDE_DIRS})
 
 ament_auto_add_library(${PROJECT_NAME} SHARED
   src/modify_map_to_odom.cpp
@@ -24,10 +15,6 @@ ament_auto_add_library(${PROJECT_NAME} SHARED
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN modify_map_to_odom::ModifyMapToOdom
   EXECUTABLE ${PROJECT_NAME}_node
-)
-
-target_link_libraries(${PROJECT_NAME}
-  Qt5::Core
 )
 
 if(BUILD_TESTING)

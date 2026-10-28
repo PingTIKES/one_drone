@@ -1,5 +1,4 @@
 #include "bspline_opt/bspline_optimizer.h"
-#include "bspline_opt/gradient_descent_optimizer.h"
 // using namespace std;
 
 namespace ego_planner
@@ -14,7 +13,6 @@ namespace ego_planner
     node->declare_parameter("optimization/lambda_fitness", -1.0);
 
     node->declare_parameter("optimization/dist0", -1.0);
-    node->declare_parameter("optimization/swarm_clearance", -1.0);
     node->declare_parameter("optimization/max_vel", -1.0);
     node->declare_parameter("optimization/max_acc", -1.0);
 
@@ -26,7 +24,6 @@ namespace ego_planner
     node->get_parameter("optimization/lambda_fitness", lambda4_);
 
     node->get_parameter("optimization/dist0", dist0_);
-    node->get_parameter("optimization/swarm_clearance", swarm_clearance_);
     node->get_parameter("optimization/max_vel", max_vel_);
     node->get_parameter("optimization/max_acc", max_acc_);
 
@@ -38,22 +35,12 @@ namespace ego_planner
     this->grid_map_ = map;
   }
 
-  void BsplineOptimizer::setEnvironment(const GridMap::Ptr &map, const fast_planner::ObjPredictor::Ptr mov_obj)
-  {
-    this->grid_map_ = map;
-    this->moving_objs_ = mov_obj;
-  }
-
   void BsplineOptimizer::setControlPoints(const Eigen::MatrixXd &points)
   {
     cps_.points = points;
   }
 
   void BsplineOptimizer::setBsplineInterval(const double &ts) { bspline_interval_ = ts; }
-
-  void BsplineOptimizer::setSwarmTrajs(SwarmTrajData *swarm_trajs_ptr) { swarm_trajs_ = swarm_trajs_ptr; }
-
-  void BsplineOptimizer::setDroneId(const int drone_id) { drone_id_ = drone_id; }
 
   // 返回多个安全的控制点集
   std::vector<ControlPoints> BsplineOptimizer::distinctiveTrajs(vector<std::pair<int, int>> segments)
@@ -871,93 +858,6 @@ namespace ego_planner
   }
 
   // 几个计算损失的函数
-  void BsplineOptimizer::calcSwarmCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient)
-  {
-    cost = 0.0;
-    int end_idx = q.cols() - order_ - (double)(q.cols() - 2 * order_) * 1.0 / 3.0; // Only check the first 2/3 points
-    const double CLEARANCE = swarm_clearance_ * 2;
-    double t_now = rclcpp::Clock().now().seconds();
-    constexpr double a = 2.0, b = 1.0, inv_a2 = 1 / a / a, inv_b2 = 1 / b / b;
-
-    for (int i = order_; i < end_idx; i++)
-    {
-      double glb_time = t_now + ((double)(order_ - 1) / 2 + (i - order_ + 1)) * bspline_interval_;
-
-      for (size_t id = 0; id < swarm_trajs_->size(); id++)
-      {
-        if ((swarm_trajs_->at(id).drone_id != (int)id) || swarm_trajs_->at(id).drone_id == drone_id_)
-        {
-          continue;
-        }
-
-        double traj_i_satrt_time = swarm_trajs_->at(id).start_time_.seconds();
-        if (glb_time < traj_i_satrt_time + swarm_trajs_->at(id).duration_ - 0.1)
-        {
-          /* def cost=(c-sqrt([Q-O]'D[Q-O]))^2, D=[1/b^2,0,0;0,1/b^2,0;0,0,1/a^2] */
-          Eigen::Vector3d swarm_prid = swarm_trajs_->at(id).position_traj_.evaluateDeBoorT(glb_time - traj_i_satrt_time);
-          Eigen::Vector3d dist_vec = cps_.points.col(i) - swarm_prid;
-          double ellip_dist = sqrt(dist_vec(2) * dist_vec(2) * inv_a2 + (dist_vec(0) * dist_vec(0) + dist_vec(1) * dist_vec(1)) * inv_b2);
-          double dist_err = CLEARANCE - ellip_dist;
-
-          Eigen::Vector3d dist_grad = cps_.points.col(i) - swarm_prid;
-          Eigen::Vector3d Coeff;
-          Coeff(0) = -2 * (CLEARANCE / ellip_dist - 1) * inv_b2;
-          Coeff(1) = Coeff(0);
-          Coeff(2) = -2 * (CLEARANCE / ellip_dist - 1) * inv_a2;
-
-          if (dist_err < 0)
-          {
-            /* do nothing */
-          }
-          else
-          {
-            cost += pow(dist_err, 2);
-            gradient.col(i) += (Coeff.array() * dist_grad.array()).matrix();
-          }
-
-          if (min_ellip_dist_ > dist_err)
-          {
-            min_ellip_dist_ = dist_err;
-          }
-        }
-      }
-    }
-  }
-
-  void BsplineOptimizer::calcMovingObjCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient)
-  {
-    cost = 0.0;
-    int end_idx = q.cols() - order_;
-    constexpr double CLEARANCE = 1.5;
-    double t_now = rclcpp::Clock().now().seconds();
-
-    for (int i = order_; i < end_idx; i++)
-    {
-      double time = ((double)(order_ - 1) / 2 + (i - order_ + 1)) * bspline_interval_;
-
-      for (int id = 0; id < moving_objs_->getObjNums(); id++)
-      {
-        Eigen::Vector3d obj_prid = moving_objs_->evaluateConstVel(id, t_now + time);
-        double dist = (cps_.points.col(i) - obj_prid).norm();
-        // cout /*<< "cps_.points.col(i)=" << cps_.points.col(i).transpose()*/ << " moving_objs_=" << obj_prid.transpose() << " dist=" << dist << endl;
-        double dist_err = CLEARANCE - dist;
-        Eigen::Vector3d dist_grad = (cps_.points.col(i) - obj_prid).normalized();
-
-        if (dist_err < 0)
-        {
-          /* do nothing */
-        }
-        else
-        {
-          cost += pow(dist_err, 2);
-          gradient.col(i) += -2.0 * dist_err * dist_grad;
-        }
-      }
-      // cout << "time=" << time << " i=" << i << " order_=" << order_ << " end_idx=" << end_idx << endl;
-      // cout << "--" << endl;
-    }
-    // cout << "---------------" << endl;
-  }
 
   void BsplineOptimizer::calcDistanceCostRebound(const Eigen::MatrixXd &q, double &cost,
                                                  Eigen::MatrixXd &gradient, int iter_num, double smoothness_cost)
@@ -1537,7 +1437,7 @@ namespace ego_planner
     return flag_success;
   }
 
-  // 使用L-BFGS方法对目标函数进行优化，得到光滑、无碰撞、动力学可行、与其他无人机碰撞、结束项的轨迹。
+  // 使用L-BFGS方法对目标函数进行优化，得到光滑、无碰撞、动力学可行、结束项的轨迹。
   bool BsplineOptimizer::rebound_optimize(double &final_cost)
   {
     iter_num_ = 0;
@@ -1556,8 +1456,6 @@ namespace ego_planner
     do
     {
       /* ---------- prepare ---------- */
-      min_cost_ = std::numeric_limits<double>::max();
-      min_ellip_dist_ = INIT_min_ellip_dist_;
       iter_num_ = 0;
       flag_force_return = false;
       flag_occ = false;
@@ -1591,19 +1489,6 @@ namespace ego_planner
       {
         // ROS_WARN("Solver error in planning!, return = %s", lbfgs::lbfgs_strerror(result));
         flag_force_return = false;
-
-        /*** collision check, phase 1 ***/
-        if ((min_ellip_dist_ != INIT_min_ellip_dist_) && (min_ellip_dist_ > swarm_clearance_))
-        {
-          success = false;
-          restart_nums++;
-          initControlPoints(cps_.points, false);
-          new_lambda2_ *= 2; // 提高规避权重
-
-          printf("\033[32miter(+1)=%d,time(ms)=%5.3f, swarm too close, keep optimizing\n\033[0m", iter_num_, time_ms);
-
-          continue;
-        }
 
         /*** collision check, phase 2 ***/
         // 创建均匀的B样条曲线
@@ -1715,7 +1600,7 @@ namespace ego_planner
       }
 
     } while (
-        ((flag_occ || ((min_ellip_dist_ != INIT_min_ellip_dist_) && (min_ellip_dist_ > swarm_clearance_))) && restart_nums < MAX_RESART_NUMS_SET) ||
+        (flag_occ && restart_nums < MAX_RESART_NUMS_SET) ||
         (flag_force_return && force_stop_type_ == STOP_FOR_REBOUND && rebound_times <= 20));
 
     return success;
@@ -1799,7 +1684,6 @@ namespace ego_planner
   // 计算损失
   void BsplineOptimizer::combineCostRebound(const double *x, double *grad, double &f_combine, const int n)
   {
-    // cout << "drone_id_=" << drone_id_ << endl;
     // cout << "cps_.points.size()=" << cps_.points.size() << endl;
     // cout << "n=" << n << endl;
     // cout << "sizeof(x[0])=" << sizeof(x[0]) << endl;
@@ -1807,28 +1691,22 @@ namespace ego_planner
     memcpy(cps_.points.data() + 3 * order_, x, n * sizeof(x[0]));
 
     /* ---------- evaluate cost and gradient ---------- */
-    double f_smoothness, f_distance, f_feasibility /*, f_mov_objs*/, f_swarm, f_terminal;
+    double f_smoothness, f_distance, f_feasibility, f_terminal;
 
     Eigen::MatrixXd g_smoothness = Eigen::MatrixXd::Zero(3, cps_.size);
     Eigen::MatrixXd g_distance = Eigen::MatrixXd::Zero(3, cps_.size);
     Eigen::MatrixXd g_feasibility = Eigen::MatrixXd::Zero(3, cps_.size);
-    // Eigen::MatrixXd g_mov_objs = Eigen::MatrixXd::Zero(3, cps_.size);
-    Eigen::MatrixXd g_swarm = Eigen::MatrixXd::Zero(3, cps_.size);
     Eigen::MatrixXd g_terminal = Eigen::MatrixXd::Zero(3, cps_.size);
 
     calcSmoothnessCost(cps_.points, f_smoothness, g_smoothness);
     calcDistanceCostRebound(cps_.points, f_distance, g_distance, iter_num_, f_smoothness);
     calcFeasibilityCost(cps_.points, f_feasibility, g_feasibility);
-    // calcMovingObjCost(cps_.points, f_mov_objs, g_mov_objs);
-    calcSwarmCost(cps_.points, f_swarm, g_swarm);
     calcTerminalCost(cps_.points, f_terminal, g_terminal);
 
-    f_combine = lambda1_ * f_smoothness + new_lambda2_ * f_distance + lambda3_ * f_feasibility + new_lambda2_ * f_swarm + lambda2_ * f_terminal;
-    // f_combine = lambda1_ * f_smoothness + new_lambda2_ * f_distance + lambda3_ * f_feasibility + new_lambda2_ * f_mov_objs;
+    f_combine = lambda1_ * f_smoothness + new_lambda2_ * f_distance + lambda3_ * f_feasibility + lambda2_ * f_terminal;
     // printf("origin %f %f %f %f\n", f_smoothness, f_distance, f_feasibility, f_combine);
 
-    Eigen::MatrixXd grad_3D = lambda1_ * g_smoothness + new_lambda2_ * g_distance + lambda3_ * g_feasibility + new_lambda2_ * g_swarm + lambda2_ * g_terminal;
-    // Eigen::MatrixXd grad_3D = lambda1_ * g_smoothness + new_lambda2_ * g_distance + lambda3_ * g_feasibility + new_lambda2_ * g_mov_objs;
+    Eigen::MatrixXd grad_3D = lambda1_ * g_smoothness + new_lambda2_ * g_distance + lambda3_ * g_feasibility + lambda2_ * g_terminal;
     memcpy(grad, grad_3D.data() + 3 * order_, n * sizeof(grad[0]));
   }
 

@@ -46,11 +46,11 @@ def bridge(monkeypatch):
 def start_airborne(n):
     assert n.takeoff(Trigger.Request(), Trigger.Response()).success
     for _ in range(25):n.tick()
-    n.px4_adapter.command.assert_called_with(176, 1., 6.)
+    n.px4_adapter.set_mode.assert_called_with('OFFBOARD')
     # Mode confirmation precedes the only arm request.
     n.on_status(State(connected=True, mode='OFFBOARD'))
     for _ in range(20):n.tick()
-    n.px4_adapter.command.assert_called_with(400, 1., 0.)
+    n.px4_adapter.arm.assert_called()
     n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
     n.tick()
     assert n.state == 'BOOTSTRAP_TAKEOFF'
@@ -98,7 +98,8 @@ def test_no_vertical_feedback_is_not_blind_thrust(bridge):
     n.velocity_at = -math.inf
     assert not n.takeoff(Trigger.Request(), Trigger.Response()).success
     n.px4_adapter.attitude.assert_not_called()
-    n.px4_adapter.command.assert_not_called()
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
 
 
 @pytest.mark.parametrize('fault', ['timeout', 'feedback', 'height'])
@@ -111,19 +112,21 @@ def test_bootstrap_fault_requests_land_without_navigation(bridge, fault):
     if fault == 'feedback':n.velocity_at = -math.inf
     n.tick()
     assert n.state == 'LANDING' and not n.navigation_ready
-    n.px4_adapter.command.assert_called_with(21, 0., 0.)
+    n.px4_adapter.set_mode.assert_called_with('AUTO.LAND')
     n.px4_adapter.position.assert_not_called()
 
 
 def test_mode_exit_during_bootstrap_never_reenters(bridge):
     n, _, _ = bridge
     start_airborne(n)
-    n.px4_adapter.command.reset_mock()
+    n.px4_adapter.arm.reset_mock()
+    n.px4_adapter.set_mode.reset_mock()
     n.on_status(State(connected=True, armed=True, mode='ALTCTL'))
     n.tick()
     assert n.state == 'IDLE' and n.bootstrap is None
     for _ in range(30):n.tick()
-    n.px4_adapter.command.assert_not_called()
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
 
 
 def test_height_controller_converges_with_limited_thrust():
@@ -201,4 +204,4 @@ def test_reset_after_position_takeover_discards_old_takeoff_target(bridge):
     n.on_vio_reset(Header())
     assert n.takeoff_target is None and not n.takeoff_pending
     assert n.state == 'LANDING'
-    n.px4_adapter.command.assert_called_with(21, 0., 0.)
+    n.px4_adapter.set_mode.assert_called_with('AUTO.LAND')

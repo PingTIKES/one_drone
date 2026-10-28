@@ -538,7 +538,11 @@ class FlightBridge(Node):
             # Stop tracking and latch a hold instead of chasing each new pose.
             self.clear_command('PX4_STATUS_STALE', cutoff=True)
             self.takeoff_target = None
-            self.hold_position('PX4_STATUS_STALE')
+            if self.status.armed:
+                self.hold_position('PX4_STATUS_STALE')
+            else:
+                self.state = 'IDLE'
+                self.standby_setpoint()
             return
         if self.was_offboard and not active:
             # RC mode changes always release EGO control. Never automatically

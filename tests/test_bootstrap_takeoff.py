@@ -145,6 +145,17 @@ def test_explicit_retry_in_disarmed_offboard_is_allowed(bridge):
     n.px4_adapter.arm.assert_not_called()
 
 
+def test_stale_disarmed_offboard_status_does_not_report_airborne_hold(bridge):
+    n, clock, _ = bridge
+    n.on_status(State(connected=True, armed=False, mode='OFFBOARD'))
+    n.tick()
+    clock[0] += 2.
+    n.tick()
+    assert n.state == 'IDLE' and not n.navigation_ready
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
+
+
 @pytest.mark.parametrize('fault', ['timeout', 'feedback', 'height'])
 def test_bootstrap_fault_requests_land_without_navigation(bridge, fault):
     n, clock, feedback = bridge

@@ -5,9 +5,11 @@ decisions:
   decision_1:
     mode: loop # loop 循环巡航；once 全部航点完成后结束并保持末点
     frame_id: map # map 或 odom；同一个行为的所有航点共用此坐标系
-    waypoints:
-      - [-5.3, 3.7, 2.0]
-      - [-8.0, 3.0, 2.0]
+    waypoints: [] # 留空时不自动巡航，起飞后等待手动打点
+    # 示例：填入以下航点即可循环执行
+    # waypoints:
+    #   - [-5.37, 4.73, 2.0]
+    #   - [-5.95, 5.86, 2.0]
   decision_2:
     mode: once # 单次行为示例，通过 initial_decision 选择
     frame_id: map # 航点坐标系

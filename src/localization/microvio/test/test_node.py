@@ -78,6 +78,30 @@ def test_mavros_is_the_only_serial_owner(node):
     assert node.flight_mode == 'POSCTL'
 
 
+def test_connection_health_survives_high_rate_raw_telemetry_burst(node):
+    from mavros_msgs.msg import Mavlink, State
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+    raw = node.create_publisher(Mavlink, '/uas1/mavlink_source',
+                               QoSProfile(depth=200, reliability=ReliabilityPolicy.BEST_EFFORT))
+    state = node.create_publisher(State, '/mavros/state',
+                                 QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    deadline = time.monotonic()+2.
+    while (not raw.get_subscription_count() or not state.get_subscription_count()) and time.monotonic()<deadline:
+        rclpy.spin_once(node, timeout_sec=.01)
+    assert raw.get_subscription_count() and state.get_subscription_count()
+    node.heartbeat_at = -math.inf
+    state.publish(State(connected=True, armed=False, mode='ALTCTL'))
+    for _ in range(100):raw.publish(Mavlink(sysid=1, compid=1, msgid=31))
+    deadline = time.monotonic()+2.
+    while not math.isfinite(node.heartbeat_at) and time.monotonic()<deadline:
+        rclpy.spin_once(node, timeout_sec=.01)
+    assert math.isfinite(node.heartbeat_at)
+    node.on_odometry(packet())
+    assert node.health()[0] == 'VALID'
+    node.heartbeat_at -= float(node.p('heartbeat_timeout'))+1.
+    assert node.health() == ('INVALID', 'PX4_HEARTBEAT_STALE')
+
+
 def test_mavros_timesync_rejects_high_latency_and_clears_on_disconnect(node):
     from mavros_msgs.msg import State, TimesyncStatus
     before = node.sync.offset_ns

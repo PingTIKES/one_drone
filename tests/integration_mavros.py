@@ -10,6 +10,7 @@ import socket
 import sys
 import subprocess
 import tempfile
+import threading
 import time
 
 import rclpy
@@ -112,21 +113,27 @@ class FakeFCU:
                                               0, 0, msg.get_srcSystem(), msg.get_srcComponent())
                 elif msg.get_type() == 'ODOMETRY':
                     self.ev_packets.append(msg)
-        dt = min(.05, now-self.last)
+        elapsed = now-self.last
         self.last = now
-        if self.mode == 6 and self.armed and self.thrust is not None:
-            self.velocity[2] += (19.62*(.5-self.thrust)-.5*self.velocity[2])*dt
-            self.position[2] = min(0., self.position[2]+self.velocity[2]*dt)
-            if self.position[2] == 0.:self.velocity[2] = min(0.,self.velocity[2])
-        elif self.mode == 6 and self.armed and self.target:
-            if self.target.type_mask & 1:
-                self.velocity = [self.target.vx, self.target.vy, self.target.vz]
+        # Slow ARM hosts can spend >50 ms servicing ROS callbacks. Integrate
+        # all elapsed time in stable substeps instead of slowing the fake
+        # aircraft while the real-time controller and its timeouts run ahead.
+        while elapsed > 0:
+            dt = min(.05, elapsed)
+            elapsed -= dt
+            if self.mode == 6 and self.armed and self.thrust is not None:
+                self.velocity[2] += (19.62*(.5-self.thrust)-.5*self.velocity[2])*dt
+                self.position[2] = min(0., self.position[2]+self.velocity[2]*dt)
+                if self.position[2] == 0.:self.velocity[2] = min(0.,self.velocity[2])
+            elif self.mode == 6 and self.armed and self.target:
+                if self.target.type_mask & 1:
+                    self.velocity = [self.target.vx, self.target.vy, self.target.vz]
+                else:
+                    dest = [self.target.x, self.target.y, self.target.z]
+                    self.velocity = [max(-.8, min(.8, 2*(v-p))) for v, p in zip(dest, self.position)]
+                self.position = [p+v*dt for p, v in zip(self.position, self.velocity)]
             else:
-                dest = [self.target.x, self.target.y, self.target.z]
-                self.velocity = [max(-.8, min(.8, 2*(v-p))) for v, p in zip(dest, self.position)]
-            self.position = [p+v*dt for p, v in zip(self.position, self.velocity)]
-        else:
-            self.velocity = [0., 0., 0.]
+                self.velocity = [0., 0., 0.]
         if now >= self.next_hb:
             self.next_hb = now + .2
             base = ml.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | (ml.MAV_MODE_FLAG_SAFETY_ARMED if self.armed else 0)
@@ -161,6 +168,15 @@ def main():
             '-p', f'bootstrap_takeoff:={str(BOOTSTRAP).lower()}', '-p', 'localization_source:=microvio',
             '-p', 'bootstrap_height_source:=range' if BOOTSTRAP else 'bootstrap_height_source:=local'])
         executor = SingleThreadedExecutor()
+        stop_fcu = threading.Event()
+        fcu_errors = []
+        def serve_fcu():
+            try:
+                while not stop_fcu.wait(.002):
+                    fcu.tick()
+            except BaseException as error:
+                fcu_errors.append(error)
+        fcu_thread = threading.Thread(target=serve_fcu, daemon=True)
         try:
             bridge, micro, adapter, probe = FlightBridge(), Microvio(), EgoOdomAdapter(), Node('mavros_transport_test')
             nodes = [bridge, micro, adapter, probe]
@@ -170,13 +186,20 @@ def main():
             probe.create_subscription(Odometry, '/ego/odom', lambda m:last.__setitem__('odom',m), 10)
             cmd_pub = probe.create_publisher(PositionCommand, '/ego/position_cmd', 10)
             ev_pub = probe.create_publisher(Mavlink, '/uas1/mavlink_sink', qos_profile_sensor_data)
+            fcu_thread.start()
+            next_ego = 0.
 
             def pump(seconds, ego=False):
+                nonlocal next_ego
                 end = time.monotonic()+seconds
                 while time.monotonic() < end:
                     assert process.poll() is None, 'MAVROS exited'
-                    fcu.tick()
-                    if ego and 'odom' in last:
+                    if fcu_errors:
+                        raise fcu_errors[0]
+                    # The fake FCU runs independently of ROS callback load,
+                    # matching a real flight controller's telemetry/timesync.
+                    if ego and 'odom' in last and time.monotonic() >= next_ego:
+                        next_ego = time.monotonic() + .05
                         msg = PositionCommand()
                         msg.header.frame_id = 'odom'
                         msg.header.stamp = probe.get_clock().now().to_msg()
@@ -184,8 +207,7 @@ def main():
                         msg.position = last['odom'].pose.pose.position
                         msg.velocity.x = .3
                         cmd_pub.publish(msg)
-                    for _ in range(4):
-                        executor.spin_once(timeout_sec=.001)
+                    executor.spin_once(timeout_sec=.002)
 
             def until(predicate, timeout, label):
                 end = time.monotonic()+timeout
@@ -242,6 +264,9 @@ def main():
             print(log.read()[-6500:])
             raise
         finally:
+            stop_fcu.set()
+            if fcu_thread.is_alive():
+                fcu_thread.join(timeout=2.)
             for node in nodes:
                 executor.remove_node(node);node.destroy_node()
             executor.shutdown()

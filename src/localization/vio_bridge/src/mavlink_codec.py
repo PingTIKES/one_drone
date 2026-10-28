@@ -4,6 +4,24 @@ from mavros_msgs.msg import Mavlink
 from pymavlink.dialects.v20 import common
 
 
+def frame_identity(serialized):
+    """Peek MAVROS CDR1 metadata before deserializing unrelated telemetry.
+
+    Header contains an 8-byte stamp followed by a CDR string. The eight
+    byte-sized MAVLink fields follow it; msgid is aligned to four bytes.
+    """
+    if len(serialized) < 17 or serialized[:2] not in (b'\x00\x00', b'\x00\x01'):
+        raise ValueError('invalid MAVROS CDR1 header')
+    endian = '<' if serialized[1] == 1 else '>'
+    length = struct.unpack_from(endian+'I', serialized, 12)[0]
+    start = 16+length
+    msgid_offset = (start+8+3) & ~3
+    if length < 1 or msgid_offset+4 > len(serialized):
+        raise ValueError('truncated MAVROS CDR1 metadata')
+    return (serialized[start+6], serialized[start+7],
+            struct.unpack_from(endian+'I', serialized, msgid_offset)[0])
+
+
 def decode_frame(frame):
     if frame.framing_status != Mavlink.FRAMING_OK:
         raise ValueError('invalid MAVLink framing')

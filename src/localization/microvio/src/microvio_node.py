@@ -1,20 +1,18 @@
 """Read PX4 MAVLink odometry aided by MicoVIO. Never sends flight commands."""
 import json
 import math
-import os
 import time
 import uuid
 
-os.environ.setdefault('MAVLINK20', '1')
-from pymavlink import mavutil
 import rclpy
 from rclpy.node import Node
+from rclpy.serialization import deserialize_message
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from mavros_msgs.msg import Mavlink, State, TimesyncStatus
 from mavros_msgs.srv import MessageInterval
-from vio_bridge.mavlink_codec import decode_frame
+from vio_bridge.mavlink_codec import decode_frame, frame_identity
 from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, Header, String
 from tf2_ros import TransformBroadcaster
@@ -36,7 +34,9 @@ class Microvio(Node):
                         heartbeat_timeout=3., odom_timeout=.5, estimator_timeout=1.,
                         timesync_timeout=5., max_timesync_rtt=.1,
                         future_tolerance=.05, reset_hold_time=1., unknown_variance=1000.,
-                        request_streams=True, odometry_rate=30., required_estimator_flags=47,
+                        request_streams=True, odometry_rate=30., mavlink_queue_depth=20,
+                        suppressed_mavlink_message_ids=[30, 105],
+                        required_estimator_flags=47,
                         expected_estimator_type=8, external_vision_reference='local_frd',
                         initial_yaw_zero=True,initial_position_zero=True)
         for name, value in defaults.items():
@@ -48,6 +48,11 @@ class Microvio(Node):
                 raise ValueError(f'{name} must be positive and finite')
         if not 1 <= int(self.p('target_system')) <= 255:
             raise ValueError('target_system must be 1..255')
+        if int(self.p('mavlink_queue_depth')) < 1:
+            raise ValueError('mavlink_queue_depth must be positive')
+        if any(i in (0, 31, 32, 111, 132, 230, 331) or not 0 <= i < 2**24
+               for i in self.p('suppressed_mavlink_message_ids')):
+            raise ValueError('cannot suppress required MAVLink feedback messages')
         if self.p('external_vision_reference') not in ('local_frd', 'ned'):
             raise ValueError('external_vision_reference must be local_frd or ned')
         self.connected = False
@@ -64,6 +69,7 @@ class Microvio(Node):
         self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
         self.reset_at = -math.inf
         self.remote_stamp = self.odom_stamp = self.reset_counter = None
+        self.source_stamp_age = self.range_stamp_age = None
         self.flags = None
         self.quality = None
         self.estimator_type = None
@@ -89,7 +95,12 @@ class Microvio(Node):
         self.tf = TransformBroadcaster(self)
         root = '/' + str(self.p('mavros_ns')).strip('/')
         raw_topic = f'/uas{int(self.p("target_system"))}/mavlink_source'
-        self.create_subscription(Mavlink, raw_topic, self.on_frame, qos_profile_sensor_data)
+        # Keep enough burst capacity for ToF, without accumulating old samples
+        # in a slow ARM executor. Connection health uses MAVROS State instead
+        # of competing with high-rate telemetry for this queue.
+        raw_qos = QoSProfile(depth=int(self.p('mavlink_queue_depth')),
+                             reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.create_subscription(Mavlink, raw_topic, self.on_serialized_frame, raw_qos, raw=True)
         self.create_subscription(State, root + '/state', self.on_mavros_state, latched)
         self.create_subscription(PoseStamped, root + '/local_position/pose', self.on_ground_pose, qos_profile_sensor_data)
         self.create_subscription(TimesyncStatus, root + '/timesync_status', self.on_timesync, qos_profile_sensor_data)
@@ -116,6 +127,8 @@ class Microvio(Node):
             self.reset_event('MAVROS_CONNECTION_LOST')
             self.stream_requested = False
         self.connected = msg.connected
+        if msg.connected:
+            self.heartbeat_at = time.monotonic()
         self.armed = msg.armed
         self.flight_mode = msg.mode
 
@@ -141,9 +154,23 @@ class Microvio(Node):
                 not self.flags & (128 | 2048) and
                 self.flags & self.required_flags() == self.required_flags())
 
+    def on_serialized_frame(self, serialized):
+        # Avoid constructing Python payload arrays for every high-rate FCU
+        # message. Only the three required packet types enter deserialization.
+        try:
+            system, component, message = frame_identity(serialized)
+            if (system != int(self.p('target_system')) or
+                    component != int(self.p('target_component')) or
+                    message not in (132, 230, 331)):
+                return
+            self.on_frame(deserialize_message(serialized, Mavlink))
+        except (ValueError, RuntimeError) as error:
+            self.get_logger().warn(str(error), throttle_duration_sec=2.)
+
     def on_frame(self, frame):
         if (frame.sysid != int(self.p('target_system')) or
-                frame.compid != int(self.p('target_component'))):
+                frame.compid != int(self.p('target_component')) or
+                frame.msgid not in (132, 230, 331)):
             return
         try:
             self.handle_message(decode_frame(frame))
@@ -155,7 +182,11 @@ class Microvio(Node):
                 self.stream_requested or self.interval_pending or
                 not self.interval_client.service_is_ready()):
             return
-        intervals = ((32, 30.), (31, 30.), (331, float(self.p('odometry_rate'))), (230, 5.), (132, 10.))
+        # PX4 USB defaults include redundant 100 Hz Euler attitude and raw IMU.
+        # Disable those streams on this connection before requesting feedback;
+        # the controller consumes ATTITUDE_QUATERNION (31) for body rates.
+        intervals = tuple((i, -1.) for i in self.p('suppressed_mavlink_message_ids')) + (
+            (32, 30.), (31, 30.), (331, float(self.p('odometry_rate'))), (230, 5.), (132, 10.))
         message_id, hz = intervals[self.interval_index]
         self.interval_pending = True
         future = self.interval_client.call_async(MessageInterval.Request(message_id=message_id, message_rate=hz))
@@ -167,6 +198,8 @@ class Microvio(Node):
                     if self.interval_index == len(intervals):
                         self.stream_requested = True
                         self.interval_index = 0
+                    else:
+                        self.request_intervals()
             except Exception as error:
                 self.get_logger().warn(str(error), throttle_duration_sec=2.)
         future.add_done_callback(done)
@@ -174,12 +207,7 @@ class Microvio(Node):
     def handle_message(self, msg):
         kind = msg.get_type()
         now = time.monotonic()
-        if kind == 'HEARTBEAT':
-            if msg.autopilot != mavutil.mavlink.MAV_AUTOPILOT_PX4:
-                return
-            self.heartbeat_at = now
-            self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-        elif kind == 'ESTIMATOR_STATUS':
+        if kind == 'ESTIMATOR_STATUS':
             self.flags, self.estimator_at = int(msg.flags), now
         elif kind == 'ODOMETRY':
             self.on_odometry(msg)
@@ -191,6 +219,7 @@ class Microvio(Node):
                 stamp = self.sync.stamp(int(msg.time_boot_ms) * 1000)
             except ValueError:
                 return
+            self.range_stamp_age = (self.get_clock().now().nanoseconds-stamp)*1e-9
             out = Range()
             out.header.frame_id = str(self.p('range_frame'))
             out.header.stamp.sec, out.header.stamp.nanosec = divmod(stamp, 1000000000)
@@ -226,6 +255,7 @@ class Microvio(Node):
                 raise ValueError('ODOMETRY_FAILED')
             stamp = self.sync.stamp(raw)
             age = (self.get_clock().now().nanoseconds - stamp) * 1e-9
+            self.source_stamp_age = age
             if not -float(self.p('future_tolerance')) <= age <= float(self.p('odom_timeout')):
                 raise ValueError('STALE_OR_FUTURE_SOURCE_STAMP')
             pose = convert(msg, float(self.p('unknown_variance')))
@@ -345,6 +375,8 @@ class Microvio(Node):
                     global_attitude_flag=None if self.flags is None else bool(self.flags & 1),
                     missing_estimator_flags=None if self.flags is None else self.required_flags() & ~self.flags,
                     odom_age=age(self.odom_at), heartbeat_age=age(self.heartbeat_at),
+                    source_stamp_age=(None if self.source_stamp_age is None else round(self.source_stamp_age, 4)),
+                    range_stamp_age=(None if self.range_stamp_age is None else round(self.range_stamp_age, 4)),
                     timesync_age=age(self.sync.last_reply_at), offset_ns=self.sync.offset_ns,
                     received_odometry=self.received_count, published_odometry=self.published_count,
                     average_output_hz=round(self.published_count / max(.001, now-self.started_at), 2),

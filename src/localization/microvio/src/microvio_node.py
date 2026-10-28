@@ -3,6 +3,7 @@ import json
 import math
 import time
 import uuid
+from copy import deepcopy
 
 import rclpy
 from rclpy.node import Node
@@ -10,7 +11,7 @@ from rclpy.serialization import deserialize_message
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry
-from mavros_msgs.msg import Mavlink, State, TimesyncStatus
+from mavros_msgs.msg import Mavlink, State, TimesyncStatus, Altitude
 from mavros_msgs.srv import MessageInterval
 from vio_bridge.mavlink_codec import decode_frame, frame_identity
 from sensor_msgs.msg import Range
@@ -50,7 +51,7 @@ class Microvio(Node):
             raise ValueError('target_system must be 1..255')
         if int(self.p('mavlink_queue_depth')) < 1:
             raise ValueError('mavlink_queue_depth must be positive')
-        if any(i in (0, 31, 32, 111, 132, 230, 331) or not 0 <= i < 2**24
+        if any(i in (0, 31, 32, 111, 132, 141, 230, 331) or not 0 <= i < 2**24
                for i in self.p('suppressed_mavlink_message_ids')):
             raise ValueError('cannot suppress required MAVLink feedback messages')
         if self.p('external_vision_reference') not in ('local_frd', 'ned'):
@@ -66,6 +67,8 @@ class Microvio(Node):
         self.ground_z = None
         self.range_distance = self.ground_range = None
         self.range_at = -math.inf
+        self.barometer_ground = self.barometer_height = None
+        self.barometer_at = -math.inf
         self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
         self.reset_at = -math.inf
         self.remote_stamp = self.odom_stamp = self.reset_counter = None
@@ -95,15 +98,18 @@ class Microvio(Node):
         self.tf = TransformBroadcaster(self)
         root = '/' + str(self.p('mavros_ns')).strip('/')
         raw_topic = f'/uas{int(self.p("target_system"))}/mavlink_source'
-        # Keep enough burst capacity for ToF, without accumulating old samples
-        # in a slow ARM executor. Connection health uses MAVROS State instead
-        # of competing with high-rate telemetry for this queue.
+        # Connection and ToF use dedicated MAVROS topics, so infrequent
+        # feedback does not compete with high-rate raw telemetry here.
         raw_qos = QoSProfile(depth=int(self.p('mavlink_queue_depth')),
                              reliability=ReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(Mavlink, raw_topic, self.on_serialized_frame, raw_qos, raw=True)
         self.create_subscription(State, root + '/state', self.on_mavros_state, latched)
         self.create_subscription(PoseStamped, root + '/local_position/pose', self.on_ground_pose, qos_profile_sensor_data)
         self.create_subscription(TimesyncStatus, root + '/timesync_status', self.on_timesync, qos_profile_sensor_data)
+        self.create_subscription(Range, root + '/distance_sensor/downward', self.on_mavros_range,
+                                 QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.create_subscription(Altitude, root + '/altitude', self.on_altitude,
+                                 QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.interval_client = self.create_client(MessageInterval, root + '/set_message_interval')
         self.create_timer(1., self.request_intervals)
         self.create_timer(.1, self.publish_health)
@@ -156,12 +162,12 @@ class Microvio(Node):
 
     def on_serialized_frame(self, serialized):
         # Avoid constructing Python payload arrays for every high-rate FCU
-        # message. Only the three required packet types enter deserialization.
+        # message. Only odometry and estimator status enter deserialization.
         try:
             system, component, message = frame_identity(serialized)
             if (system != int(self.p('target_system')) or
                     component != int(self.p('target_component')) or
-                    message not in (132, 230, 331)):
+                    message not in (230, 331)):
                 return
             self.on_frame(deserialize_message(serialized, Mavlink))
         except (ValueError, RuntimeError) as error:
@@ -170,7 +176,7 @@ class Microvio(Node):
     def on_frame(self, frame):
         if (frame.sysid != int(self.p('target_system')) or
                 frame.compid != int(self.p('target_component')) or
-                frame.msgid not in (132, 230, 331)):
+                frame.msgid not in (230, 331)):
             return
         try:
             self.handle_message(decode_frame(frame))
@@ -186,7 +192,8 @@ class Microvio(Node):
         # Disable those streams on this connection before requesting feedback;
         # the controller consumes ATTITUDE_QUATERNION (31) for body rates.
         intervals = tuple((i, -1.) for i in self.p('suppressed_mavlink_message_ids')) + (
-            (32, 30.), (31, 30.), (331, float(self.p('odometry_rate'))), (230, 5.), (132, 10.))
+            (32, 30.), (31, 30.), (331, float(self.p('odometry_rate'))),
+            (230, 5.), (132, 10.), (141, 20.))
         message_id, hz = intervals[self.interval_index]
         self.interval_pending = True
         future = self.interval_client.call_async(MessageInterval.Request(message_id=message_id, message_rate=hz))
@@ -211,25 +218,29 @@ class Microvio(Node):
             self.flags, self.estimator_at = int(msg.flags), now
         elif kind == 'ODOMETRY':
             self.on_odometry(msg)
-        elif kind == 'DISTANCE_SENSOR' and msg.orientation == 25:
-            distance = msg.current_distance * .01
-            if not msg.min_distance <= msg.current_distance <= msg.max_distance:
-                return
-            try:
-                stamp = self.sync.stamp(int(msg.time_boot_ms) * 1000)
-            except ValueError:
-                return
-            self.range_stamp_age = (self.get_clock().now().nanoseconds-stamp)*1e-9
-            out = Range()
-            out.header.frame_id = str(self.p('range_frame'))
-            out.header.stamp.sec, out.header.stamp.nanosec = divmod(stamp, 1000000000)
-            out.radiation_type = Range.INFRARED
-            out.min_range, out.max_range = msg.min_distance * .01, msg.max_distance * .01
-            out.range = distance
-            self.range_distance, self.range_at = distance, now
-            if not self.armed:
-                self.ground_range = distance
-            self.range_pub.publish(out)
+
+    def on_mavros_range(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.range_stamp_age = self.get_clock().now().nanoseconds * 1e-9 - stamp
+        if (not -float(self.p('future_tolerance')) <= self.range_stamp_age <= float(self.p('odom_timeout')) or
+                not all(math.isfinite(v) for v in (msg.range, msg.min_range, msg.max_range)) or
+                not 0 <= msg.min_range <= msg.range <= msg.max_range):
+            return
+        out = deepcopy(msg)
+        out.header.frame_id = str(self.p('range_frame'))
+        self.range_distance, self.range_at = float(msg.range), time.monotonic()
+        if not self.armed:
+            self.ground_range = self.range_distance
+        self.range_pub.publish(out)
+
+    def on_altitude(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        age = self.get_clock().now().nanoseconds * 1e-9 - stamp
+        if not -float(self.p('future_tolerance')) <= age <= float(self.p('odom_timeout')) or not math.isfinite(msg.monotonic):
+            return
+        self.barometer_height, self.barometer_at = float(msg.monotonic), time.monotonic()
+        if not self.armed:
+            self.barometer_ground = self.barometer_height
 
     def on_odometry(self, msg):
         self.received_count += 1
@@ -268,12 +279,20 @@ class Microvio(Node):
                         alignment = self.provisional_alignment
                     else:
                         alignment.apply(pose['position'], rotation(pose['quaternion']), pose['pose_covariance'])
-                        if self.p('initial_position_zero') and self.ground_z is not None:
-                            alignment.initial_position[2] = self.ground_z
+                        if self.p('initial_position_zero'):
+                            if self.ground_z is not None:
+                                alignment.initial_position[2] = self.ground_z
                             if (self.armed and self.ground_range is not None and
                                     time.monotonic() - self.range_at <= float(self.p('odom_timeout'))):
                                 tilt_cos = rotation(pose['quaternion'])[2, 2]
                                 height = self.range_distance * tilt_cos - self.ground_range
+                                alignment.initial_position[2] = pose['position'][2] - height
+                            elif (self.armed and self.barometer_ground is not None and
+                                  time.monotonic() - self.barometer_at <= float(self.p('odom_timeout'))):
+                                # Module ToF may only become usable after liftoff.
+                                # Preserve height through the first EV/EKF reset
+                                # using the FCU's independent ground barometer.
+                                height = self.barometer_height - self.barometer_ground
                                 alignment.initial_position[2] = pose['position'][2] - height
                         if self.published_count:
                             self.reset_event('AIRBORNE_ORIGIN_INITIALIZED')

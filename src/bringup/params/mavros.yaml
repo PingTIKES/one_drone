@@ -1,7 +1,7 @@
 # MAVROS 独占飞控串口。禁止再由 microvio 或 QGroundControl 打开同一设备。
 /**:
   ros__parameters:
-    plugin_allowlist: [sys_status, sys_time, command, imu, local_position, setpoint_raw]
+    plugin_allowlist: [sys_status, sys_time, command, imu, local_position, setpoint_raw, distance_sensor, altitude]
     startup_px4_usb_quirk: false
 /**/sys:
   ros__parameters:
@@ -24,3 +24,14 @@
 /**/setpoint_raw:
   ros__parameters:
     thrust_scaling: 1.0 # 姿态起飞使用归一化推力；缺少此参数 MAVROS 会丢弃非零推力
+/**/distance_sensor:
+  ros__parameters:
+    # PX4 将第一路测距传感器作为 id=0 输出；下视必须为 PITCH_270。
+    # 使用 C++ 插件直接解码，避免 ToF 在混合原始遥测队列中丢失。
+    config: |
+      ~/downward:
+        id: 0
+        frame_id: microvio_range
+        orientation: PITCH_270
+        field_of_view: 0.0
+        send_tf: false

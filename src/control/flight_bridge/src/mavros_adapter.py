@@ -36,10 +36,11 @@ class MavrosAdapter:
             node.create_timer(1., self.request_feedback)
 
     def request_feedback(self):
-        if (self.interval_index >= 3 or
+        intervals = ((32, 30.), (31, 30.), (230, 5.), (141, 20.))
+        if (self.interval_index >= len(intervals) or
                 self.interval_pending or not self.interval_client.service_is_ready()):
             return
-        message_id, rate = ((32, 30.), (31, 30.), (230, 5.))[self.interval_index]
+        message_id, rate = intervals[self.interval_index]
         self.interval_pending = True
         future = self.interval_client.call_async(MessageInterval.Request(message_id=message_id, message_rate=rate))
         def done(result):

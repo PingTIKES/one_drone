@@ -12,7 +12,7 @@ startup:
 
 hardware:
   bootstrap_takeoff: true # 下视 MicoVIO：无水平 odom 时姿态/高度反馈起飞，空中初始化后接管导航
-  bootstrap_height_source: range # MicoVIO 下视 ToF 离地高度，避免 VIO 初始化时 EKF 高度原点变化；须能收到有效测距
+  bootstrap_height_source: barometer # 离地阶段用飞控自身气压高度，不等待微空模组的 VIO/ToF；空中定位有效后接管悬停
   bootstrap_hover_thrust: 0.5 # 真机归一化悬停推力：上桨前按本机实测/PX4 参数核对，当前为待核实初值
   bootstrap_max_thrust: 0.7 # 真机姿态起飞推力上限，须高于本机悬停推力
   localization_source: microvio # microvio 订阅 MAVROS 转发的定位；openvins 使用双目和 IMU

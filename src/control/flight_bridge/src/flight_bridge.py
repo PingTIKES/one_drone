@@ -14,7 +14,7 @@ from std_msgs.msg import Bool, String, Header
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from sensor_msgs.msg import Imu, Range
-from mavros_msgs.msg import State, EstimatorStatus
+from mavros_msgs.msg import State, EstimatorStatus, Altitude
 
 from flight_bridge.mavros_adapter import MavrosAdapter, LocalPosition, wrap
 from flight_bridge.trajectory_controller import TrajectoryController
@@ -60,8 +60,8 @@ class FlightBridge(Node):
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         self.p = lambda key: self.get_parameter(key).value
-        if self.p('bootstrap_height_source') not in ('local', 'range'):
-            raise ValueError('bootstrap_height_source must be local or range')
+        if self.p('bootstrap_height_source') not in ('local', 'range', 'barometer'):
+            raise ValueError('bootstrap_height_source must be local, range or barometer')
         for key in ('takeoff_altitude', 'bootstrap_height', 'bootstrap_timeout', 'arming_timeout',
                     'bootstrap_height_margin', 'bootstrap_max_tilt_deg', 'estimator_timeout'):
             if not math.isfinite(float(self.p(key))) or float(self.p(key)) <= 0:
@@ -109,6 +109,8 @@ class FlightBridge(Node):
         self.height_z = self.vertical_speed = self.attitude_yaw = self.attitude_tilt = math.nan
         self.range_height = math.nan
         self.range_at = -math.inf
+        self.barometer_height = math.nan
+        self.barometer_at = -math.inf
         self.attitude_stamp = None
         self.localization_ready = False
         self.localization_ready_at = -math.inf
@@ -159,6 +161,7 @@ class FlightBridge(Node):
         self.create_subscription(EstimatorStatus, mavros + '/estimator_status', self.on_estimator, qos)
         self.create_subscription(TwistStamped, mavros + '/local_position/velocity_local', self.on_velocity, qos)
         self.create_subscription(Imu, mavros + '/imu/data', self.on_attitude, qos)
+        self.create_subscription(Altitude, mavros + '/altitude', self.on_altitude, qos)
         self.create_subscription(Range, '/microvio/range', self.on_range, 1)
         self.create_subscription(Bool, '/microvio/navigation_ready', self.on_localization_ready, 10)
         self.create_subscription(PositionCommand, '/ego/position_cmd', self.on_position_command, 1)
@@ -187,10 +190,12 @@ class FlightBridge(Node):
 
     def publish_safety_status(self):
         feedback = ' '.join(f'{name}_age={self.now()-getattr(self, name+"_at"):.3f}s'
-                            for name in ('range', 'velocity', 'attitude', 'estimator'))
+                            for name in ('barometer', 'range', 'velocity', 'attitude', 'estimator'))
         self.safety_pub.publish(String(
             data=f'state={self.state} offboard={self.offboard_active()} '
+                 f'bootstrap_height_source={self.p("bootstrap_height_source")} '
                  f'armed={self.status is not None and self.status.armed} {feedback} '
+                 f'bootstrap_feedback={self.bootstrap_feedback_problem() or "OK"} '
                  f'navigation_ready={self.navigation_ready} '
                  f'max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
                  f'command_clamped={self.command_clamped} '
@@ -251,7 +256,7 @@ class FlightBridge(Node):
                     # EV initialization may rename PX4 yaw axes. Shift the
                     # reference with that jump instead of rotating the craft.
                     # ENU yaw and the internal NED heading have opposite signs.
-                    if self.bootstrap is not None:
+                    if self.bootstrap is not None and self.bootstrap_yaw is not None:
                         self.bootstrap_yaw = wrap(self.bootstrap_yaw + jump)
                     if self.initial_heading is not None:
                         self.initial_heading = wrap(self.initial_heading - jump)
@@ -273,18 +278,48 @@ class FlightBridge(Node):
             self.range_at = self.now()
 
     def bootstrap_height_measurement(self):
-        return self.range_height if self.p('bootstrap_height_source') == 'range' else self.height_z
+        return {'range': self.range_height, 'barometer': self.barometer_height,
+                'local': self.height_z}[self.p('bootstrap_height_source')]
+
+    def on_altitude(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if (-.05 <= self.now() - stamp <= float(self.p('pose_timeout')) and
+                math.isfinite(msg.monotonic)):
+            # PX4 ALTITUDE.monotonic comes from its own barometer, independent
+            # of external-vision/ToF initialization and EKF origin resets.
+            self.barometer_height, self.barometer_at = float(msg.monotonic), self.now()
+
+    def bootstrap_feedback_problem(self):
+        e = self.estimator
+        if e is None:
+            return 'WAIT_ESTIMATOR_STATUS'
+        if not 0 <= self.now() - self.estimator_at <= float(self.p('estimator_timeout')):
+            return 'ESTIMATOR_STATUS_STALE'
+        if e.accel_error_status_flag:
+            return 'ESTIMATOR_ACCEL_ERROR'
+        if not e.velocity_vert_status_flag:
+            return 'VERTICAL_VELOCITY_NOT_VALID'
+        if not (e.pos_vert_abs_status_flag or e.pos_vert_agl_status_flag):
+            return 'VERTICAL_HEIGHT_NOT_VALID'
+        source = self.p('bootstrap_height_source')
+        height = 'vertical' if source == 'local' else source
+        for name in (height, 'velocity', 'attitude'):
+            age = self.now() - getattr(self, name + '_at')
+            if not 0 <= age <= float(self.p('pose_timeout')):
+                return f'{name.upper()}_STALE(age={age:.3f}s)'
+        if not math.isfinite(self.attitude_tilt):
+            return 'ATTITUDE_TILT_INVALID'
+        if self.attitude_tilt > math.radians(float(self.p('bootstrap_max_tilt_deg'))):
+            return f'TILT_LIMIT({math.degrees(self.attitude_tilt):.1f}deg)'
+        return ''
 
     def bootstrap_feedback_valid(self):
-        e = self.estimator
-        return (e is not None and e.velocity_vert_status_flag and
-                (e.pos_vert_abs_status_flag or e.pos_vert_agl_status_flag) and
-                not e.accel_error_status_flag and
-                0 <= self.now() - self.estimator_at <= float(self.p('estimator_timeout')) and
-                all(0 <= self.now() - t <= float(self.p('pose_timeout'))
-                    for t in (self.range_at if self.p('bootstrap_height_source') == 'range' else self.vertical_at,
-                              self.velocity_at, self.attitude_at)) and
-                self.attitude_tilt <= math.radians(float(self.p('bootstrap_max_tilt_deg'))))
+        return not self.bootstrap_feedback_problem()
+
+    def latch_bootstrap_reference(self):
+        self.bootstrap_ground_z = self.bootstrap_height_measurement()
+        self.bootstrap_yaw = self.attitude_yaw
+        self.initial_heading = wrap(math.pi/2 - self.bootstrap_yaw)
 
     def navigation_odometry_ready(self):
         if self.p('bootstrap_takeoff') and self.p('localization_source') == 'microvio' and not (
@@ -372,10 +407,7 @@ class FlightBridge(Node):
             missing.append('fresh connected MAVROS state')
         elif self.status.armed:
             missing.append('vehicle already armed')
-        if self.p('bootstrap_takeoff'):
-            if not self.bootstrap_feedback_valid():
-                missing.append('fresh attitude and vertical height/velocity feedback (horizontal odom not required)')
-        elif not self.pose_valid():
+        if not self.p('bootstrap_takeoff') and not self.pose_valid():
             missing.append('fresh PX4 local position')
         response.success = not missing
         response.message = ('Starting PX4 Offboard takeoff' if response.success else
@@ -391,15 +423,18 @@ class FlightBridge(Node):
                     'bootstrap_hover_thrust', 'bootstrap_min_thrust', 'bootstrap_max_thrust',
                     'bootstrap_height_gain', 'bootstrap_velocity_gain', 'bootstrap_integral_gain',
                     'bootstrap_climb_speed', 'bootstrap_thrust_slew')])
-                self.bootstrap_ground_z = self.bootstrap_height_measurement()
-                self.bootstrap_yaw = self.attitude_yaw
-                self.initial_heading = wrap(math.pi/2 - self.bootstrap_yaw)
+                self.bootstrap_ground_z = self.bootstrap_yaw = None
+                if self.bootstrap_feedback_valid():
+                    self.latch_bootstrap_reference()
                 self.bootstrap_started = None
                 self.bootstrap_ready_since = None
                 self.bootstrap_last_tick = self.now()
                 self.prestream_count = 0
                 self.state = 'BOOTSTRAP_PRESTREAM'
-                response.message = 'Starting attitude takeoff; navigation waits for airborne odometry'
+                problem = self.bootstrap_feedback_problem()
+                response.message = ('Takeoff accepted; waiting for bootstrap feedback: ' + problem
+                                    if problem else
+                                    'Starting attitude takeoff; navigation waits for airborne odometry')
                 return response
             p = self.position
             self.latch_heading()
@@ -410,7 +445,12 @@ class FlightBridge(Node):
         return response
 
     def land(self, _request, response):
-        response.success = self.state in ('TAKEOFF', 'CRUISE', 'HOLD', 'BOOTSTRAP_TAKEOFF')
+        if self.takeoff_pending and self.status is not None and not self.status.armed:
+            self.abort_takeoff('TAKEOFF_CANCELLED_BEFORE_ARMING')
+            response.success, response.message = True, 'Pending takeoff cancelled'
+            return response
+        response.success = self.state in ('TAKEOFF', 'CRUISE', 'HOLD', 'BOOTSTRAP_TAKEOFF',
+                                         'BOOTSTRAP_PRESTREAM', 'PRESTREAM', 'ARMING')
         response.message = 'Land commanded' if response.success else 'Not airborne in this controller'
         if response.success:
             self.px4_adapter.set_mode('AUTO.LAND')
@@ -677,12 +717,17 @@ class FlightBridge(Node):
             else:
                 # Before arming, a transient telemetry gap can be waited out
                 # safely at zero thrust. The arming timeout still applies.
-                self.px4_adapter.attitude(self.bootstrap_yaw, 0.)
+                if self.bootstrap_yaw is None:
+                    self.standby_setpoint()
+                else:
+                    self.px4_adapter.attitude(self.bootstrap_yaw, 0.)
                 self.prestream_count = 0
-                self.get_logger().warn('Waiting for bootstrap feedback before arming',
+                self.get_logger().warn('Waiting for bootstrap feedback: ' + self.bootstrap_feedback_problem(),
                                        throttle_duration_sec=2.)
             return
         if self.bootstrap_started is None:
+            if self.bootstrap_ground_z is None:
+                self.latch_bootstrap_reference()
             # Zero thrust while waiting for actual mode + arm confirmation.
             self.px4_adapter.attitude(self.bootstrap_yaw, 0.)
             self.prestream_count += 1

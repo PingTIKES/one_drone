@@ -19,7 +19,7 @@ ros2 launch bringup startup.launch.py
 - PX4 的世界 NED 转换为项目采用的 NWU：`[x, y, z] → [x, -y, -z]`；机体 FRD 转为 FLU。NWU 与常见 ENU 不同。
 - 默认 `initial_yaw_zero: true`、`initial_position_zero: true`：水平定位有效后锁定初始机头方向和 XY 原点；空中初始化时保留相对地面的高度，优先采用下视测距记录离地高度。地面恒定位置状态只发布临时坐标供观察，不会锁死正式导航原点。临时坐标切换到正式坐标时发布一次重置事件，清除旧地图、轨迹和目标。后续源重置不重新归零。世界姿态/协方差使用固定旋转，机体系速度保持不变。
 - 使用 MAVROS TimesyncStatus 提供的电脑与飞控时钟差，使用原始 ODOMETRY 的采样时刻；未同步、过期、重复、倒退的样本不生成新里程计或 TF。
-- 原始遥测队列默认 20 帧，只解码估计器状态、里程计和测距；连接心跳独立使用 MAVROS State，避免被高频遥测挤掉。默认通过 MAVROS 在当前连接停发报文 30、105，保留报文 31 提供姿态与角速度，减少 RK3566 的串口遥测解析积压；`suppressed_mavlink_message_ids: []` 可保留全部遥测。此设置不写入持久飞控参数。
+- 原始遥测队列默认 20 帧，只解码估计器状态和里程计；连接心跳使用 MAVROS State，下视 ToF 使用 MAVROS C++ `distance_sensor` 插件的独立话题 `/mavros/distance_sensor/downward`，避免在高频原始遥测中丢包。传感器 id、朝向和 frame 在 `bringup/params/mavros.yaml` 中配置，默认 id=0、PITCH_270，不发布安装 TF。默认通过 MAVROS 在当前连接停发报文 30、105，保留报文 31 提供姿态与角速度；`suppressed_mavlink_message_ids: []` 可保留全部遥测。此设置不写入持久飞控参数。
 - `reset_counter` 变化、源时钟重启或串口异常会产生重置事件。总启动已将该事件接到 `/vio_reset_event`，供现有清地图、清轨迹和旧目标的流程使用。
 - `quality=0` 表示未知，不等于质量差；`quality=-1` 才表示失败。PX4 融合 ODOMETRY 的质量字段可能为 0，不能将其误当成模组原始质量。
 - MicoVIO 原始数据使用任意初始航向的 LOCAL_FRD，PX4 1.17.0 接受此航向后会主动将 `cs_yaw_align` 置为 false。这个标志不是本模式的初始化完成条件，也不要求旋转机体或与真北对齐。配置 `external_vision_reference: local_frd` 对应此模式；真正提供 NED 参考的设备才使用 `ned`。不要仅根据飞控融合输出的 frame_id 判断模组原始参考系。
@@ -27,6 +27,7 @@ ros2 launch bringup startup.launch.py
 - 通过坐标、数值和采样时间检查的遥测仍会发布；恒定位置模式、未知协方差等原因如实反映在健康诊断中。`/microvio/navigation_ready` 周期发布正式原点和水平辅助是否就绪，过期样本不能使该状态保持为 true。
 - PX4 常用 NaN 表示未知交叉协方差；目前输出对角近似，未知对角项使用配置的保守方差，而非填零。
 - `/microvio/range` 转发下视测距，单位 m；飞行桥可将其用于离地初始化阶段的高度反馈。没有发布猜测的测距传感器安装 TF。
+- 真机默认用飞控独立气压高度离地，不等待本模组的 VIO/ToF。模组从空中才开始输出时，初始 Z 优先由地面/空中的有效 ToF 差值保留；地面没有 ToF 数据时使用飞控气压高度差，避免将第一次空中定位错误归零为地面。
 
 节点只通过 MAVROS 请求遥测频率，不发送解锁、切模式、起飞、设定值、参数写入或 VIO 回灌。
 

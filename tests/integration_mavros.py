@@ -145,7 +145,9 @@ class FakeFCU:
             self.mav.attitude_quaternion_send(ns//1000000, 1., 0., 0., 0., 0., 0., 0.)
             self.mav.local_position_ned_send(ns//1000000, *self.position, *self.velocity)
             aided = not BOOTSTRAP or self.position[2] < -.45
-            self.mav.distance_sensor_send(ns//1000000, 2, 1200, int((.07-self.position[2])*100), 0, 0, 25, 0)
+            self.mav.altitude_send(ns//1000, 100.-self.position[2], 100.-self.position[2],
+                                   -self.position[2], -self.position[2], math.nan, math.nan)
+            if aided:self.mav.distance_sensor_send(ns//1000000, 2, 1200, int((.07-self.position[2])*100), 0, 0, 25, 0)
             self.mav.estimator_status_send(ns//1000, 47 if aided else 165, 0., 0., 0., 0., 0., 0., .01, .01)
             if aided:self.mav.odometry_send(ns//1000, 1, 1, *self.position, [1., 0., 0., 0.],
                                   *self.velocity, 0., 0., 0., self.cov, self.cov,
@@ -166,7 +168,7 @@ def main():
         nodes = []
         rclpy.init(args=['--ros-args', '-p', 'mavros_ns:=/mavros', '-p', 'odom_topic:=/odom', '-p', 'odom_frame:=odom', '-p', 'body_frame:=base_link',
             '-p', f'bootstrap_takeoff:={str(BOOTSTRAP).lower()}', '-p', 'localization_source:=microvio',
-            '-p', 'bootstrap_height_source:=range' if BOOTSTRAP else 'bootstrap_height_source:=local'])
+            '-p', 'bootstrap_height_source:=barometer' if BOOTSTRAP else 'bootstrap_height_source:=local'])
         executor = SingleThreadedExecutor()
         stop_fcu = threading.Event()
         fcu_errors = []
@@ -218,8 +220,8 @@ def main():
             until(lambda:(bridge.bootstrap_feedback_valid() and bridge.status is not None and bridge.status.connected) if BOOTSTRAP else
                   bridge.pose_valid() and micro.published_count > 15 and 'odom' in last, 20., 'telemetry connection')
             if BOOTSTRAP:
-                assert micro.published_count == 0 and bridge.ego_odom is None
-                print('PASS connected vertical/attitude/ToF feedback with NO navigation odometry', flush=True)
+                assert micro.published_count == 0 and bridge.ego_odom is None and micro.range_distance is None
+                print('PASS FCU barometer/vertical/attitude feedback with NO module odometry or ToF', flush=True)
             assert not fcu.control_commands, 'Standby must not arm or switch mode'
             assert abs(bridge.position.heading) < .01
             client = probe.create_client(Trigger, '/takeoff')

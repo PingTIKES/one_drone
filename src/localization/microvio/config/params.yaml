@@ -4,7 +4,7 @@ microvio:
     mavros_ns: /mavros # MAVROS 独占串口；本节点只订阅遥测，不打开串口
     target_system: 1 # 目标 PX4 MAV_SYS_ID，过滤其他系统的数据
     target_component: 1 # 飞控组件号，拒绝其他组件的原始/转发里程计混入
-    mavlink_queue_depth: 20 # 原始遥测突发队列；过大会在 ARM 上积压旧样本，过小易丢测距；连接心跳独立使用 MAVROS State
+    mavlink_queue_depth: 20 # 原始里程计/估计器遥测队列；过大会在 ARM 上积压旧样本；心跳、ToF 使用 MAVROS 独立话题
     suppressed_mavlink_message_ids: [30, 105] # 在当前连接停发冗余欧拉姿态/原始 IMU 遥测，降低 RK3566 解析负载；姿态及角速度使用报文 31；空列表保留全部流
     odom_topic: /microvio/odom # 台架默认独立话题，不覆盖 OpenVINS /odom
     health_topic: /microvio/health # 遥测/估计器健康；不能当成模组独立跟踪质量

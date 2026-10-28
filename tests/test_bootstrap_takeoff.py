@@ -96,10 +96,53 @@ def test_no_odom_takeoff_handoff_and_decision_readiness(bridge):
 def test_no_vertical_feedback_is_not_blind_thrust(bridge):
     n, _, _ = bridge
     n.velocity_at = -math.inf
-    assert not n.takeoff(Trigger.Request(), Trigger.Response()).success
+    response = n.takeoff(Trigger.Request(), Trigger.Response())
+    assert response.success and 'VELOCITY_STALE' in response.message
+    n.tick()
+    assert n.state == 'BOOTSTRAP_PRESTREAM' and n.bootstrap_ground_z is None
     n.px4_adapter.attitude.assert_not_called()
     n.px4_adapter.arm.assert_not_called()
     n.px4_adapter.set_mode.assert_not_called()
+
+
+def test_waiting_takeoff_latches_only_fresh_ground_reference(bridge):
+    n, clock, feedback = bridge
+    n.attitude_at = -math.inf
+    assert n.takeoff(Trigger.Request(), Trigger.Response()).success
+    n.tick()
+    n.px4_adapter.arm.assert_not_called()
+    clock[0] += .1
+    feedback(3.)
+    n.tick()
+    assert n.bootstrap_ground_z == 3.
+    assert math.isfinite(n.bootstrap_yaw)
+    assert n.prestream_count == 1
+    n.px4_adapter.attitude.assert_called_with(n.bootstrap_yaw, 0.)
+    n.px4_adapter.arm.assert_not_called()
+
+
+def test_pending_takeoff_can_be_cancelled_before_arming(bridge):
+    n, _, _ = bridge
+    n.velocity_at = -math.inf
+    assert n.takeoff(Trigger.Request(), Trigger.Response()).success
+    assert n.land(Trigger.Request(), Trigger.Response()).success
+    assert n.state == 'IDLE' and n.bootstrap is None and not n.takeoff_pending
+    n.tick()
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
+
+
+def test_fcu_barometer_takeoff_needs_no_module_odom_or_tof(bridge):
+    from mavros_msgs.msg import Altitude
+    n, _, _ = bridge
+    n.set_parameters([Parameter('bootstrap_height_source', value='barometer')])
+    msg = Altitude(monotonic=100.)
+    msg.header.stamp.sec = 100
+    n.on_altitude(msg)
+    assert n.ego_odom is None and not n.localization_ready and not math.isfinite(n.range_at)
+    assert n.bootstrap_feedback_valid()
+    start_airborne(n)
+    assert n.bootstrap_ground_z == 100.
 
 
 def test_prearm_feedback_gap_waits_at_zero_thrust_then_restarts_prestream(bridge):

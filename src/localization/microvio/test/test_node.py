@@ -116,6 +116,40 @@ def test_mavros_timesync_rejects_high_latency_and_clears_on_disconnect(node):
     assert node.reset_index == 1
 
 
+def test_dedicated_mavros_tof_rejects_stale_and_invalid_samples(node):
+    from sensor_msgs.msg import Range
+    node.range_pub = Mock()
+    msg = Range(min_range=.02, max_range=12., range=.04)
+    msg.header.stamp = node.get_clock().now().to_msg()
+    node.on_mavros_range(msg)
+    assert node.range_distance == pytest.approx(.04)
+    assert node.ground_range == pytest.approx(.04)
+    assert node.range_pub.publish.call_count == 1
+    # A fresh ROS arrival cannot turn an old sample into fresh height feedback.
+    msg.header.stamp.sec -= 2
+    node.on_mavros_range(msg)
+    msg.header.stamp = node.get_clock().now().to_msg()
+    msg.range = float('nan')
+    node.on_mavros_range(msg)
+    assert node.range_pub.publish.call_count == 1
+
+
+def test_first_airborne_module_sample_preserves_fcu_baro_height(node):
+    from mavros_msgs.msg import Altitude
+    node.odom_pub = Mock()
+    altitude = Altitude(monotonic=100.)
+    altitude.header.stamp = node.get_clock().now().to_msg()
+    node.on_altitude(altitude)
+    assert node.ground_z is None and node.ground_range is None
+    node.armed = True
+    altitude.monotonic = 100.7
+    node.on_altitude(altitude)
+    # The first EV sample resets PX4 Z to zero after physical liftoff.
+    node.on_odometry(packet(z=0.))
+    out = node.odom_pub.publish.call_args.args[0]
+    assert out.pose.pose.position.z == pytest.approx(.7, abs=1e-5)
+
+
 def test_initial_heading_zero_does_not_freeze_later_body_turns(node):
     import numpy as np
     from microvio.geometry import rotation

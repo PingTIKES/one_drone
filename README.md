@@ -363,20 +363,20 @@ startup:
 hardware:
   localization_source: microvio
   bootstrap_takeoff: true
-  bootstrap_height_source: range
+  bootstrap_height_source: barometer
 ```
 
 启动算法后只需调用上述 `/takeoff`，无需再拨遥控器执行起飞或切模式：
 
-1. 等待 MAVROS 连接、姿态、垂直速度、垂直估计状态与下视 ToF 有效；**不要求水平 odom、地图或深度相机**。
+1. MAVROS 已连接且未解锁时接受起飞请求；等待飞控自身的姿态、气压高度、垂直速度与垂直估计状态，**不等待模组的 VIO/ToF，不要求水平 odom、地图或深度相机**。
 2. `BOOTSTRAP_PRESTREAM`：连续发送姿态设定值，确认 PX4 已进入 OFFBOARD 后请求解锁；未确认解锁不增加推力。
-3. `BOOTSTRAP_TAKEOFF`：保持起飞航向和水平姿态，按 ToF 高度与垂直速度闭环升到 `bootstrap_height`（默认 0.7 m），等待下视定位建立。
+3. `BOOTSTRAP_TAKEOFF`：保持起飞航向和水平姿态，用 PX4 `ALTITUDE.monotonic` 独立气压高度与垂直速度闭环升到 `bootstrap_height`（默认 0.7 m），等待下视定位建立。这个气压高度不随 VIO 的坐标原点重置而跳变。
 4. 水平定位与 odom 有效后，切换位置控制，继续升到相对地面的 `takeoff_altitude`（默认 1.5 m）。不会在初始化高度上再额外升 1.5 m。
 5. 到高稳定后 `/flight_navigation_ready` 变为 true，decision 自动选择 `decision_1` 并开始发航点。
 
 PX4 在第 2 步已进入**姿态控制 OFFBOARD**，第 4 步才是**位置/速度导航接管**，两者属于同一个飞行模式。姿态起飞阶段没有水平定点能力，只用于短距离离地初始化。超时、超高、垂直反馈丢失或倾斜过大时终止该流程并请求 PX4 降落；退出 OFFBOARD 不自动重新切入或解锁。
 
-解锁前遇到短时反馈中断时，控制器保持零推力等待反馈恢复，再重新预送流；超过 `arming_timeout` 取消本次请求。已解锁时反馈失效会终止起飞并请求降落。`/flight_safety_status` 显示实际解锁状态及各路反馈年龄，未解锁的 OFFBOARD 显示 `IDLE`，不能用 `HOLD` 代替飞控解锁状态。
+解锁前遇到短时反馈中断时，控制器等待反馈恢复，再重新预送零推力姿态；超过 `arming_timeout` 取消本次请求。等待期间调用 `/land` 可取消起飞。已解锁时反馈失效会终止起飞并请求降落。`/flight_safety_status` 显示具体反馈问题、实际解锁状态及各路反馈年龄，未解锁的 OFFBOARD 显示 `IDLE`，不能用 `HOLD` 代替飞控解锁状态。
 
 **真机上桨测试前必须核对 `hardware.bootstrap_hover_thrust` 与 `bootstrap_max_thrust`。** 在 `launch.yaml` 中按机型填写，悬停推力应参考本机实测和 `MPC_THR_HOVER`；仿真配置不能照搬。初始化高度、爬升速度、反馈增益和超时在 `src/control/flight_bridge/config/params.yaml`。飞控自身仍需通过正常解锁检查，配置正确的高度源和 OFFBOARD 失联降落动作；不强制解锁、不绕过飞控拒绝。
 

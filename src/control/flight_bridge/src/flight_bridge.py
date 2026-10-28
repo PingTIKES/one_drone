@@ -7,8 +7,7 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
-                       qos_profile_sensor_data)
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
 from std_msgs.msg import Bool, String, Header
@@ -139,7 +138,9 @@ class FlightBridge(Node):
         self.was_offboard = False
         self.landing_mode_seen = False
         mavros = '/' + str(self.p('mavros_ns')).strip('/')
-        qos = qos_profile_sensor_data
+        # Control consumes the newest sample. Queuing several old samples on
+        # a busy ARM host can reject every sample before reaching fresh data.
+        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.px4_adapter = MavrosAdapter(
             self, mavros, request_feedback=(self.p('bootstrap_takeoff') and
                                            self.p('localization_source') != 'microvio'))
@@ -158,10 +159,10 @@ class FlightBridge(Node):
         self.create_subscription(EstimatorStatus, mavros + '/estimator_status', self.on_estimator, qos)
         self.create_subscription(TwistStamped, mavros + '/local_position/velocity_local', self.on_velocity, qos)
         self.create_subscription(Imu, mavros + '/imu/data', self.on_attitude, qos)
-        self.create_subscription(Range, '/microvio/range', self.on_range, 10)
+        self.create_subscription(Range, '/microvio/range', self.on_range, 1)
         self.create_subscription(Bool, '/microvio/navigation_ready', self.on_localization_ready, 10)
-        self.create_subscription(PositionCommand, '/ego/position_cmd', self.on_position_command, 20)
-        self.create_subscription(Odometry, '/ego/odom', self.on_ego_odom, 20)
+        self.create_subscription(PositionCommand, '/ego/position_cmd', self.on_position_command, 1)
+        self.create_subscription(Odometry, '/ego/odom', self.on_ego_odom, 1)
         self.create_service(Trigger, 'takeoff', self.takeoff)
         self.create_service(Trigger, 'land', self.land)
         self.create_timer(.05, self.tick)
@@ -185,8 +186,11 @@ class FlightBridge(Node):
                 0 <= self.now() - self.pose_at <= float(self.p('pose_timeout')))
 
     def publish_safety_status(self):
+        feedback = ' '.join(f'{name}_age={self.now()-getattr(self, name+"_at"):.3f}s'
+                            for name in ('range', 'velocity', 'attitude', 'estimator'))
         self.safety_pub.publish(String(
             data=f'state={self.state} offboard={self.offboard_active()} '
+                 f'armed={self.status is not None and self.status.armed} {feedback} '
                  f'navigation_ready={self.navigation_ready} '
                  f'max_speed={float(self.p("max_horizontal_speed")):.2f}m/s '
                  f'command_clamped={self.command_clamped} '
@@ -362,8 +366,8 @@ class FlightBridge(Node):
 
     def takeoff(self, _request, response):
         missing = []
-        if self.state != 'IDLE' or self.offboard_active():
-            missing.append('manual OFFBOARD already active or controller busy')
+        if self.state != 'IDLE':
+            missing.append('controller busy')
         if self.status is None or not self.status.connected or self.now() - self.status_at > float(self.p('status_timeout')):
             missing.append('fresh connected MAVROS state')
         elif self.status.armed:
@@ -555,6 +559,15 @@ class FlightBridge(Node):
                 self.state = 'HOLD'
         self.was_offboard = active
 
+        if active and not self.status.armed and not self.takeoff_pending:
+            # A late OFFBOARD acknowledgement after an aborted prestream is
+            # still a disarmed aircraft, not an airborne position hold.
+            self.state = 'IDLE'
+            self.hold_target = self.takeoff_target = None
+            self.clear_command('OFFBOARD_DISARMED')
+            self.standby_setpoint()
+            return
+
         if self.state == 'LANDING':
             if self.status is not None and self.status.mode == 'AUTO.LAND':
                 self.landing_mode_seen = True
@@ -650,13 +663,22 @@ class FlightBridge(Node):
             self.clear_command('WAIT_OFFBOARD', cutoff=True)
             self.state = 'IDLE'
             return
+        if (self.bootstrap_started is None and
+                self.now() - self.takeoff_requested_at > float(self.p('arming_timeout'))):
+            self.abort_takeoff('BOOTSTRAP_ARMING_TIMEOUT')
+            return
         if not self.bootstrap_feedback_valid():
-            self.abort_takeoff('BOOTSTRAP_VERTICAL_OR_ATTITUDE_UNAVAILABLE')
+            if self.status is not None and self.status.armed:
+                self.abort_takeoff('BOOTSTRAP_VERTICAL_OR_ATTITUDE_UNAVAILABLE')
+            else:
+                # Before arming, a transient telemetry gap can be waited out
+                # safely at zero thrust. The arming timeout still applies.
+                self.px4_adapter.attitude(self.bootstrap_yaw, 0.)
+                self.prestream_count = 0
+                self.get_logger().warn('Waiting for bootstrap feedback before arming',
+                                       throttle_duration_sec=2.)
             return
         if self.bootstrap_started is None:
-            if self.now() - self.takeoff_requested_at > float(self.p('arming_timeout')):
-                self.abort_takeoff('BOOTSTRAP_ARMING_TIMEOUT')
-                return
             # Zero thrust while waiting for actual mode + arm confirmation.
             self.px4_adapter.attitude(self.bootstrap_yaw, 0.)
             self.prestream_count += 1
@@ -664,7 +686,7 @@ class FlightBridge(Node):
                 if self.prestream_count >= 25 and self.prestream_count % 20 == 5:
                     self.px4_adapter.set_mode('OFFBOARD')
             elif not self.status.armed:
-                if self.prestream_count % 20 == 5:
+                if self.prestream_count >= 25 and self.prestream_count % 20 == 5:
                     self.px4_adapter.arm()
             else:
                 self.bootstrap_started = self.now()

@@ -102,6 +102,49 @@ def test_no_vertical_feedback_is_not_blind_thrust(bridge):
     n.px4_adapter.set_mode.assert_not_called()
 
 
+def test_prearm_feedback_gap_waits_at_zero_thrust_then_restarts_prestream(bridge):
+    n, clock, feedback = bridge
+    assert n.takeoff(Trigger.Request(), Trigger.Response()).success
+    clock[0] += .6
+    n.tick()
+    assert n.state == 'BOOTSTRAP_PRESTREAM' and n.takeoff_pending
+    n.px4_adapter.attitude.assert_called_with(n.bootstrap_yaw, 0.)
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
+    feedback()
+    n.on_status(State(connected=True, armed=False, mode='OFFBOARD'))
+    for _ in range(24):n.tick()
+    n.px4_adapter.arm.assert_not_called()
+    n.tick()
+    n.px4_adapter.arm.assert_called_once()
+
+
+def test_prearm_feedback_loss_still_times_out_without_arming(bridge):
+    n, clock, _ = bridge
+    assert n.takeoff(Trigger.Request(), Trigger.Response()).success
+    clock[0] += 16.
+    n.on_status(State(connected=True, armed=False, mode='OFFBOARD'))
+    n.tick()
+    assert n.state == 'IDLE' and not n.takeoff_pending and n.bootstrap is None
+    n.px4_adapter.arm.assert_not_called()
+    n.px4_adapter.set_mode.assert_not_called()
+    # A delayed mode confirmation must not turn an aborted takeoff into HOLD.
+    n.tick()
+    assert n.state == 'IDLE' and not n.navigation_ready
+    n.px4_adapter.arm.assert_not_called()
+
+
+def test_explicit_retry_in_disarmed_offboard_is_allowed(bridge):
+    n, _, _ = bridge
+    n.on_status(State(connected=True, armed=False, mode='OFFBOARD'))
+    n.tick()
+    assert n.state == 'IDLE'
+    n.px4_adapter.arm.assert_not_called()
+    assert n.takeoff(Trigger.Request(), Trigger.Response()).success
+    assert n.state == 'BOOTSTRAP_PRESTREAM'
+    n.px4_adapter.arm.assert_not_called()
+
+
 @pytest.mark.parametrize('fault', ['timeout', 'feedback', 'height'])
 def test_bootstrap_fault_requests_land_without_navigation(bridge, fault):
     n, clock, feedback = bridge

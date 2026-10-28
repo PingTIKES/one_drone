@@ -376,7 +376,9 @@ hardware:
 
 PX4 在第 2 步已进入**姿态控制 OFFBOARD**，第 4 步才是**位置/速度导航接管**，两者属于同一个飞行模式。姿态起飞阶段没有水平定点能力，只用于短距离离地初始化。超时、超高、垂直反馈丢失或倾斜过大时终止该流程并请求 PX4 降落；退出 OFFBOARD 不自动重新切入或解锁。
 
-**真机上桨测试前必须核对 `hardware.bootstrap_hover_thrust` 与 `bootstrap_max_thrust`。** 悬停推力应参考本机实测和 `MPC_THR_HOVER`，当前 0.5 是待核实初值；仿真配置不能照搬。初始化高度、爬升速度、反馈增益和超时在 `src/control/flight_bridge/config/params.yaml`。飞控自身仍需通过正常解锁检查，配置正确的高度源和 OFFBOARD 失联降落动作；不强制解锁、不绕过飞控拒绝。
+解锁前遇到短时反馈中断时，控制器保持零推力等待反馈恢复，再重新预送流；超过 `arming_timeout` 取消本次请求。已解锁时反馈失效会终止起飞并请求降落。`/flight_safety_status` 显示实际解锁状态及各路反馈年龄，未解锁的 OFFBOARD 显示 `IDLE`，不能用 `HOLD` 代替飞控解锁状态。
+
+**真机上桨测试前必须核对 `hardware.bootstrap_hover_thrust` 与 `bootstrap_max_thrust`。** 在 `launch.yaml` 中按机型填写，悬停推力应参考本机实测和 `MPC_THR_HOVER`；仿真配置不能照搬。初始化高度、爬升速度、反馈增益和超时在 `src/control/flight_bridge/config/params.yaml`。飞控自身仍需通过正常解锁检查，配置正确的高度源和 OFFBOARD 失联降落动作；不强制解锁、不绕过飞控拒绝。
 
 使用 OpenVINS 且地面已有定位时，可将 `bootstrap_takeoff` 设为 false，沿用位置控制起飞。其起飞服务需要有效 PX4 本地位置。
 
@@ -392,7 +394,7 @@ PX4 在第 2 步已进入**姿态控制 OFFBOARD**，第 4 步才是**位置/速
 
 ### 自动航点决策
 
-`startup.launch.py` 已包含 `decision_manager`。在 `src/decision/decision_manager/config/decision.yaml` 中填写 `decision_1.waypoints`，当前已配置巡航点，上场前必须核对它们与 `map→odom` 的对应关系。坐标格式为 `[x, y, z]`，单位 m；`frame_id` 支持 `map` 和 `odom`。
+`startup.launch.py` 已包含 `decision_manager`。默认 `decision_1.waypoints` 为空，起飞后等待手动打点。需要自动巡航时，在 `src/decision/decision_manager/config/decision.yaml` 中填写航点，并核对它们与 `map→odom` 的对应关系。坐标格式为 `[x, y, z]`，单位 m；`frame_id` 支持 `map` 和 `odom`。
 
 - `mode: once`：依次执行所有航点，在最后一个点结束任务并保持位置。
 - `mode: loop`：最后一个点到达后回到第一个点，持续循环。

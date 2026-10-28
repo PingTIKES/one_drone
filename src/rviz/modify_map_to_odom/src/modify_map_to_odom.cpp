@@ -15,10 +15,12 @@ ModifyMapToOdom::ModifyMapToOdom(const rclcpp::NodeOptions &options)
     alignment_.x = declare_parameter<double>("X", 0.0);
     alignment_.y = declare_parameter<double>("Y", 0.0);
     alignment_.theta = declare_parameter<double>("Rotation", 0.0);
+    const auto publish_rate = declare_parameter<double>("publish_rate", 10.0);
     auto finite = [](const geometry_msgs::msg::Pose2D &value) {
         return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.theta);
     };
-    if (!finite(alignment_) || parent_frame_.empty() || target_frame_.empty() ||
+    if (!finite(alignment_) || !std::isfinite(publish_rate) || publish_rate <= 0.0 ||
+        parent_frame_.empty() || target_frame_.empty() ||
         parent_frame_ == target_frame_)
         throw std::invalid_argument("Invalid map to odom configuration");
 
@@ -33,8 +35,9 @@ ModifyMapToOdom::ModifyMapToOdom(const rclcpp::NodeOptions &options)
             if (!finite(*value)) return;
             alignment_ = *value;
             alignment_publisher_->publish(alignment_);
+            publish_transform();
         });
-    publish_timer_ = create_wall_timer(std::chrono::milliseconds(10),
+    publish_timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / publish_rate),
                                      [this]() { publish_transform(); });
 }
 

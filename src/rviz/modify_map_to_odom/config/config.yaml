@@ -2,6 +2,7 @@
   ros__parameters:
     parent_frame: map # 先验地图坐标系
     target_frame: odom # 所选定位源的里程计坐标系（OpenVINS/microvio）
+    publish_rate: 10.0 # 固定 map→odom 变换的周期补发频率 Hz；面板调整立即发布，避免 100 Hz 重复 TF 增加 ARM 负载
     X: -6.0 # map→odom 初始 X 平移，单位 m；按场地修改
     Y: 6.0 # map→odom 初始 Y 平移，单位 m；按场地修改
     Rotation: 5.140796326794897 # map→odom 初始 yaw，单位 rad；原 3.57 逆时针增加 π/2，使截图中的右向改为前向

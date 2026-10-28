@@ -12,7 +12,10 @@ class SensorRelay(Node):
         for key,typ,dest in [('cam0',Image,'cam0/image_raw'),('cam1',Image,'cam1/image_raw'),('imu',Imu,'imu0')]:
             self.declare_parameter(key,'')
             source=self.get_parameter(key).value
-            if not source:raise ValueError('missing driver topic '+key)
+            if not source:
+                if key == 'imu':
+                    continue  # Depth-only stereo does not use the camera IMU.
+                raise ValueError('missing driver topic '+key)
             # OpenVINS stereo subscribers request Reliable QoS; the driver may use BestEffort.
             pub=self.create_publisher(typ,dest,5)
             self.pubs.append(pub)

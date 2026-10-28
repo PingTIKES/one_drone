@@ -98,6 +98,32 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 
 启动模式以 `launch.yaml` 的实际值为准。仿真飞行将 `startup.sim` 和 `startup.flight_control` 都设为 `true`；真机定位台架检查使用 `sim: false`、`flight_control: false`。
 
+### 笔记本与 RK3566 切换
+
+依赖安装和编译完成后，两端使用同一份源码、同一个算法入口：
+
+```bash
+ros2 launch bringup startup.launch.py
+```
+
+迁移只修改 `src/bringup/params/launch.yaml`，不修改 launch、定位、规划或控制代码：
+
+| 配置 | 笔记本仿真 | RK3566 当前无前视相机 | RK3566 后续接入前视相机 |
+| --- | --- | --- | --- |
+| `startup.sim` | `true` | `false` | `false` |
+| `startup.rviz` | `true` | `false`（笔记本远程观察） | `false` |
+| 自动选用的定位 | `simulation.localization_source: openvins` | `hardware.localization_source: microvio` | `hardware.localization_source: microvio` |
+| 深度处理 | `simulation.perception_enabled: true` | `hardware.perception_enabled: false` | `hardware.perception_enabled: true` |
+| 深度来源 | `simulation.depth_source: software` | 暂无深度输入 | `hardware.depth_source: hardware`，或使用双目图像时选 `software` |
+| 飞控连接 | `simulation.fcu_url` 的 SITL UDP 地址 | `hardware.fcu_url` 的实机串口 | 同左 |
+
+`microvio` 是下视 MicoVIO 模组在项目中的配置名称。真机的串口、系统编号、相机话题和标定目录都在 `hardware` 中填写；仿真环境仍按第 4 节先启动 Gazebo/PX4。起飞服务保持 `/takeoff`，起飞完成后按原有 decision 配置巡航。航点、机体尺寸和标定结果按实际机体/场地配置，设备切换本身不要求更改这些文件。
+
+没有深度发布者，或深度处理已开启但暂时没有深度帧时，EGO 仍使用有效里程计规划，未知区域允许通行。新启动时没有观测到的障碍物；先验 PGM 仍用于显示和打点。已经观测过的真实障碍不会因为相机暂时断流而被伪造为空闲。
+
+后续接回前视相机，只需在本文件打开感知并填写对应话题/标定路径。若选择软件双目，前视深度处理只需要左右图像，不要求前视相机另有 IMU；MicoVIO 定位独立进行。OpenVINS 定位仍需要双目和 IMU。
+
+
 `yaw_control: false` 会在首次收到有效 PX4 本地位置时锁定机头方向，位置保持、起飞和轨迹跟踪都使用该固定 yaw；平移仍独立执行，不再按路径朝向或前视角度缩放水平速度，因此允许侧向和后向移动。定位暂时恢复或 HOLD 不重新锁定；固定 yaw 使用飞控本地参考系，MAVROS Pose 不提供航向重置增量。`true` 保持原有解耦 yaw 策略。修改后重启控制节点生效，此参数不改变 map→odom 或 RViz TF。
 
 

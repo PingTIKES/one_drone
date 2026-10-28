@@ -1,4 +1,7 @@
 # 总启动配置；修改后重启 launch。日常只需 ros2 launch bringup startup.launch.py。
+# 笔记本仿真：startup.sim=true；RK3566 真机：startup.sim=false、rviz=false。
+# 两端使用相同源码。sim 自动选下面整套 profile；迁移时只修改本文件，无需改 launch/Python/C++。
+# 真机无前视相机保留 hardware.perception_enabled=false；以后接入相机时改为 true。
 startup:
   sim: true # false 使用下面 hardware 真机配置；true 使用 simulation 仿真配置
   rviz: true # 是否打开 RViz
@@ -13,7 +16,7 @@ hardware:
   bootstrap_hover_thrust: 0.5 # 真机归一化悬停推力：上桨前按本机实测/PX4 参数核对，当前为待核实初值
   bootstrap_max_thrust: 0.7 # 真机姿态起飞推力上限，须高于本机悬停推力
   localization_source: microvio # microvio 订阅 MAVROS 转发的定位；openvins 使用双目和 IMU
-  perception_enabled: false # false 只关闭相机深度处理，EGO/打点/决策仍启动；无深度时没有实时障碍信息
+  perception_enabled: false # false 关闭相机处理，EGO/打点/决策照常；true 但没有深度帧时仍可按未知区域规划
   depth_source: hardware # hardware 使用 D435i 深度；software 使用项目软件双目
   calibration_dir: ~/one_drone/deploy/calibration/uav1 # 已导入的真机标定目录，支持 ~
   target_system: 1 # 实际飞控 MAV_SYS_ID，接入前核对
@@ -22,7 +25,7 @@ hardware:
   gcs_url: '' # 可选转发给地面站的 MAVLink UDP 地址；留空关闭
   cam0_topic: /camera/camera/infra1/image_rect_raw # 左红外，必须对应标定 cam0
   cam1_topic: /camera/camera/infra2/image_rect_raw # 右红外，必须对应标定 cam1
-  imu_topic: /camera/camera/imu # 相机组合 IMU，使用驱动线性插值合并
+  imu_topic: /camera/camera/imu # 仅 OpenVINS 定位需要；microvio+软件双目深度不使用该 IMU
   depth_topic: /camera/camera/depth/image_rect_raw # 未对齐到 RGB 的硬件深度
   depth_info_topic: /camera/camera/depth/camera_info # 与深度匹配的 CameraInfo
 

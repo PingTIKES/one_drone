@@ -100,3 +100,86 @@ def test_mavros_keeps_internal_plugin_names_and_is_single_fcu_owner(startup):
     assert merged['tgt_system'] == 1
     assert merged['fcu_url'].endswith(':921600')
     assert not any('Agent' in executable for executable in nodes)
+
+
+def test_yaml_alone_selects_simulation_or_hardware(startup, tmp_path, monkeypatch):
+    """Resolve the real LaunchDescription without command-line launch arguments."""
+    from launch.actions import DeclareLaunchArgument, OpaqueFunction
+    original_share = startup.get_package_share_directory
+    bringup = Path(original_share('bringup'))
+    for name in ('map', 'rviz'):
+        (tmp_path / name).symlink_to(bringup / name, target_is_directory=True)
+    (tmp_path / 'params').mkdir()
+    for config in (bringup / 'params').iterdir():
+        if config.name != 'launch.yaml':
+            (tmp_path / 'params' / config.name).symlink_to(config)
+    monkeypatch.setattr(startup, 'get_package_share_directory',
+                        lambda name: str(tmp_path) if name == 'bringup' else original_share(name))
+    values = yaml.safe_load((bringup / 'params/launch.yaml').read_text())
+    for sim in (True, False):
+        values['startup'].update(sim=sim, rviz=False, flight_control=True)
+        (tmp_path / 'params/launch.yaml').write_text(yaml.safe_dump(values))
+        context = LaunchContext()
+        nodes = {}
+
+        def resolve(action):
+            if isinstance(action, Node):
+                if action.condition is None or action.condition.evaluate(context):
+                    executable = perform_substitutions(
+                        context, normalize_to_list_of_substitutions(action.node_executable))
+                    nodes[executable] = action
+            elif isinstance(action, (DeclareLaunchArgument, OpaqueFunction)):
+                for child in action.execute(context) or []:
+                    resolve(child)
+
+        for action in startup.generate_launch_description().entities:
+            resolve(action)
+        assert ('run_subscribe_msckf' in nodes) is sim
+        assert ('microvio' in nodes) is not sim
+        for name in ('mavros_node', 'ego_planner_node', 'traj_server', 'goal_manager',
+                     'decision_manager', 'flight_bridge', 'modify_map_to_odom_node'):
+            assert name in nodes
+        params = {}
+        for group in evaluate_parameters(context, nodes['flight_bridge']._Node__parameters):
+            params.update(group)
+        assert params['use_sim_time'] is sim
+        assert params['bootstrap_takeoff'] is values['simulation' if sim else 'hardware']['bootstrap_takeoff']
+        assert ('depth_filter' in nodes) is sim
+
+
+def test_camera_free_microvio_does_not_import_camera_code(startup, monkeypatch):
+    import builtins
+    original = builtins.__import__
+
+    def without_camera(name, *args, **kwargs):
+        if name in ('numpy', 'vio_bridge.calibration', 'vio_bridge.vio_geometry',
+                    'stereo_depth.stereo_matcher'):
+            raise ImportError('Camera/VIO implementation unavailable in this check')
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', without_camera)
+    spec = importlib.util.spec_from_file_location('camera_free_startup', startup.__file__)
+    isolated_startup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(isolated_startup)
+    _, nodes = launch_nodes(isolated_startup, False, 'microvio', False)
+    assert 'ego_planner_node' in nodes and 'microvio' in nodes
+
+
+def test_microvio_stereo_depth_needs_images_but_not_camera_imu(startup):
+    values = yaml.safe_load((Path(get_package_share_directory('bringup')) /
+                            'params/launch.yaml').read_text())
+    params = {**values['startup'], **values['hardware'],
+              'sim': False, 'rviz': False, 'flight_control': False,
+              'perception_enabled': True, 'depth_source': 'software', 'imu_topic': ''}
+    context = LaunchContext()
+    context.launch_configurations.update({key: startup.launch_value(value)
+                                          for key, value in params.items()})
+    nodes = {perform_substitutions(context, normalize_to_list_of_substitutions(action.node_executable)): action
+             for action in startup.setup(context)
+             if isinstance(action, Node) and (action.condition is None or action.condition.evaluate(context))}
+    assert 'microvio' in nodes and 'software_stereo' in nodes
+    assert 'run_subscribe_msckf' not in nodes
+    relay = {}
+    for group in evaluate_parameters(context, nodes['sensor_relay']._Node__parameters):
+        relay.update(group)
+    assert relay['imu'] == ''

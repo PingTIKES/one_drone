@@ -1,7 +1,6 @@
 """Start selectable localization, sensing, EGO-Planner, PX4 control and RViz."""
 from pathlib import Path
 import tempfile
-import numpy as np
 import yaml
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
@@ -11,11 +10,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
-
-from vio_bridge.calibration import (hardware_depth_transform, read_yaml,
-                                    transform, validate_config, write_opencv_yaml)
-from vio_bridge.vio_geometry import quaternion
-from stereo_depth.stereo_matcher import StereoMatcher
 
 
 def node_config(package_name, node_name):
@@ -95,7 +89,9 @@ def setup(context):
         raise ValueError('hardware needs explicit PX4 target_system')
     required_topics = []
     if source == 'openvins' or (perception and mode == 'software'):
-        required_topics += ['cam0_topic', 'cam1_topic', 'imu_topic']
+        required_topics += ['cam0_topic', 'cam1_topic']
+    if source == 'openvins':
+        required_topics += ['imu_topic']
     if perception and mode == 'hardware':
         required_topics += ['cam0_topic', 'depth_topic', 'depth_info_topic']
     if not sim and any(not arg(key) for key in required_topics):
@@ -117,6 +113,10 @@ def setup(context):
     if float(process_config['respawn_delay']) < 0:
         raise ValueError('respawn_delay must be nonnegative')
     if needs_calibration:
+        import numpy as np
+        from vio_bridge.calibration import (hardware_depth_transform, read_yaml,
+                                            transform, validate_config, write_opencv_yaml)
+
         if sim:
             cfg_dir = Path(get_package_share_directory('vio_bridge')) / 'config/openvins_sim'
             config, cameras, imu = validate_config(cfg_dir / 'estimator_config.yaml')
@@ -161,7 +161,7 @@ def setup(context):
         condition=IfCondition('true' if not sim and (source == 'openvins' or (perception and mode == 'software')) else 'false'),
         parameters=[common, node_config('camera_stream', 'sensor_relay'),
                     {'cam0': arg('cam0_topic'), 'cam1': arg('cam1_topic'),
-                     'imu': arg('imu_topic')}])
+                     'imu': arg('imu_topic') if source == 'openvins' else ''}])
     openvins = vio_bridge = None
     if source == 'openvins':
         openvins = Node(
@@ -188,6 +188,7 @@ def setup(context):
     if perception:
         expected_depth_frame = ''
         if mode == 'software':
+            from stereo_depth.stereo_matcher import StereoMatcher
             matcher = StereoMatcher(ov_config, t_body_imu)
             t_body_camera = matcher.body_optical
             source_depth_topic = '/uav1/d435i/depth/image_raw'
@@ -199,14 +200,14 @@ def setup(context):
                 arg('depth_info_topic'))
             source_depth_topic = arg('depth_topic')
             depth_info_topic = arg('depth_info_topic')
-        software_stereo = Node(
-            package='stereo_depth', executable='software_stereo',
-            namespace='uav1', name='software_stereo', output='screen',
-            condition=IfCondition('true' if mode == 'software' else 'false'),
-            parameters=[common, node_config('stereo_depth', 'software_stereo'),
-                        {'config': ov_config,
-                         't_body_imu': t_body_imu.ravel().tolist(),
-                         'sync_slop': node_config('stereo_depth', 'software_stereo').get('sync_slop', .015 if sim else .003)}])
+        if mode == 'software':
+            software_stereo = Node(
+                package='stereo_depth', executable='software_stereo',
+                namespace='uav1', name='software_stereo', output='screen',
+                parameters=[common, node_config('stereo_depth', 'software_stereo'),
+                            {'config': ov_config,
+                             't_body_imu': t_body_imu.ravel().tolist(),
+                             'sync_slop': node_config('stereo_depth', 'software_stereo').get('sync_slop', .015 if sim else .003)}])
         depth_filter = Node(
             package='depth_filter', executable='depth_filter',
             namespace='uav1', name='depth_filter', output='screen',
@@ -282,6 +283,7 @@ def setup(context):
         parameters=[decision_params, common,
                     {'decisions_file': str(decision_config), 'mavros_ns': '/' + mavros_ns}])
     if perception:
+        from vio_bridge.vio_geometry import quaternion
         camera_q = quaternion(t_body_camera[:3, :3])
         camera_optical_tf = Node(
             package='tf2_ros', executable='static_transform_publisher',

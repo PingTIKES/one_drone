@@ -9,9 +9,9 @@ if [[ "$MODE" != sim && "$MODE" != onboard ]]; then
     exit 2
 fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot-1.14.3}"
+PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot-1.17.0}"
 OPENVINS_DIR="$ROOT_DIR/src/localization/open_vins"
-PX4_COMMIT=08310a5e8ac64d02edb41523460e7dc267298deb
+PX4_COMMIT=d6f12ad1c4f70ad3230afd7d86e971421e02fef4
 
 if [[ ! -f /opt/ros/humble/setup.bash ]]; then
     echo 'Install ROS 2 Humble before running setup_env.sh.' >&2
@@ -45,34 +45,45 @@ fi
 if [[ ! -f /usr/share/GeographicLib/geoids/egm96-5.pgm ]]; then
     sudo bash /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
 fi
-# Old DDS-only dependencies are no longer exposed to colcon.
-if [[ -L "$ROOT_DIR/src/px4_msgs" ]]; then
-    unlink "$ROOT_DIR/src/px4_msgs"
-fi
-mkdir -p "$ROOT_DIR/third_party"
-touch "$ROOT_DIR/third_party/COLCON_IGNORE"
-
 if [[ "$MODE" == sim ]]; then
-    if ! ros2 pkg prefix ros_gz_bridge >/dev/null 2>&1; then
-        sudo apt install -y ros-humble-ros-gzgarden
+    # Harmonic is required by PX4 1.17.0; installing its ROS bridge replaces
+    # a bridge built for an older Gazebo distribution.
+    if ! apt-cache show gz-harmonic >/dev/null 2>&1; then
+        curl -fsSL https://packages.osrfoundation.org/gazebo.gpg | \
+            sudo tee /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg >/dev/null
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] https://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | \
+            sudo tee /etc/apt/sources.list.d/gazebo-stable.list >/dev/null
+        sudo apt update
     fi
+    sudo apt install -y gz-harmonic ros-humble-ros-gzharmonic python3-venv \
+        ccache ninja-build libssl-dev libxml2-dev libxml2-utils
     if [[ ! -d "$PX4_DIR/.git" ]]; then
-        git clone --recursive --branch micoair743-v1.14.3 \
-            https://github.com/Minderring/PX4-Autopilot.git "$PX4_DIR"
+        git clone --depth 1 --branch v1.17.0 \
+            https://github.com/PX4/PX4-Autopilot.git "$PX4_DIR"
         git -C "$PX4_DIR" checkout "$PX4_COMMIT"
     fi
     if [[ "$(git -C "$PX4_DIR" rev-parse HEAD)" != "$PX4_COMMIT" ]]; then
-        echo "PX4_DIR must be the pinned MicoAir PX4 1.14.3 commit $PX4_COMMIT." >&2
+        echo "PX4_DIR must be the pinned PX4 1.17.0 commit $PX4_COMMIT." >&2
         exit 1
     fi
-    git -C "$PX4_DIR" submodule update --init --recursive
+    git -C "$PX4_DIR" submodule update --init --recursive --depth 1 \
+        src/drivers/gps/devices src/modules/mavlink/mavlink \
+        src/lib/events/libevents src/lib/heatshrink/heatshrink Tools/simulation/gz
     if ! ros2 pkg prefix ros_gz_bridge >/dev/null 2>&1; then
-        echo 'Install Gazebo Garden and the matching ros_gz_bridge before simulation.' >&2
+        echo 'Install Gazebo Harmonic and the matching ros_gz_bridge before simulation.' >&2
         exit 1
     fi
     python3 "$ROOT_DIR/tools/prepare_algorithm_sim.py" \
         --px4 "$PX4_DIR"
-    (cd "$PX4_DIR" && bash Tools/setup/ubuntu.sh --no-nuttx && DONT_RUN=1 make px4_sitl_default)
+    # Build-time Python stays isolated from ROS/OpenCV and the user's NumPy.
+    python3 -m venv --system-site-packages "$PX4_DIR/.venv"
+    PYTHONNOUSERSITE=1 "$PX4_DIR/.venv/bin/python" -m pip install \
+        -c "$ROOT_DIR/config/px4_sitl/python_constraints.txt" \
+        -r "$PX4_DIR/Tools/setup/requirements.txt"
+    (cd "$PX4_DIR" && PATH="$PX4_DIR/.venv/bin:$PATH" \
+        PYTHONNOUSERSITE=1 GZ_DISTRO=harmonic DONT_RUN=1 \
+        make px4_sitl_default -j "${BUILD_JOBS:-2}" \
+        CMAKE_ARGS="-DCMAKE_DISABLE_FIND_PACKAGE_gazebo=TRUE -DCMAKE_DISABLE_FIND_PACKAGE_Java=TRUE")
 else
     sudo apt install -y ros-humble-realsense2-camera
     python3 "$ROOT_DIR/tools/prepare_algorithm_sim.py"
@@ -88,5 +99,5 @@ env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="/usr/local/bin:/usr/bin:/bin
         cd "$ROOT_DIR"
         colcon build --symlink-install --executor sequential --cmake-clean-cache'
 
-echo "Ready: one_drone MAVROS workspace ($MODE; SITL uses PX4 1.14.3)."
+echo "Ready: one_drone MAVROS workspace ($MODE; SITL uses PX4 1.17.0)."
 echo "Source $ROOT_DIR/install/setup.bash in each terminal."

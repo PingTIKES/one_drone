@@ -1,67 +1,72 @@
 #!/usr/bin/env python3
-"""Verify bundled OpenVINS and apply optional MicoAir PX4 1.14.3 SITL patches."""
+"""Prepare the project airframe and MAVLink-only startup for PX4 1.17.0 SITL."""
 import argparse
 from pathlib import Path
 import subprocess
 
-PX4_SOURCE_COMMIT = '08310a5e8ac64d02edb41523460e7dc267298deb'
+PX4_SOURCE_COMMIT = 'd6f12ad1c4f70ad3230afd7d86e971421e02fef4'
+AIRFRAME = '22001_gz_one_drone'
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def write_checked(path,old,new,marker,equivalent=None):
-    text=path.read_text(encoding='utf-8')
-    if marker in text:return
-    if equivalent is not None and text.count(equivalent)==1:
-        old=equivalent
-    if text.count(old)!=1:raise RuntimeError(f'unsupported source version/anchor: {path}')
-    backup=path.with_name(path.name+'.rm27-backup')
-    if not backup.exists():backup.write_text(text,encoding='utf-8')
-    path.write_text(text.replace(old,new),encoding='utf-8',newline='\n')
+def prepare_sitl(px4):
+    # The project uses MAVROS only; omit the DDS client from this SITL build.
+    board = px4 / 'boards/px4/sitl/default.px4board'
+    config = board.read_text()
+    if 'CONFIG_MODULES_UXRCE_DDS_CLIENT=y' in config:
+        board.write_text(config.replace('CONFIG_MODULES_UXRCE_DDS_CLIENT=y',
+                                        'CONFIG_MODULES_UXRCE_DDS_CLIENT=n'))
+    frames = px4 / 'ROMFS/px4fmu_common/init.d-posix/airframes'
+    if not (frames / '4001_gz_x500').is_file():
+        raise RuntimeError('PX4 1.17.0 Gazebo x500 airframe is missing')
+    profile = (ROOT / 'config/px4_sitl' / AIRFRAME).read_bytes()
+    target = frames / AIRFRAME
+    if not target.is_file() or target.read_bytes() != profile:
+        target.write_bytes(profile)
+        target.chmod(0o755)
+    cmake = frames / 'CMakeLists.txt'
+    text = cmake.read_text()
+    if AIRFRAME not in text:
+        anchor = '\t# [22000, 22999] Reserve for custom models'
+        if text.count(anchor) != 1:
+            raise RuntimeError(f'unsupported airframe registration layout: {cmake}')
+        cmake.write_text(text.replace(anchor, f'\t{AIRFRAME}\n\n' + anchor))
+
+    rc = px4 / 'ROMFS/px4fmu_common/init.d-posix/rcS'
+    text = rc.read_text()
+    marker = '# ONE_DRONE_MAVLINK_ONLY'
+    if marker not in text:
+        start = '# Try to start the UXRCE-DDS Client with UDP transport if module exists'
+        end = 'uxrce_dds_client start -t udp -p $uxrce_dds_port $uxrce_dds_ns'
+        if text.count(start) != 1 or text.count(end) != 1:
+            raise RuntimeError(f'unsupported PX4 1.17.0 startup layout: {rc}')
+        a, b = text.index(start), text.index(end) + len(end)
+        text = text[:a] + marker + ': FCU communication is owned by MAVROS / MAVLink.' + text[b:]
+    # These assignments are outside the startup block in upstream rcS.
+    # They refer to parameters absent when the client is not compiled.
+    text = '\n'.join(line for line in text.split('\n') if not (
+        line.strip().startswith(('param set UXRCE_DDS_', 'param set-default UXRCE_DDS_'))))
+    if rc.read_text() != text:
+        rc.write_text(text)
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--px4',help='MicoAir PX4 1.14.3 source; omit on an onboard computer')
-    a=p.parse_args()
-    if a.px4:
-        px4=Path(a.px4).resolve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--px4', help='official PX4 v1.17.0 checkout; omit on an onboard computer')
+    args = parser.parse_args()
+    if args.px4:
+        px4 = Path(args.px4).expanduser().resolve()
         if not px4.is_dir():
-            raise RuntimeError(f'PX4 source directory not found: {px4}; clone the MicoAir 1.14.3 source first')
-        commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=px4,text=True).strip()
-        if commit!=PX4_SOURCE_COMMIT:
-            raise RuntimeError(f'requires MicoAir PX4 1.14.3 source at {PX4_SOURCE_COMMIT}, found {commit}')
-        rc_start=px4/'ROMFS/px4fmu_common/init.d-posix/rcS'
-        old='uxrce_dds_client start -t udp -h 127.0.0.1 -p $uxrce_dds_port $uxrce_dds_ns'
-        new='# RM27_MAVROS_ONLY: the MAVLink Onboard endpoint is used by MAVROS.\nif [ "$RM27_SIM_CLOCK" != "1" ]; then\n    uxrce_dds_client start -t udp -h 127.0.0.1 -p $uxrce_dds_port $uxrce_dds_ns\nfi'
-        write_checked(rc_start,old,new,'# RM27_MAVROS_ONLY:')
-        rc=px4/'ROMFS/px4fmu_common/init.d-posix/px4-rc.params'
-        text=rc.read_text(encoding='utf-8')
-        marker='# RM27_VISION_ONLY'
-        if marker not in text:
-            backup=rc.with_name(rc.name+'.rm27-backup')
-            if not backup.exists():backup.write_text(text,encoding='utf-8')
-            text+='''
-# RM27_VISION_ONLY: applies only when explicitly started by start_algorithm_sim.sh.
-if [ "$RM27_SIM_CLOCK" = "1" ]; then
-    param set EKF2_GPS_CTRL 0
-    param set EKF2_EV_CTRL 15
-    param set EKF2_HGT_REF 3
-    param set EKF2_MAG_TYPE 5
-    param set EKF2_EV_POS_X 0
-    param set EKF2_EV_POS_Y 0
-    param set EKF2_EV_POS_Z 0
-    param set MPC_XY_VEL_MAX 0.5
-    param set MPC_XY_CRUISE 0.5
-    param set COM_OF_LOSS_T 0.5
-    param set COM_OBL_RC_ACT 4
-    param set COM_POSCTL_NAVL 1
-fi
-'''
-            rc.write_text(text,encoding='utf-8',newline='\n')
-    header=Path(__file__).resolve().parents[1]/'src/localization/open_vins/ov_msckf/src/core/VioManager.h'
-    if not header.is_file() or 'RM27_STATIC_VIO' not in header.read_text(encoding='utf-8'):
+            raise RuntimeError(f'PX4 source directory not found: {px4}; clone official tag v1.17.0 first')
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=px4, text=True).strip()
+        if commit != PX4_SOURCE_COMMIT:
+            raise RuntimeError(f'requires PX4 1.17.0 at {PX4_SOURCE_COMMIT}, found {commit}')
+        prepare_sitl(px4)
+    header = ROOT / 'src/localization/open_vins/ov_msckf/src/core/VioManager.h'
+    if not header.is_file() or 'RM27_STATIC_VIO' not in header.read_text():
         raise RuntimeError('bundled OpenVINS source/static initialization patch is missing')
-    print('Bundled OpenVINS verified. Rebuild this workspace; rebuild PX4 if patched.')
+    print('OpenVINS verified; PX4 1.17.0 uses the project airframe and MAVROS. Rebuild after preparation.')
 
 
-
-if __name__=='__main__':main()
+if __name__ == '__main__':
+    main()

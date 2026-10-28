@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import sys
 import subprocess
 import tempfile
 import time
@@ -33,6 +34,9 @@ spec.loader.exec_module(module)
 EgoOdomAdapter = module.EgoOdomAdapter
 
 
+BOOTSTRAP = '--bootstrap' in sys.argv
+
+
 class FakeFCU:
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -56,6 +60,7 @@ class FakeFCU:
         self.mode = 3  # PX4 main mode POSCTL
         self.armed = False
         self.target = None
+        self.thrust = None
         self.sp_first = None
         self.sp_last = 0.
         self.control_commands = []
@@ -84,8 +89,14 @@ class FakeFCU:
                     self.sp_first = self.sp_first or now
                     self.sp_last = now
                     self.target = msg
+                    self.thrust = None
                     if msg.type_mask & 1:
                         self.wire_velocity = (msg.vx, msg.vy, msg.vz)
+                elif msg.get_type() == 'SET_ATTITUDE_TARGET':
+                    self.sp_first = self.sp_first or now
+                    self.sp_last = now
+                    self.thrust, self.target = msg.thrust, None
+                    assert abs(abs(msg.q[0])-1.) < .001, 'MAVROS attitude ENU/FLU to NED/FRD conversion'
                 elif msg.get_type() == 'SET_MODE':
                     self.control_commands.append(msg)
                     requested = (msg.custom_mode >> 16) & 0xff
@@ -103,7 +114,11 @@ class FakeFCU:
                     self.ev_packets.append(msg)
         dt = min(.05, now-self.last)
         self.last = now
-        if self.mode == 6 and self.armed and self.target:
+        if self.mode == 6 and self.armed and self.thrust is not None:
+            self.velocity[2] += (19.62*(.5-self.thrust)-.5*self.velocity[2])*dt
+            self.position[2] = min(0., self.position[2]+self.velocity[2]*dt)
+            if self.position[2] == 0.:self.velocity[2] = min(0.,self.velocity[2])
+        elif self.mode == 6 and self.armed and self.target:
             if self.target.type_mask & 1:
                 self.velocity = [self.target.vx, self.target.vy, self.target.vz]
             else:
@@ -122,8 +137,10 @@ class FakeFCU:
             ns = self.ns()
             self.mav.attitude_quaternion_send(ns//1000000, 1., 0., 0., 0., 0., 0., 0.)
             self.mav.local_position_ned_send(ns//1000000, *self.position, *self.velocity)
-            self.mav.estimator_status_send(ns//1000, 47, 0., 0., 0., 0., 0., 0., .01, .01)
-            self.mav.odometry_send(ns//1000, 1, 1, *self.position, [1., 0., 0., 0.],
+            aided = not BOOTSTRAP or self.position[2] < -.45
+            self.mav.distance_sensor_send(ns//1000000, 2, 1200, int((.07-self.position[2])*100), 0, 0, 25, 0)
+            self.mav.estimator_status_send(ns//1000, 47 if aided else 165, 0., 0., 0., 0., 0., 0., .01, .01)
+            if aided:self.mav.odometry_send(ns//1000, 1, 1, *self.position, [1., 0., 0., 0.],
                                   *self.velocity, 0., 0., 0., self.cov, self.cov,
                                   self.reset_counter, 8, 0)
 
@@ -139,7 +156,9 @@ def main():
             '-p', f'fcu_url:=udp://127.0.0.1:{fcu.mavros_port}@127.0.0.1:{fcu.port}',
             '-p', 'tgt_system:=1', '-p', 'tgt_component:=1'], stdout=log, stderr=subprocess.STDOUT)
         nodes = []
-        rclpy.init(args=['--ros-args', '-p', 'mavros_ns:=/mavros', '-p', 'odom_topic:=/odom', '-p', 'odom_frame:=odom', '-p', 'body_frame:=base_link'])
+        rclpy.init(args=['--ros-args', '-p', 'mavros_ns:=/mavros', '-p', 'odom_topic:=/odom', '-p', 'odom_frame:=odom', '-p', 'body_frame:=base_link',
+            '-p', f'bootstrap_takeoff:={str(BOOTSTRAP).lower()}', '-p', 'localization_source:=microvio',
+            '-p', 'bootstrap_height_source:=range' if BOOTSTRAP else 'bootstrap_height_source:=local'])
         executor = SingleThreadedExecutor()
         try:
             bridge, micro, adapter, probe = FlightBridge(), Microvio(), EgoOdomAdapter(), Node('mavros_transport_test')
@@ -173,7 +192,11 @@ def main():
                     pump(.05)
                 assert predicate(), f'{label}: bridge={bridge.state}, micro={micro.health()}, received={micro.received_count}, published={micro.published_count}'
 
-            until(lambda:bridge.pose_valid() and micro.published_count > 15 and 'odom' in last, 15., 'telemetry connection')
+            until(lambda:(bridge.bootstrap_feedback_valid() and bridge.status is not None and bridge.status.connected) if BOOTSTRAP else
+                  bridge.pose_valid() and micro.published_count > 15 and 'odom' in last, 20., 'telemetry connection')
+            if BOOTSTRAP:
+                assert micro.published_count == 0 and bridge.ego_odom is None
+                print('PASS connected vertical/attitude/ToF feedback with NO navigation odometry', flush=True)
             assert not fcu.control_commands, 'Standby must not arm or switch mode'
             assert abs(bridge.position.heading) < .01
             client = probe.create_client(Trigger, '/takeoff')
@@ -183,6 +206,10 @@ def main():
             assert request.result().success, request.result().message
             until(lambda:bridge.state=='HOLD' and fcu.position[2] < -1.7, 15., 'OFFBOARD, arming and takeoff')
             assert fcu.mode == 6 and fcu.armed
+            if BOOTSTRAP:
+                until(lambda:bridge.navigation_ready, 3., 'navigation readiness after takeoff')
+                assert abs(last['odom'].pose.pose.position.z-2.) < .3
+                print('PASS no-odom attitude liftoff -> airborne origin -> position takeoff -> navigation ready', flush=True)
             print('PASS actual MAVROS set_mode/arming, PX4-style prestream, 2m takeoff', flush=True)
             x0 = fcu.position[0]
             pump(1., ego=True)

@@ -1,27 +1,34 @@
 #!/usr/bin/env bash
-# Start one sensor-only Gazebo/PX4 1.14.3 vehicle. No algorithm runs here.
+# Start one sensor-only Gazebo/PX4 1.17.0 vehicle. No algorithm runs here.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot-1.14.3}"
-PX4_COMMIT=08310a5e8ac64d02edb41523460e7dc267298deb
+PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot-1.17.0}"
+PX4_COMMIT=d6f12ad1c4f70ad3230afd7d86e971421e02fef4
 PX4_BIN="$PX4_DIR/build/px4_sitl_default/bin/px4"
 WORLD="${PX4_WORLD:-rmuc_2025_3m_vio_columns}"
 if [[ "$WORLD" == rmuc_2025_field ]]; then
     echo '[sim] Obsolete world name rmuc_2025_field; using the original 3 m field world.' >&2
     WORLD=rmuc_2025_3m_vio_columns
 fi
-AUTOSTART=4001
+AUTOSTART=22001
 # x,y,z,roll,pitch,yaw（m/rad）；从出生点沿赛场纵向向内（世界 -Y）。
 # 相机安装方向为机体 +X，旋转整机可保持相机外参和机头方向一致。
 SPAWN_POSE="${SPAWN_POSE:-1.3,9.4,0.5,0,0,-1.5707963267948966}"
 
 [[ -d "$PX4_DIR/.git" ]] || { echo "PX4 directory missing: $PX4_DIR" >&2; exit 1; }
 [[ "$(git -C "$PX4_DIR" rev-parse HEAD)" == "$PX4_COMMIT" ]] || {
-    echo "PX4_DIR must be MicoAir PX4 1.14.3 commit $PX4_COMMIT." >&2; exit 1;
+    echo "PX4_DIR must be PX4 1.17.0 commit $PX4_COMMIT." >&2; exit 1;
 }
 [[ -x "$PX4_BIN" ]] || { echo "Build SITL first: cd $PX4_DIR && DONT_RUN=1 make px4_sitl_default" >&2; exit 1; }
 command -v gz >/dev/null || { echo 'Gazebo gz command is missing.' >&2; exit 1; }
+# Pin Gazebo Harmonic, including when an older Gazebo is still installed.
+export GZ_DISTRO=harmonic
+export GZ_VERSION=8
+if ! gz sim --versions 2>/dev/null | grep -q '^8\.'; then
+    echo 'Install Gazebo Harmonic and ros-humble-ros-gzharmonic; see README.md.' >&2
+    exit 1
+fi
 
 if [[ "$WORLD" == default ]]; then
     WORLD_SDF="$PX4_DIR/Tools/simulation/gz/worlds/default.sdf"
@@ -56,6 +63,8 @@ for i in 1; do
 done
 
 export PX4_GZ_WORLD="$WORLD"
+export PX4_GZ_MODELS="$GEN_DIR"
+export PX4_GZ_WORLDS="$PX4_DIR/Tools/simulation/gz/worlds"
 export GZ_SIM_RESOURCE_PATH="$GEN_DIR:$ROOT_DIR/worlds/models:$PX4_DIR/Tools/simulation/gz/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
 export GZ_PARTITION="${GZ_PARTITION:-one_drone_$$}"
 printf 'export GZ_PARTITION=%q\n' "$GZ_PARTITION" > /tmp/one_drone_gz_env.sh
@@ -87,10 +96,10 @@ finish() {
 trap finish EXIT INT TERM
 
 echo "[sim] Gazebo world=$WORLD partition=$GZ_PARTITION"
-gz sim -r -s -v 2 "$WORLD_SDF" > /tmp/gz_server.log 2>&1 &
+gz sim --force-version 8 -r -s -v 2 "$WORLD_SDF" > /tmp/gz_server.log 2>&1 &
 GZ_SERVER_PID=$!; PIDS+=("$GZ_SERVER_PID")
 if [[ -z "${HEADLESS:-}" ]]; then
-    gz sim -g -v 2 > /tmp/gz_gui.log 2>&1 & PIDS+=("$!")
+    gz sim --force-version 8 -g -v 2 > /tmp/gz_gui.log 2>&1 & PIDS+=("$!")
 fi
 
 for _ in $(seq 1 90); do
@@ -107,7 +116,7 @@ for i in 1; do
     model="x500_stereo_uav$i"
     echo "[sim] PX4 instance $i model=$model pose=$SPAWN_POSE"
     PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART="$AUTOSTART" \
-        PX4_GZ_MODEL="$model" PX4_GZ_MODEL_POSE="$SPAWN_POSE" \
+        PX4_SIM_MODEL="gz_$model" PX4_GZ_MODEL_POSE="$SPAWN_POSE" \
         "$PX4_BIN" -d -i "$i" > "/tmp/px4_instance_$i.log" 2>&1 &
     PIDS+=("$!")
     sleep 5

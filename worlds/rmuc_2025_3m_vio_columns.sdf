@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- RMUC2025 original 3 m wall mesh without added VIO columns.
-     Gazebo Garden supplies the single vehicle's physical environment and sensors. -->
+     Gazebo Harmonic supplies the single vehicle's physical environment and sensors. -->
 <sdf version="1.9">
   <world name="rmuc_2025_3m_vio_columns">
     <physics type="ode">

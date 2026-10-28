@@ -1,0 +1,24 @@
+#!/bin/sh
+# @name one_drone OpenVINS / MAVROS
+# @type Quadrotor
+# PX4 1.17.0 SITL 专用；不写入实机飞控。
+
+. ${R}etc/init.d-posix/airframes/4001_gz_x500
+
+# 定位仅使用算法视觉与 IMU，不融合 Gazebo GPS 真值。
+param set EKF2_GPS_CTRL 0
+param set EKF2_EV_CTRL 15 # 外部视觉水平位置、高度、速度、航向
+param set EKF2_HGT_REF 3 # 外部视觉作为高度参考
+param set EKF2_MAG_TYPE 5 # 不融合仿真磁航向，使用视觉的局部航向
+param set SYS_HAS_MAG 0 # 当前场景不发布磁力计数据，视觉航向模式不要求磁传感器
+param set EKF2_EV_POS_X 0 # 回灌里程计已经转换到机体原点，单位 m
+param set EKF2_EV_POS_Y 0
+param set EKF2_EV_POS_Z 0
+
+# 无遥控器的自动仿真；OFFBOARD 仍由项目控制节点通过 MAVROS 请求。
+param set COM_RC_IN_MODE 4
+param set NAV_DLL_ACT 0 # 不依赖地面站连接；控制链路丢失由 OFFBOARD 失联动作处理
+param set COM_OF_LOSS_T 0.5 # OFFBOARD 设定值中断容忍时间 s
+param set COM_OBL_RC_ACT 4 # OFFBOARD 丢失后降落
+param set MPC_XY_VEL_MAX 0.5 # 仿真最大水平速度 m/s，与项目控制上限匹配
+param set MPC_XY_CRUISE 0.5 # 仿真默认巡航速度 m/s

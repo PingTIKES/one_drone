@@ -21,3 +21,6 @@
 /**/imu:
   ros__parameters:
     frame_id: mavros_base_link # MAVROS 中的机体 FLU
+/**/setpoint_raw:
+  ros__parameters:
+    thrust_scaling: 1.0 # 姿态起飞使用归一化推力；缺少此参数 MAVROS 会丢弃非零推力

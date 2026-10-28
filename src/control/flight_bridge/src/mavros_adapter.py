@@ -3,8 +3,8 @@ from dataclasses import dataclass
 import math
 
 from flight_interfaces.msg import FlightSetpoint
-from mavros_msgs.msg import PositionTarget
-from mavros_msgs.srv import CommandBool, SetMode
+from mavros_msgs.msg import AttitudeTarget, PositionTarget
+from mavros_msgs.srv import CommandBool, SetMode, MessageInterval
 from flight_bridge.velocity_math import body_flu_to_ned
 
 
@@ -31,11 +31,34 @@ class MavrosAdapter:
         self.node = node
         root = '/' + str(namespace).strip('/')
         self.setpoint_pub = node.create_publisher(PositionTarget, root + '/setpoint_raw/local', 10)
+        self.attitude_pub = node.create_publisher(AttitudeTarget, root + '/setpoint_raw/attitude', 10)
         self.audit_pub = node.create_publisher(FlightSetpoint, '/flight_setpoint', 10)
         self.mode_client = node.create_client(SetMode, root + '/set_mode')
         self.arm_client = node.create_client(CommandBool, root + '/cmd/arming')
         self.pending = {}
         self.last_command_status = 'NO_COMMAND'
+        self.interval_client = node.create_client(MessageInterval, root + '/set_message_interval')
+        self.interval_index = 0
+        self.interval_pending = False
+        node.create_timer(1., self.request_feedback)
+
+    def request_feedback(self):
+        # microvio already owns the complete telemetry interval sequence.
+        if (not self.node.p('bootstrap_takeoff') or self.node.p('localization_source') == 'microvio' or
+                self.interval_index >= 3 or
+                self.interval_pending or not self.interval_client.service_is_ready()):
+            return
+        message_id, rate = ((32, 30.), (31, 30.), (230, 5.))[self.interval_index]
+        self.interval_pending = True
+        future = self.interval_client.call_async(MessageInterval.Request(message_id=message_id, message_rate=rate))
+        def done(result):
+            self.interval_pending = False
+            try:
+                if result.result().success:
+                    self.interval_index += 1
+            except Exception as error:
+                self.node.get_logger().warn('Bootstrap telemetry request: ' + str(error))
+        future.add_done_callback(done)
 
     def command(self, command, p1=0., p2=0.):
         if command == 176 and p1 == 1. and p2 == 6.:
@@ -114,6 +137,18 @@ class MavrosAdapter:
     def position(self, target, heading):
         self.apply(self._setpoint(FlightSetpoint.MODE_POSITION, target,
                                  (math.nan,) * 3, heading, math.nan))
+
+    def attitude(self, yaw_enu, thrust):
+        if not math.isfinite(yaw_enu) or not math.isfinite(thrust) or not 0 <= thrust <= 1:
+            raise ValueError('invalid attitude/thrust setpoint')
+        out = AttitudeTarget()
+        out.header.stamp = self.node.get_clock().now().to_msg()
+        out.header.frame_id = 'mavros_local_enu'
+        out.type_mask = (AttitudeTarget.IGNORE_ROLL_RATE | AttitudeTarget.IGNORE_PITCH_RATE |
+                         AttitudeTarget.IGNORE_YAW_RATE)
+        out.orientation.w, out.orientation.z = math.cos(yaw_enu / 2), math.sin(yaw_enu / 2)
+        out.thrust = float(thrust)
+        self.attitude_pub.publish(out)
 
     def velocity_body(self, body_velocity, yaw_rate_flu, heading_ned,
                       trajectory_id, confidence, yaw_ned=math.nan):

@@ -1,7 +1,7 @@
 %YAML:1.0 # need to specify the file type at the top!
 
 # ============================================================================
-# OpenVINS 仿真估计器配置（Gazebo Garden + x500_stereo 前置双目）
+# OpenVINS 仿真估计器配置（Gazebo Harmonic + x500_stereo 前置双目）
 # 基于官方 euroc_mav/estimator_config.yaml 模板（master, ROS2）
 # 运行（由 launch 自动带参）：
 #   ros2 run ov_msckf run_subscribe_msckf --ros-args -p config_path:=<本文件>

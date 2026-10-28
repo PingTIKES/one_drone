@@ -115,17 +115,36 @@ def test_initial_heading_zero_does_not_freeze_later_body_turns(node):
 def test_constant_position_mode_is_reported_without_suppressing_odometry(node):
     node.flags = 431
     node.on_odometry(packet(q=[math.sqrt(.5), 0., 0., math.sqrt(.5)]))
-    assert node.initial_yaw_alignment.initial_yaw == pytest.approx(-math.pi/2)
+    assert node.initial_yaw_alignment.initial_yaw is None
+    assert node.provisional_alignment.initial_yaw == pytest.approx(-math.pi/2)
     assert node.published_count == 1
     assert node.health() == ('DEGRADED', 'ESTIMATOR_CONSTANT_POSITION')
     node.flags = 830
     node.on_odometry(packet(time_usec=10_001_000))
-    assert node.initial_yaw_alignment.initial_yaw == pytest.approx(-math.pi/2)
+    assert node.initial_yaw_alignment.initial_yaw == pytest.approx(0.)
     assert node.published_count == 2
-    assert node.health()[0] == 'VALID'
+    assert node.reset_index == 1
+    assert node.health()[1] == 'ESTIMATOR_RECENT_RESET'
 
 
 def test_unknown_covariance_still_publishes_with_degraded_diagnostics(node):
     node.on_odometry(packet(pose_covariance=[float('nan')] * 21))
     assert node.published_count == 1
     assert node.health() == ('DEGRADED', 'POSE_COVARIANCE_UNKNOWN')
+
+
+def test_airborne_initial_origin_preserves_tof_height_after_ekf_z_reset(node):
+    import numpy as np
+    node.odom_pub = Mock()
+    node.flags = 165
+    node.on_odometry(packet())
+    assert node.initial_yaw_alignment.rotation is None
+    node.armed = True
+    node.ground_range, node.range_distance = .07, .77
+    node.range_at = time.monotonic()
+    node.flags = 46
+    node.on_odometry(packet(time_usec=10_001_000, x=12., y=8., z=0.))
+    out = node.odom_pub.publish.call_args.args[0]
+    np.testing.assert_allclose([out.pose.pose.position.x, out.pose.pose.position.y,
+                               out.pose.pose.position.z], [0., 0., .7], atol=1e-9)
+    assert node.reset_index == 1

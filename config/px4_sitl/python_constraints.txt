@@ -1,0 +1,3 @@
+# PX4 构建专用虚拟环境；不改变 ROS Python 的 NumPy。
+numpy<2
+empy>=3.3,<4

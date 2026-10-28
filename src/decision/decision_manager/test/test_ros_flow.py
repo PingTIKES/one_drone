@@ -9,7 +9,7 @@ from nav_msgs.msg import Odometry
 from mavros_msgs.msg import State
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from std_msgs.msg import Bool, Header, String
 
 from decision_manager.decision_node import DecisionManager
@@ -38,6 +38,7 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
             'odom': fake.create_publisher(Odometry, '/ego/odom', 10),
             'health': fake.create_publisher(String, '/vio_health', 10),
             'flight': fake.create_publisher(String, '/flight_state', 10),
+            'ready': fake.create_publisher(Bool, '/flight_navigation_ready', QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)),
             'depth': fake.create_publisher(Bool, '/ego/depth_fresh', 10),
             'map': fake.create_publisher(Header, '/ego/map_heartbeat', 10),
             'manual': fake.create_publisher(PoseStamped, '/navigation_goal', 10),
@@ -60,6 +61,7 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
                 pubs['odom'].publish(odom)
                 pubs['health'].publish(String(data=health))
                 pubs['flight'].publish(String(data=flight))
+                pubs['ready'].publish(Bool(data=flight != 'TAKEOFF'))
                 pubs['depth'].publish(Bool(data=True))
                 pubs['map'].publish(Header(stamp=stamp, frame_id='synthetic_planner'))
                 # Drain callbacks promptly while still letting timer time advance.
@@ -70,7 +72,7 @@ def test_offboard_route_recovery_and_manual_override(tmp_path):
         assert not goals
         nav, flight = 'OFFBOARD', 'TAKEOFF'
         pump()
-        assert decision.mission.index == 0 and goals
+        assert decision.mission is None and not goals
         flight = 'CRUISE'
         pump()
         assert goals[-1].pose.position.z == 2.0

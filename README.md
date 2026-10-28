@@ -17,7 +17,7 @@ RViz 目标 → goal_manager → EGO 轨迹规划 → 轨迹控制 → PX4 Offbo
 - **定位**：可选择 OpenVINS 双目惯性里程计，或通过 microvio 读取 PX4 融合后的 MicoVIO 定位，统一发布 `/odom` 和 TF。只有 OpenVINS 链路向 PX4 写入外部视觉。
 - **建图与避障**：EGO 使用有效深度观测建立三维占用栅格，并按机体尺寸和安全余量膨胀障碍物。未知区域按当前配置允许通行。
 - **导航**：RViz 打点后，目标转换到 `odom` 坐标系，由 EGO 规划轨迹，控制模块向 PX4 发送设定值。
-- **决策**：进入 PX4 OFFBOARD 后选择航点行为，支持单次执行与循环巡航，通过现有目标管理器调用 EGO。
+- **决策**：自动起飞完成、定位与导航接管就绪后选择航点行为，支持单次执行与循环巡航，通过现有目标管理器调用 EGO。
 - **先验地图**：PGM 地图用于 RViz 显示、定位参考和打点；碰撞检测使用深度生成的局部地图。
 - **仿真**：Gazebo 提供环境、相机、IMU 和动力学，定位算法使用传感器数据，不读取仿真真值位姿。
 
@@ -27,7 +27,7 @@ TF 关系为：
 map → odom → base_link → camera_optical
 ```
 
-`map→odom` 由 modify 节点按配置及 RViz 面板调整发布，`odom→base_link` 由所选定位节点发布。默认将首次接受定位时的机体位置设为 `odom` 原点（XYZ=0），机头水平朝向定义为 `odom` 的 +X（yaw=0），因此初始 odom 与 base_link 位置重叠；后续位移和转动正常跟随，保留真实 roll/pitch。OpenVINS 和 microvio 包内的 `initial_position_zero`、`initial_yaw_zero` 分别控制这两个约定；固定变换只在节点启动后锁定一次，定位恢复或重置不重新归零；该坐标变换不修改飞控原始视觉输入，也不自动修改 `map→odom`。RViz 使用 `map` 作为 Fixed Frame，EGO 在 `odom` 下规划和控制。
+`map→odom` 由 modify 按配置及 RViz 面板调整发布；无需人工确认门控。`odom→base_link` 由定位节点发布。OpenVINS 默认以首次有效位置和机头方向定义原点；MicoVIO 在水平定位有效后才锁定 XY 原点与机头方向，离地后初始化时保留相对地面的高度，不把空中高度归零。地面未初始化的遥测可用于观察，不能视为导航就绪。后续定位重置不偷偷重新归零；RViz 在 `map` 下显示，EGO 在 `odom` 下规划。
 
 ### 目录
 
@@ -38,9 +38,10 @@ src/
 ├── localization/  # OpenVINS、定位桥及 microvio 模组遥测接入
 ├── navigation/    # EGO 规划器、里程计适配、目标管理
 ├── decision/      # 行为选择与航点执行，支持 once/loop
-├── control/       # 轨迹执行、飞行状态管理、PX4 指令适配
+├── control/       # 轨迹执行、飞行状态管理、MAVROS 指令适配
 └── rviz/          # map→odom 调整插件、导航 TF 显示过滤
 
+config/px4_sitl/    # PX4 1.17.0 仿真机型配置及构建依赖约束
 deploy/calibration/ # 真机标定与安装外参
 tools/              # 标定导入、仿真配置工具
 scripts/            # 仿真启动脚本
@@ -49,7 +50,7 @@ worlds/             # 仿真场景
 
 ## 2. 安装与编译
 
-运行环境：**Ubuntu 22.04、ROS 2 Humble、MAVROS / MAVLink**。真机接入目标为 PX4 1.17；项目仿真使用固定版本 PX4 1.14.3 SITL。真机相机使用 D435i，还需要安装并配置 RealSense ROS 2 驱动及 librealsense。
+运行环境：**Ubuntu 22.04、ROS 2 Humble、MAVROS / MAVLink**。真机与仿真统一使用 **PX4 1.17.0**；仿真采用 **Gazebo Harmonic**，通过 MAVROS / MAVLink UDP 连接 PX4 SITL。真机相机使用 D435i，还需要安装并配置 RealSense ROS 2 驱动及 librealsense。
 
 首次安装：
 
@@ -59,7 +60,7 @@ cd ~/one_drone
 bash setup_env.sh sim
 ```
 
-真机计算设备使用 `bash setup_env.sh onboard`。安装脚本安装项目依赖并构建工作区；仿真模式还准备外部 PX4 SITL。OpenVINS 源码已包含在项目中，PX4 仿真源码默认位于 `~/PX4-Autopilot-1.14.3`，可通过 `PX4_DIR` 指定。
+真机计算设备使用 `bash setup_env.sh onboard`。安装脚本安装项目依赖并构建工作区；仿真模式还准备外部 PX4 SITL。OpenVINS 源码已包含在项目中，PX4 仿真源码默认位于 `~/PX4-Autopilot-1.17.0`，可通过 `PX4_DIR` 指定，目录必须对应官方 `v1.17.0` 提交。SITL 参数位于 `config/px4_sitl/22001_gz_one_drone`；修改后重新运行准备工具并编译 PX4。PX4 构建 Python 使用源码目录内的 `.venv`，与 ROS 运行环境分开。
 
 已有项目更新与日常编译：
 
@@ -220,7 +221,7 @@ sudo apt install ros-humble-mavros ros-humble-mavros-extras
 sudo bash /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
 ```
 
-GeographicLib 数据集为 MAVROS 运行依赖，即使不使用 GPS 也需安装。无需改动模组所在 TELEM2；飞控 USB 需保持 MAVLink。MAVROS 启动后检查：
+GeographicLib 数据集为 MAVROS 运行依赖，即使不使用 GPS 也需安装。无需改动模组所在 TELEM2；飞控 USB 需保持 MAVLink；飞控 `UXRCE_DDS_CFG` 设为 0（关闭），不启动 uXRCE-DDS 客户端。MAVROS 启动后检查：
 
 ```bash
 ros2 topic echo /mavros/state
@@ -228,7 +229,7 @@ ros2 topic hz /mavros/local_position/pose
 ros2 topic hz /mavros/setpoint_raw/local
 ```
 
-`connected: true` 表示 MAVROS 收到飞控心跳，`mode` 是飞控实际模式，`armed` 是实际解锁状态。`/flight_state` 是项目内部控制状态。控制节点在 OFFBOARD 之前持续发布 20 Hz 静止设定值，以满足 PX4 切入要求；不在后台主动解锁或切模式。只有调用 `/takeoff` 才请求切 OFFBOARD 和解锁，只有调用 `/land` 才请求自动降落。服务请求发出不等于飞控已接受，实际结果仍看 `/mavros/state`。
+`connected: true` 表示 MAVROS 收到飞控心跳，`mode` 是飞控实际模式，`armed` 是实际解锁状态。`/flight_state` 是项目内部控制状态。控制节点在 OFFBOARD 之前持续发布 20 Hz 静止设定值，以满足 PX4 切入要求；不在后台主动解锁或切模式。只有调用 `/takeoff` 才请求切 OFFBOARD 和解锁，调用 `/land` 或姿态起飞超时、反馈异常时请求自动降落。服务请求发出不等于飞控已接受，实际结果仍看 `/mavros/state`。
 
 MAVROS 的 ROS 本地坐标是 **ENU/FLU**。控制适配器负责 ENU 与飞控 NED 的转换，项目 `/odom` 仍使用初始机头方向为 X 的局部坐标，`map→odom→base_link` 不变。OpenVINS 通过 MAVROS 的 MAVLink 路由发送外部视觉 ODOMETRY；microvio 模式关闭回灌，避免将飞控融合结果反馈给自己。
 
@@ -246,7 +247,7 @@ ros2 launch bringup startup.launch.py
 
 ### MicoVIO 模组定位检查
 
-当前真机配置为无相机定位检查：`sim: false`、`flight_control: false`、`hardware.localization_source: microvio`、`hardware.perception_enabled: false`。MicoVIO 接飞控 TELEM2，电脑 USB 接飞控，MAVROS 随总启动一起运行。在 source 工作区并统一 RMW 环境后启动：
+无相机定位检查时设置：`sim: false`、`flight_control: false`、`hardware.localization_source: microvio`、`hardware.perception_enabled: false`。MicoVIO 接飞控 TELEM2，电脑 USB 接飞控，MAVROS 随总启动一起运行。在 source 工作区并统一 RMW 环境后启动：
 
 ```bash
 ros2 launch bringup startup.launch.py
@@ -299,7 +300,7 @@ ros2 launch bringup rviz.launch.py
 
 ## 6. 起飞、打点与降落
 
-启用飞控控制并确认定位与飞控连接正常后，在**新终端 C** 设置与算法相同的环境。仿真使用：
+启用飞控控制并确认 MAVROS 连接和所选起飞反馈正常后，在**新终端 C** 设置与算法相同的环境。仿真使用：
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -323,7 +324,33 @@ ros2 topic echo /flight_state
 
 地图、深度、VIO 健康字符串均不作为 OFFBOARD 执行门控，也不等待额外恢复确认。指令或必需里程计过期时保持位置，新指令恢复后自动继续；若 PX4 位置本身不可用，只能请求零速度，不能保证水平定点。VIO 重置或规划器重启会丢弃旧指令，接收新坐标阶段的数据后继续。
 
-`/takeoff` 保留为可选的一键起飞服务：需要有效 PX4 本地位置，用当前高度加 `takeoff_altitude` 计算目标，再请求 OFFBOARD 和解锁。手动已进入 OFFBOARD 时不会重复执行起飞。无定位时人工离地不经过这个服务。microvio 的首次坐标归零不再等待估计器辅助标志；恒定位置模式等状态仍如实发布在健康诊断中。
+### MicoVIO 全自动起飞
+
+真机在 `launch.yaml` 中设置：
+
+```yaml
+startup:
+  sim: false
+  flight_control: true
+hardware:
+  localization_source: microvio
+  bootstrap_takeoff: true
+  bootstrap_height_source: range
+```
+
+启动算法后只需调用上述 `/takeoff`，无需再拨遥控器执行起飞或切模式：
+
+1. 等待 MAVROS 连接、姿态、垂直速度、垂直估计状态与下视 ToF 有效；**不要求水平 odom、地图或深度相机**。
+2. `BOOTSTRAP_PRESTREAM`：连续发送姿态设定值，确认 PX4 已进入 OFFBOARD 后请求解锁；未确认解锁不增加推力。
+3. `BOOTSTRAP_TAKEOFF`：保持起飞航向和水平姿态，按 ToF 高度与垂直速度闭环升到 `bootstrap_height`（默认 0.7 m），等待下视定位建立。
+4. 水平定位与 odom 有效后，切换位置控制，继续升到相对地面的 `takeoff_altitude`（默认 2 m）。不会在初始化高度上再额外升 2 m。
+5. 到高稳定后 `/flight_navigation_ready` 变为 true，decision 自动选择 `decision_1` 并开始发航点。
+
+PX4 在第 2 步已进入**姿态控制 OFFBOARD**，第 4 步才是**位置/速度导航接管**，两者属于同一个飞行模式。姿态起飞阶段没有水平定点能力，只用于短距离离地初始化。超时、超高、垂直反馈丢失或倾斜过大时终止该流程并请求 PX4 降落；退出 OFFBOARD 不自动重新切入或解锁。
+
+**真机上桨测试前必须核对 `hardware.bootstrap_hover_thrust` 与 `bootstrap_max_thrust`。** 悬停推力应参考本机实测和 `MPC_THR_HOVER`，当前 0.5 是待核实初值；仿真配置不能照搬。初始化高度、爬升速度、反馈增益和超时在 `src/control/flight_bridge/config/params.yaml`。飞控自身仍需通过正常解锁检查，配置正确的高度源和 OFFBOARD 失联降落动作；不强制解锁、不绕过飞控拒绝。
+
+使用 OpenVINS 且地面已有定位时，可将 `bootstrap_takeoff` 设为 false，沿用位置控制起飞。其起飞服务需要有效 PX4 本地位置。
 
 路径规划与飞控执行独立：有效里程计、TF 和规划器就绪后即可打点，未起飞、无深度相机、`flight_control: false` 均不阻止规划。EGO 始终启动；`perception_enabled` 只控制深度处理。有深度时更新障碍物，没有深度时按未知区域允许通行的原有策略规划，不伪造深度健康状态。
 
@@ -333,18 +360,18 @@ ros2 topic echo /flight_state
 2. 使用 **2D Goal Pose** 在地图上指定目标。
 3. 查看路径和 `/navigation_state`。目标从 `map` 转换到 `odom`，默认目标高度为 2 m，可在目标管理参数中修改。
 
-`flight_state` 在手动 OFFBOARD 下显示 `HOLD`（保持）或 `CRUISE`（执行 EGO）；其他飞行模式显示 `IDLE`。只有显式调用 `/takeoff` 才执行 `PRESTREAM → ARMING → TAKEOFF`。生成路径不会自动解锁或起飞。
+`flight_state` 在手动 OFFBOARD 下显示 `HOLD`（保持）或 `CRUISE`（执行 EGO）；其他飞行模式显示 `IDLE`。只有显式调用 `/takeoff` 才启动自动起飞流程。生成路径不会自动解锁或起飞。
 
 ### 自动航点决策
 
-`startup.launch.py` 已包含 `decision_manager`。在 `src/decision/decision_manager/config/decision.yaml` 中填写 `decision_1.waypoints`，默认列表为空，不会向未经配置的场地坐标飞行。坐标格式为 `[x, y, z]`，单位 m；`frame_id` 支持 `map` 和 `odom`。
+`startup.launch.py` 已包含 `decision_manager`。在 `src/decision/decision_manager/config/decision.yaml` 中填写 `decision_1.waypoints`，当前已配置巡航点，上场前必须核对它们与 `map→odom` 的对应关系。坐标格式为 `[x, y, z]`，单位 m；`frame_id` 支持 `map` 和 `odom`。
 
 - `mode: once`：依次执行所有航点，在最后一个点结束任务并保持位置。
 - `mode: loop`：最后一个点到达后回到第一个点，持续循环。
 - `decision_manager.ros__parameters.initial_decision`：当前固定选择的行为，默认为 `decision_1`。
 - `enabled: false`：禁用自动任务，仅使用 RViz 手动打点。
 
-进入 PX4 OFFBOARD 时选择任务并提交首个航点，目标管理器在里程计、TF 和规划器就绪后下发给 EGO。decision 不等待 `CRUISE`、深度或 VIO 健康字符串；到点推进依据新鲜里程计。重复 OFFBOARD 状态消息不会重新开始任务；退出后再次进入 OFFBOARD 则从首点开始。decision 不主动解锁或起飞。
+PX4 在 OFFBOARD 且 `/flight_navigation_ready` 为 true 时，选择任务并提交首个航点；姿态起飞和到高期间不提前发点。目标管理器转换坐标后下发给 EGO。decision 不等待深度或 VIO 健康字符串；到点推进依据新鲜里程计。重复 OFFBOARD 状态消息不会重新开始任务；退出后再次进入 OFFBOARD 则从首点开始。decision 不主动解锁或起飞。
 
 每点满足水平距离、高度、低速及持续时间条件后才切换，第一版是**逐点停稳巡航**，不支持高速途经点衔接。决策航点保留各自高度；RViz 二维打点仍采用 `goal_altitude`。导航接收确认使用转换后的 `odom` 目标，到点检查使用新鲜的 `/ego/odom`。
 
@@ -376,7 +403,8 @@ ros2 service call /land std_srvs/srv/Trigger '{}'
 | `/ego/occupancy_inflate` | 深度生成的膨胀占用点云，坐标系为 `odom` |
 | `/ego/planning/bspline`、`/ego/position_cmd` | 规划轨迹与轨迹执行指令 |
 | `/navigation_state` | 目标是否已发送给规划器 |
-| `/flight_state`、`/flight_hold_reason` | 飞行状态及悬停原因 |
+| `/flight_state`、`/flight_hold_reason` | 飞行状态及悬停或起飞终止原因 |
+| `/flight_navigation_ready`、`/microvio/navigation_ready` | 起飞完成后的导航接管状态、MicoVIO 原点及水平定位是否就绪 |
 
 常用命令：
 

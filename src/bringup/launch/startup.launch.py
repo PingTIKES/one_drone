@@ -64,7 +64,7 @@ def configure_arguments(context, values):
     sim = LaunchConfiguration('sim').perform(context) == 'true'
     profile = values['simulation' if sim else 'hardware']
     defaults = {**values['startup'], **profile}
-    names = ('localization_source', 'perception_enabled', 'flight_control', 'yaw_control', 'depth_source', 'calibration_dir', 'target_system', 'mavros_ns', 'fcu_url', 'gcs_url',
+    names = ('localization_source', 'perception_enabled', 'flight_control', 'yaw_control', 'bootstrap_takeoff', 'bootstrap_height_source', 'bootstrap_hover_thrust', 'bootstrap_max_thrust', 'depth_source', 'calibration_dir', 'target_system', 'mavros_ns', 'fcu_url', 'gcs_url',
              'map_file', 'cam0_topic', 'cam1_topic', 'imu_topic', 'depth_topic',
              'depth_info_topic', 'depth_scale')
     return [
@@ -259,8 +259,6 @@ def setup(context):
             ('grid_map/cloud', '/ego/unused_cloud'),
             ('planning/bspline', '/ego/planning/bspline'),
             ('planning/data_display', '/ego/planning/data_display'),
-            ('planning/broadcast_bspline_from_planner', '/ego/broadcast_bspline'),
-            ('planning/broadcast_bspline_to_planner', '/ego/broadcast_bspline'),
             ('grid_map/occupancy', '/ego/occupancy'),
             ('grid_map/occupancy_inflate', '/ego/occupancy_inflate'),
             ('goal_point', '/ego/visualization/goal'),
@@ -341,6 +339,11 @@ def setup(context):
         condition=IfCondition(arg('flight_control').lower()),
         parameters=[common, node_config('flight_bridge', 'flight_bridge'),
                     {'mavros_ns': '/' + mavros_ns,
+                     'bootstrap_takeoff': arg('bootstrap_takeoff').lower() == 'true',
+                     'localization_source': source,
+                     'bootstrap_height_source': arg('bootstrap_height_source'),
+                     'bootstrap_hover_thrust': float(arg('bootstrap_hover_thrust')),
+                     'bootstrap_max_thrust': float(arg('bootstrap_max_thrust')),
                      'yaw_control': arg('yaw_control').lower() == 'true'}])
     rviz_tf_filter = Node(
         package='rviz_tf_shift', executable='tf_display_filter.py',
@@ -379,7 +382,7 @@ def setup(context):
         ego_planner,                 # depth GridMap + local B-spline planning
         ego_traj_server,             # B-spline -> PositionCommand
         goal_manager,                # RViz goal -> EGO target
-        decision_manager,            # OFFBOARD -> selected decision -> ordered waypoints
+        decision_manager,            # navigation ready -> selected decision -> ordered waypoints
         flight_bridge,               # EGO PositionCommand -> PX4 Offboard
         rviz_tf_filter,              # navigation TF only for RViz
         one_drone_rviz,

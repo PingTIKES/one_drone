@@ -60,7 +60,7 @@ ego_planner_node:
     manager/feasibility_tolerance: 0.05 # 轨迹动力学约束容差比例
     manager/planning_horizon: 4.5 # 管理器规划视距（m）
     manager/use_distinctive_trajs: false # 是否生成多条候选轨迹；开启增加计算量
-    manager/drone_id: 0 # EGO 编号；当前单机使用 0
+    manager/drone_id: -1 # 单机规划，不创建集群轨迹收发话题
 
     optimization/lambda_smooth: 1.0 # 轨迹平滑代价权重
     optimization/lambda_collision: 0.5 # 障碍碰撞代价权重

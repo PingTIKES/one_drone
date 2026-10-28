@@ -1,6 +1,6 @@
 """Known x500 body geometry in base_link FLU metres, for sim depth self filtering.
 
-The body box and rotor centres come from PX4 1.14.3's Gazebo x500 model.sdf.
+The body box and rotor centres match PX4 1.17.0's pinned Gazebo x500_base model.
 Keep this mask disabled for real airframes until their geometry is measured.
 """
 

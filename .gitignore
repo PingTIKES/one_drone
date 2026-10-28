@@ -2,7 +2,6 @@ build/
 install/
 log/
 third_party/
-src/px4_msgs
 **/__pycache__/
 *.py[cod]
 worlds/models/.gen/

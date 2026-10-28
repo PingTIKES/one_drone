@@ -2,8 +2,27 @@
 flight_bridge:
   ros__parameters:
     mavros_ns: /mavros # MAVROS 名称空间；状态、位置、设定值及服务共用同一个连接
+    localization_source: openvins # 由 launch.yaml 覆盖；microvio 接管前同时等待模块坐标原点初始化
     yaw_control: true # 总启动由 bringup/params/launch.yaml 覆盖；false 锁定初始机头方向，true 沿用解耦 yaw
     takeoff_altitude: 2.0 # 相对起飞高度（m）
+    bootstrap_takeoff: false # 总入口按 launch.yaml 的仿真/真机配置覆盖；true 启用无水平 odom 起飞
+    bootstrap_height: 0.7 # 离地初始化高度 m；未定位时在此高度等待，不继续盲目爬升
+    bootstrap_height_source: local # launch.yaml 覆盖：local 飞控本地高度；range 使用 /microvio/range 下视 ToF
+    bootstrap_hover_thrust: 0.5 # 归一化悬停推力，必须按本机实测或 PX4 MPC_THR_HOVER 填写；不是通用机型常数
+    bootstrap_min_thrust: 0.1 # 解锁确认后推力爬升的起点及闭环下限，0～1
+    bootstrap_max_thrust: 0.7 # 姿态起飞推力上限，0～1；须大于悬停推力
+    bootstrap_height_gain: 1.0 # 高度误差转垂直速度增益 1/s
+    bootstrap_velocity_gain: 0.15 # 垂直速度误差转推力增益 s/m
+    bootstrap_integral_gain: 0.08 # 垂直速度积分增益 1/m；积分有抗饱和和限幅
+    bootstrap_climb_speed: 0.3 # 姿态起飞阶段的目标升降速度上限 m/s
+    bootstrap_thrust_slew: 0.3 # 每秒归一化推力最大变化量，避免解锁后突跳
+    bootstrap_timeout: 20.0 # 离地后等待定位及接管的最长秒数，超时请求 PX4 降落
+    bootstrap_localization_stable_time: 0.5 # 水平定位和新鲜 odom 连续可用后才从姿态控制切为位置控制 s
+    arming_timeout: 15.0 # 请求起飞后等待 OFFBOARD 与实际解锁的最长秒数
+    bootstrap_height_margin: 0.5 # 超出初始化高度此距离时终止姿态起飞并请求降落 m
+    bootstrap_max_tilt_deg: 20.0 # 姿态起飞允许的最大机体倾角（度）
+    bootstrap_yaw_reset_deg: 15.0 # 相邻姿态航向变化扣除陀螺积分后超过此角度，按估计器航向坐标重置修正参考
+    estimator_timeout: 1.0 # 飞控垂直估计状态接收超时 s；只要求高度/垂直速度，不要求水平定位
     max_horizontal_speed: 0.5 # 最大水平速度（m/s）；须与 EGO 三处速度上限一起调整
     max_vertical_speed: 0.3 # 最大升降速度（m/s）
     max_yaw_rate: 0.35 # 正常偏航角速度上限（rad/s）

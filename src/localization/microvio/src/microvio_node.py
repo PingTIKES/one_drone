@@ -10,13 +10,13 @@ from pymavlink import mavutil
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from mavros_msgs.msg import Mavlink, State, TimesyncStatus
 from mavros_msgs.srv import MessageInterval
 from vio_bridge.mavlink_codec import decode_frame
 from sensor_msgs.msg import Range
-from std_msgs.msg import Header, String
+from std_msgs.msg import Bool, Header, String
 from tf2_ros import TransformBroadcaster
 from vio_bridge.vio_tf_geometry import InitialYawAlignment
 
@@ -55,6 +55,12 @@ class Microvio(Node):
         self.initial_yaw_alignment = InitialYawAlignment(
             zero_position=bool(self.p('initial_position_zero')),
             zero_yaw=bool(self.p('initial_yaw_zero')))
+        self.provisional_alignment = InitialYawAlignment(
+            zero_position=bool(self.p('initial_position_zero')),
+            zero_yaw=bool(self.p('initial_yaw_zero')))
+        self.ground_z = None
+        self.range_distance = self.ground_range = None
+        self.range_at = -math.inf
         self.heartbeat_at = self.odom_at = self.estimator_at = -math.inf
         self.reset_at = -math.inf
         self.remote_stamp = self.odom_stamp = self.reset_counter = None
@@ -79,11 +85,13 @@ class Microvio(Node):
         self.diag_pub = self.create_publisher(String, str(self.p('diagnostics_topic')), 10)
         self.reset_pub = self.create_publisher(Header, str(self.p('reset_topic')), latched)
         self.range_pub = self.create_publisher(Range, str(self.p('range_topic')), 10)
+        self.ready_pub = self.create_publisher(Bool, '/microvio/navigation_ready', 10)
         self.tf = TransformBroadcaster(self)
         root = '/' + str(self.p('mavros_ns')).strip('/')
         raw_topic = f'/uas{int(self.p("target_system"))}/mavlink_source'
         self.create_subscription(Mavlink, raw_topic, self.on_frame, qos_profile_sensor_data)
         self.create_subscription(State, root + '/state', self.on_mavros_state, latched)
+        self.create_subscription(PoseStamped, root + '/local_position/pose', self.on_ground_pose, qos_profile_sensor_data)
         self.create_subscription(TimesyncStatus, root + '/timesync_status', self.on_timesync, qos_profile_sensor_data)
         self.interval_client = self.create_client(MessageInterval, root + '/set_message_interval')
         self.create_timer(1., self.request_intervals)
@@ -118,6 +126,20 @@ class Microvio(Node):
             return
         self.sync.offset_ns = int(msg.estimated_offset_ns)
         self.sync.last_reply_at = time.monotonic()
+
+    def on_ground_pose(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        age = self.get_clock().now().nanoseconds * 1e-9 - stamp
+        if not self.armed and -.05 <= age <= float(self.p('odom_timeout')) and math.isfinite(msg.pose.position.z):
+            # ENU and NWU share the same up axis. Preserve the ground datum
+            # when XY/yaw become reliable only after liftoff.
+            self.ground_z = float(msg.pose.position.z)
+
+    def aiding_ready(self):
+        return (self.flags is not None and
+                time.monotonic() - self.estimator_at <= float(self.p('estimator_timeout')) and
+                not self.flags & (128 | 2048) and
+                self.flags & self.required_flags() == self.required_flags())
 
     def on_frame(self, frame):
         if (frame.sysid != int(self.p('target_system')) or
@@ -175,6 +197,9 @@ class Microvio(Node):
             out.radiation_type = Range.INFRARED
             out.min_range, out.max_range = msg.min_distance * .01, msg.max_distance * .01
             out.range = distance
+            self.range_distance, self.range_at = distance, now
+            if not self.armed:
+                self.ground_range = distance
             self.range_pub.publish(out)
 
     def on_odometry(self, msg):
@@ -204,11 +229,25 @@ class Microvio(Node):
             if not -float(self.p('future_tolerance')) <= age <= float(self.p('odom_timeout')):
                 raise ValueError('STALE_OR_FUTURE_SOURCE_STAMP')
             pose = convert(msg, float(self.p('unknown_variance')))
+            if not self.armed:
+                self.ground_z = float(pose['position'][2])
             if self.p('initial_yaw_zero') or self.p('initial_position_zero'):
-                # Coordinate zeroing uses the first finite, timestamp-checked
-                # sample. Estimator aiding flags belong to health diagnostics;
-                # they must not suppress the odometry stream on the ground.
-                pose['position'], pose['quaternion'], pose['pose_covariance'] = self.initial_yaw_alignment.apply(
+                alignment = self.initial_yaw_alignment
+                if alignment.rotation is None:
+                    if not self.aiding_ready():
+                        alignment = self.provisional_alignment
+                    else:
+                        alignment.apply(pose['position'], rotation(pose['quaternion']), pose['pose_covariance'])
+                        if self.p('initial_position_zero') and self.ground_z is not None:
+                            alignment.initial_position[2] = self.ground_z
+                            if (self.armed and self.ground_range is not None and
+                                    time.monotonic() - self.range_at <= float(self.p('odom_timeout'))):
+                                tilt_cos = rotation(pose['quaternion'])[2, 2]
+                                height = self.range_distance * tilt_cos - self.ground_range
+                                alignment.initial_position[2] = pose['position'][2] - height
+                        if self.published_count:
+                            self.reset_event('AIRBORNE_ORIGIN_INITIALIZED')
+                pose['position'], pose['quaternion'], pose['pose_covariance'] = alignment.apply(
                     pose['position'], rotation(pose['quaternion']), pose['pose_covariance'])
         except ValueError as error:
             self.reason = str(error)
@@ -241,7 +280,7 @@ class Microvio(Node):
     def required_flags(self):
         flags = int(self.p('required_estimator_flags'))
         if self.p('external_vision_reference') == 'local_frd':
-            # PX4 1.14 intentionally clears yaw_align after resetting to FRD
+            # PX4 1.17.0 intentionally clears yaw_align after resetting to FRD
             # vision yaw. ESTIMATOR_ATTITUDE also depends on yaw_align, so that
             # global-alignment bit is not a valid local-FRD failure criterion.
             # The actual quaternion, timestamps, and aiding flags remain checked.
@@ -281,6 +320,9 @@ class Microvio(Node):
     def publish_health(self):
         state, _ = self.health()
         self.health_pub.publish(String(data=state))
+        origin_ready = (self.initial_yaw_alignment.rotation is not None or
+                        not (self.p('initial_yaw_zero') or self.p('initial_position_zero')))
+        self.ready_pub.publish(Bool(data=origin_ready and self.aiding_ready() and state != 'INVALID'))
 
     def publish_diagnostics(self):
         state, reason = self.health()

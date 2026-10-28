@@ -1,4 +1,4 @@
-"""Select decision_1 on OFFBOARD entry and execute its waypoints sequentially."""
+"""Start decision_1 after OFFBOARD navigation takeover; execute ordered waypoints."""
 import json
 import math
 import time
@@ -11,7 +11,7 @@ from nav_msgs.msg import Odometry
 from mavros_msgs.msg import State
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from std_msgs.msg import Header, String
+from std_msgs.msg import Bool, Header, String
 
 from decision_manager.mission import Mission, load_decisions
 
@@ -40,6 +40,9 @@ class DecisionManager(Node):
             raise ValueError('initial_decision is not defined in decisions_file')
         self.mission = None
         self.offboard = False
+        self.navigation_ready = False
+        self.ready_at = -math.inf
+        self.started_this_offboard = False
         self.odom = None
         self.status_at = self.odom_at = -math.inf
         self.request = None
@@ -60,6 +63,7 @@ class DecisionManager(Node):
         self.create_subscription(PoseStamped, '/decision/accepted_goal', self.on_accepted, 10)
         self.create_subscription(PoseStamped, '/navigation_goal', self.on_manual_goal, 10)
         self.create_subscription(Header, '/vio_reset_event', self.on_reset, latched)
+        self.create_subscription(Bool, '/flight_navigation_ready', self.on_navigation_ready, latched)
         self.create_timer(1.0 / float(self.p('check_rate')), self.tick)
         self.report('WAIT_OFFBOARD' if self.p('enabled') else 'DISABLED')
 
@@ -93,18 +97,35 @@ class DecisionManager(Node):
         if not self.p('enabled'):
             return
         if not offboard:
+            self.started_this_offboard = False
             if self.mission is not None:
                 self.clear_pending()
                 self.mission = None
                 self.request = self.accepted = None
             self.report('WAIT_OFFBOARD')
         elif entered:
-            definition = self.decisions[self.select_decision()]
-            if not definition['waypoints']:
-                self.report('NO_WAYPOINTS')
-                return
-            self.mission = Mission(definition)
-            self.send_waypoint()
+            # A readiness sample from an earlier mode/session cannot authorize
+            # this OFFBOARD entry. The bridge renews readiness at 20 Hz.
+            self.navigation_ready = False
+            self.report('WAIT_TAKEOFF_COMPLETION')
+        self.maybe_start()
+
+    def on_navigation_ready(self, msg):
+        self.navigation_ready, self.ready_at = bool(msg.data), time.monotonic()
+        self.maybe_start()
+
+    def maybe_start(self):
+        if (not self.p('enabled') or not self.offboard or self.started_this_offboard or
+                not self.navigation_ready or time.monotonic() - self.ready_at > float(self.p('odom_timeout')) or
+                time.monotonic() - self.status_at > float(self.p('status_timeout'))):
+            return
+        self.started_this_offboard = True
+        definition = self.decisions[self.select_decision()]
+        if not definition['waypoints']:
+            self.report('NO_WAYPOINTS')
+            return
+        self.mission = Mission(definition)
+        self.send_waypoint()
 
     def send_waypoint(self):
         goal = PoseStamped()
@@ -150,6 +171,8 @@ class DecisionManager(Node):
             self.report('VIO_RESET_NEW_OFFBOARD_REQUIRED')
 
     def ready(self, now):
+        if not self.navigation_ready or now - self.ready_at > float(self.p('odom_timeout')):
+            return 'PAUSED_FLIGHT_CONTROLLER'
         if not self.offboard or now - self.status_at > float(self.p('status_timeout')):
             return 'PAUSED_PX4_STATUS'
         if self.odom is None or now - self.odom_at > float(self.p('odom_timeout')):

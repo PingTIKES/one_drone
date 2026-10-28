@@ -88,41 +88,6 @@ namespace ego_planner
         });
     // std::bind(&EGOReplanFSM::odometryCallback, this, std::placeholders::_1));
 
-    if (planner_manager_->pp_.drone_id >= 1)
-    {
-      string sub_topic_name = string("/drone_") + std::to_string(planner_manager_->pp_.drone_id - 1) + string("_planning/swarm_trajs");
-      swarm_trajs_sub_ = node_->create_subscription<traj_utils::msg::MultiBsplines>(
-          sub_topic_name,
-          10,
-          [this](const std::shared_ptr<const traj_utils::msg::MultiBsplines> &msg)
-          {
-            this->swarmTrajsCallback(msg);
-          });
-    }
-
-    // ros2 中topic名字中不能出现负号，单机id是-1需要处理
-    // string pub_topic_name = string("/drone_") + std::to_string(planner_manager_->pp_.drone_id) + string("_planning/swarm_trajs");
-    string pub_topic_name;
-    if (planner_manager_->pp_.drone_id <= -1)
-    {
-      RCLCPP_INFO(node_->get_logger(), "single drone:%d", planner_manager_->pp_.drone_id);
-      pub_topic_name = string("/drone_") + "single" + string("_planning/swarm_trajs");
-    }else
-    {
-      pub_topic_name = string("/drone_") + std::to_string(planner_manager_->pp_.drone_id) + string("_planning/swarm_trajs");
-    }
-
-    swarm_trajs_pub_ = node_->create_publisher<traj_utils::msg::MultiBsplines>(pub_topic_name, 10);
-
-    broadcast_bspline_pub_ = node_->create_publisher<traj_utils::msg::Bspline>("planning/broadcast_bspline_from_planner", 10);
-    broadcast_bspline_sub_ = node_->create_subscription<traj_utils::msg::Bspline>(
-        "planning/broadcast_bspline_to_planner",
-        100,
-        [this](const std::shared_ptr<const traj_utils::msg::Bspline> &msg)
-        {
-          this->BroadcastBsplineCallback(msg);
-        });
-
     bspline_pub_ = node_->create_publisher<traj_utils::msg::Bspline>("planning/bspline", 10);
     data_disp_pub_ = node_->create_publisher<traj_utils::msg::DataDisp>("planning/data_display", 100);
 
@@ -530,7 +495,6 @@ namespace ego_planner
           {
             changeFSMExecState(EXEC_TRAJ, "FSM");
 
-            publishSwarmTrajs(true);
           }
           else
           {
@@ -566,7 +530,6 @@ namespace ego_planner
       {
         changeFSMExecState(EXEC_TRAJ, "FSM");
         flag_escape_emergency_ = true;
-        publishSwarmTrajs(false);
       }
       else
       {
@@ -581,7 +544,6 @@ namespace ego_planner
       if (planFromCurrentTraj(1))
       {
         changeFSMExecState(EXEC_TRAJ, "FSM");
-        publishSwarmTrajs(false);
       }
       else
       {
@@ -780,7 +742,6 @@ namespace ego_planner
         if (planFromCurrentTraj()) // Make a chance
         {
           changeFSMExecState(EXEC_TRAJ, "SAFETY");
-          publishSwarmTrajs(false);
           return;
         }
         else
@@ -853,58 +814,6 @@ namespace ego_planner
     }
 
     return plan_and_refine_success;
-  }
-
-  void EGOReplanFSM::publishSwarmTrajs(bool startup_pub)
-  {
-    auto info = &planner_manager_->local_data_;
-
-    traj_utils::msg::Bspline bspline;
-    bspline.order = 3;
-    bspline.start_time = info->start_time_;
-    bspline.drone_id = planner_manager_->pp_.drone_id;
-    bspline.traj_id = info->traj_id_;
-
-    Eigen::MatrixXd pos_pts = info->position_traj_.getControlPoint();
-    bspline.pos_pts.reserve(pos_pts.cols());
-    for (int i = 0; i < pos_pts.cols(); ++i)
-    {
-      geometry_msgs::msg::Point pt;
-      pt.x = pos_pts(0, i);
-      pt.y = pos_pts(1, i);
-      pt.z = pos_pts(2, i);
-      bspline.pos_pts.push_back(pt);
-    }
-
-    Eigen::VectorXd knots = info->position_traj_.getKnot();
-
-    bspline.knots.reserve(knots.rows());
-    for (int i = 0; i < knots.rows(); ++i)
-    {
-      bspline.knots.push_back(knots(i));
-    }
-
-    if (startup_pub)
-    {
-      multi_bspline_msgs_buf_.drone_id_from = planner_manager_->pp_.drone_id; // zx-todo
-      if ((int)multi_bspline_msgs_buf_.traj.size() == planner_manager_->pp_.drone_id + 1)
-      {
-        multi_bspline_msgs_buf_.traj.back() = bspline;
-      }
-      else if ((int)multi_bspline_msgs_buf_.traj.size() == planner_manager_->pp_.drone_id)
-      {
-        multi_bspline_msgs_buf_.traj.push_back(bspline);
-      }
-      else
-      {
-        RCLCPP_ERROR(node_->get_logger(), "Wrong traj nums and drone_id pair!!! traj.size()=%d, drone_id=%d", (int)multi_bspline_msgs_buf_.traj.size(), planner_manager_->pp_.drone_id);
-        // return plan_and_refine_success;
-      }
-      // swarm_trajs_pub_.publish(multi_bspline_msgs_buf_);
-      swarm_trajs_pub_->publish(multi_bspline_msgs_buf_);
-    }
-
-    broadcast_bspline_pub_->publish(bspline);
   }
 
   bool EGOReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)

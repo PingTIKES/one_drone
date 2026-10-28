@@ -125,7 +125,6 @@ namespace ego_planner
     void BroadcastBsplineCallback(const std::shared_ptr<const traj_utils::msg::Bspline> &msg);
 
     bool checkCollision();
-    void publishSwarmTrajs(bool startup_pub);
 
   public:
     EGOReplanFSM(/* args */)

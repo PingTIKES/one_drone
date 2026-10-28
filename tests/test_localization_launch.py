@@ -21,12 +21,13 @@ def startup():
     return module
 
 
-def launch_nodes(startup, sim, source, perception, flight_control=False, yaw_control=True):
+def launch_nodes(startup, sim, source, perception, flight_control=False, yaw_control=True,
+                 mavros_ns='/mavros'):
     values = yaml.safe_load((Path(get_package_share_directory('bringup')) /
                             'params/launch.yaml').read_text())
     params = {**values['startup'], **values['simulation' if sim else 'hardware']}
     params.update(sim=sim, rviz=False, flight_control=flight_control, yaw_control=yaw_control,
-                  localization_source=source, perception_enabled=perception)
+                  localization_source=source, perception_enabled=perception, mavros_ns=mavros_ns)
     if not perception and source == 'microvio':
         # A camera-free check must not read or require any camera calibration.
         params.update(calibration_dir='/does/not/exist', cam0_topic='', cam1_topic='',
@@ -100,6 +101,16 @@ def test_mavros_keeps_internal_plugin_names_and_is_single_fcu_owner(startup):
     assert merged['tgt_system'] == 1
     assert merged['fcu_url'].endswith(':921600')
     assert not any('Agent' in executable for executable in nodes)
+
+
+@pytest.mark.parametrize('namespace,name,parent', [('/mavros', 'mavros', '/'),
+                                                 ('/uav/control', 'control', '/uav')])
+def test_mavros_scoped_uas_name_matches_configured_interface_root(startup, namespace, name, parent):
+    _, nodes = launch_nodes(startup, False, 'microvio', False, mavros_ns=namespace)
+    mavros = nodes['mavros_node']
+    assert mavros._Node__node_name is None
+    assert mavros._Node__ros_arguments == ['-r', f'mavros:__node:={name}',
+                                          '-r', f'{name}:__ns:={parent}']
 
 
 def test_yaml_alone_selects_simulation_or_hardware(startup, tmp_path, monkeypatch):

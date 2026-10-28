@@ -240,6 +240,8 @@ target_system: 1
 
 串口路径以实际设备为准；UART 两端波特率必须一致。用户需要串口访问权限（通常加入 `dialout` 组后重新登录）。MAVROS 已包含在总启动中，不要再启动第二个 MAVROS、microvio 串口读取程序或 Agent。QGroundControl 不能同时打开这个串口；可在需要时配置 `gcs_url` 通过 UDP 转发。
 
+`mavros_ns` 是话题和服务的统一根路径。总启动会单独设置 MAVROS 的 UAS 节点路径，兼容不同版本的插件命名空间行为；默认接口应为 `/mavros/state`、`/mavros/set_mode`，无需填写重复的 `/mavros/mavros`。
+
 依赖由 `setup_env.sh` 安装。已有系统可执行：
 
 ```bash

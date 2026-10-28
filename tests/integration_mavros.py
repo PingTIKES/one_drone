@@ -151,7 +151,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='one_drone_mavros_test_') as folder:
         log = open(Path(folder)/'mavros.log', 'w+')
         process = subprocess.Popen([
-            '/opt/ros/humble/lib/mavros/mavros_node', '--ros-args', '-r', '__ns:=/mavros',
+            '/opt/ros/humble/lib/mavros/mavros_node', '--ros-args',
+            '-r', 'mavros:__ns:=/', '-r', '__ns:=/mavros',
             '--params-file', str(ROOT/'src/bringup/params/mavros.yaml'),
             '-p', f'fcu_url:=udp://127.0.0.1:{fcu.mavros_port}@127.0.0.1:{fcu.port}',
             '-p', 'tgt_system:=1', '-p', 'tgt_component:=1'], stdout=log, stderr=subprocess.STDOUT)

@@ -305,9 +305,14 @@ def setup(context):
                          'diagnostics_topic': '/vio_diagnostics',
                          'reset_topic': '/vio_reset_event',
                          'odom_frame': 'odom', 'body_frame': 'base_link'}])
+    mavros_parent, mavros_name = ('/' + mavros_ns).rsplit('/', 1)
     mavros = Node(
         package='mavros', executable='mavros_node', namespace=mavros_ns,
         output='screen', # 不设置 name：避免将 MAVROS 内部所有插件节点重命名
+        # UAS 的完整节点名就是接口根路径。2.15+ 的插件忽略全局 __ns，
+        # 因此仅对 UAS 设置父命名空间，避免出现 /mavros/mavros/...。
+        ros_arguments=['-r', f'mavros:__node:={mavros_name}',
+                       '-r', f'{mavros_name}:__ns:={mavros_parent or "/"}'],
         parameters=[str(bringup / 'params/mavros.yaml'), common,
                     {'fcu_url': arg('fcu_url'), 'gcs_url': arg('gcs_url'),
                      'tgt_system': target_system, 'tgt_component': 1}])

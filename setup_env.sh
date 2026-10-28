@@ -29,11 +29,9 @@ sudo apt install -y python3-colcon-common-extensions python3-rosdep python3-nump
     libpcl-dev libeigen3-dev libceres-dev libboost-all-dev libopencv-dev libopencv-contrib-dev \
     ros-humble-image-transport ros-humble-tf2-geometry-msgs ros-humble-mavros ros-humble-mavros-extras
 
-# microvio reads PX4 MAVLink telemetry. Install only this protocol library;
-# keep ROS/OpenCV on the distribution NumPy rather than pulling a pip NumPy.
-if ! python3 -c 'import pymavlink' >/dev/null 2>&1; then
-    python3 -m pip install --user --no-deps 'pymavlink>=2.4.41,<3'
-fi
+# microvio uses pymavlink and its CRC dependency. Enforce the supported version
+# even when an older pymavlink is already present; keep distribution NumPy.
+python3 -m pip install --user --no-deps 'pymavlink>=2.4.41,<3' fastcrc
 
 # OpenVINS is versioned with this repository and built in the same workspace.
 if [[ ! -f "$OPENVINS_DIR/ov_msckf/src/core/VioManager.h" ]]; then

@@ -86,7 +86,7 @@ MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --exec
 | --- | --- |
 | `startup.sim` | `true` 使用仿真配置；`false` 使用真机配置 |
 | `startup.rviz` | 是否打开 RViz |
-| `startup.yaw_control` | `true` 使用现有平移/yaw 解耦策略；`false` 固定首次有效 PX4 航向，不随路径转向 |
+| `startup.yaw_control` | `true` 使用平移/yaw 解耦策略；`false` 保持起飞/手动接入 OFFBOARD 时的机头方向，自动补偿飞控航向重置 |
 | `startup.flight_control` | `false` 只测试感知、定位和规划；`true` 启动飞控控制节点及起飞/降落服务 |
 | `hardware.localization_source` | `openvins` 使用相机定位；`microvio` 读取飞控 USB 融合定位 |
 | `hardware.perception_enabled` | `false` 关闭深度处理，仍启动 EGO、目标管理和决策；有相机时设 `true` 更新障碍物 |
@@ -124,7 +124,7 @@ ros2 launch bringup startup.launch.py
 后续接回前视相机，只需在本文件打开感知并填写对应话题/标定路径。若选择软件双目，前视深度处理只需要左右图像，不要求前视相机另有 IMU；MicoVIO 定位独立进行。OpenVINS 定位仍需要双目和 IMU。
 
 
-`yaw_control: false` 会在首次收到有效 PX4 本地位置时锁定机头方向，位置保持、起飞和轨迹跟踪都使用该固定 yaw；平移仍独立执行，不再按路径朝向或前视角度缩放水平速度，因此允许侧向和后向移动。定位暂时恢复或 HOLD 不重新锁定；固定 yaw 使用飞控本地参考系，MAVROS Pose 不提供航向重置增量。`true` 保持原有解耦 yaw 策略。修改后重启控制节点生效，此参数不改变 map→odom 或 RViz TF。
+`yaw_control: false` 在调用 `/takeoff` 或手动接入 OFFBOARD 时记录当时的机头方向，起飞、位置保持和轨迹跟踪持续保持该方向；平移独立执行，允许侧向和后向移动。控制器全程对比 MAVROS 姿态变化与陀螺角速度，检测到航向参考突变时同步补偿锁定值；检测阈值为 `flight_bridge/config/params.yaml` 的 `yaw_reset_threshold_deg`。正常机体转动和 HOLD 不重新锁定。`true` 使用原有解耦 yaw 策略。修改后重启控制节点生效，此参数不改变 map→odom 或 RViz TF。
 
 
 ### 参数文件位置

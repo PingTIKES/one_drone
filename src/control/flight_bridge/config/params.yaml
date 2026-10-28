@@ -3,7 +3,7 @@ flight_bridge:
   ros__parameters:
     mavros_ns: /mavros # MAVROS 名称空间；状态、位置、设定值及服务共用同一个连接
     localization_source: openvins # 由 launch.yaml 覆盖；microvio 接管前同时等待模块坐标原点初始化
-    yaw_control: true # 总启动由 bringup/params/launch.yaml 覆盖；false 锁定初始机头方向，true 沿用解耦 yaw
+    yaw_control: true # 总启动由 launch.yaml 覆盖；false 保持起飞/手动接入 OFFBOARD 时的机头方向，true 使用解耦 yaw
     takeoff_altitude: 1.5 # 相对起飞高度（m）
     bootstrap_takeoff: false # 总入口按 launch.yaml 的仿真/真机配置覆盖；true 启用无水平 odom 起飞
     bootstrap_height: 0.7 # 离地初始化高度 m；未定位时在此高度等待，不继续盲目爬升
@@ -21,7 +21,7 @@ flight_bridge:
     arming_timeout: 15.0 # 请求起飞后等待 OFFBOARD 与实际解锁的最长秒数
     bootstrap_height_margin: 0.5 # 超出初始化高度此距离时终止姿态起飞并请求降落 m
     bootstrap_max_tilt_deg: 20.0 # 姿态起飞允许的最大机体倾角（度）
-    bootstrap_yaw_reset_deg: 15.0 # 相邻姿态航向变化扣除陀螺积分后超过此角度，按估计器航向坐标重置修正参考
+    yaw_reset_threshold_deg: 15.0 # 全程检测：相邻航向变化扣除陀螺积分后超过此角度，同步修正锁定航向；单位度，不是路径转头阈值
     estimator_timeout: 1.0 # 飞控垂直估计状态接收超时 s；只要求高度/垂直速度，不要求水平定位
     max_horizontal_speed: 0.5 # 最大水平速度（m/s）；须与 EGO 三处速度上限一起调整
     max_vertical_speed: 0.3 # 最大升降速度（m/s）

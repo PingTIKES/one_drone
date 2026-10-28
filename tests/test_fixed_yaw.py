@@ -6,16 +6,21 @@ from unittest.mock import Mock
 import pytest
 import rclpy
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu
+from mavros_msgs.msg import State
+from std_srvs.srv import Trigger
 from flight_bridge.mavros_adapter import LocalPosition as VehicleLocalPosition
 from rclpy.parameter import Parameter
 from quadrotor_msgs.msg import PositionCommand
 
 from flight_bridge.flight_bridge import FlightBridge
 from flight_bridge.yaw_manager import YawDecision
+from flight_bridge.mavros_adapter import wrap
 
 
 @pytest.fixture
-def bridge():
+def bridge(monkeypatch):
+    monkeypatch.setattr('flight_bridge.flight_bridge.MavrosAdapter', Mock())
     rclpy.init()
     n = FlightBridge()
     n.now = lambda: 100.
@@ -104,3 +109,106 @@ def test_fixed_yaw_reaches_px4_velocity_setpoint(bridge):
     msg = adapter.setpoint_pub.publish.call_args.args[0]
     assert msg.type_mask & msg.IGNORE_YAW
     assert msg.yaw_rate == pytest.approx(.2)
+
+
+def attitude(n, yaw_enu, stamp, yaw_rate=0.):
+    n.now = lambda: stamp
+    msg = Imu()
+    msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(round(stamp * 1e9), 10**9)
+    msg.orientation.w, msg.orientation.z = math.cos(yaw_enu/2), math.sin(yaw_enu/2)
+    msg.angular_velocity.z = yaw_rate
+    n.on_attitude(msg)
+
+
+def test_takeoff_latches_current_heading_after_ground_initialization(bridge):
+    n = bridge
+    n.set_parameters([Parameter('yaw_control', value=False)])
+    pose(n, 0.)  # First PX4 pose, before visual yaw initialization.
+    pose(n, -math.pi)
+    n.on_status(State(connected=True, mode='POSCTL'))
+    assert n.takeoff(Trigger.Request(), Trigger.Response()).success
+    n.send_position(n.takeoff_target)
+    assert n.initial_heading == pytest.approx(-math.pi)
+    assert n.px4_adapter.position.call_args.args[1] == pytest.approx(-math.pi)
+
+
+@pytest.mark.parametrize('state', ['PRESTREAM', 'TAKEOFF', 'HOLD', 'CRUISE'])
+@pytest.mark.parametrize('jump', [-math.pi, math.pi/2, -math.pi/2])
+def test_frame_reset_preserves_physical_yaw_target_in_every_phase(bridge, state, jump):
+    n = bridge
+    n.set_parameters([Parameter('yaw_control', value=False)])
+    attitude(n, .1, 100.)
+    pose(n, math.pi/2-.1)
+    n.state = state
+    # Preserve an existing physical heading error as well as the reference.
+    target_enu = .3
+    n.initial_heading = wrap(math.pi/2-target_enu)
+    attitude(n, wrap(.1+jump), 100.05)
+    pose(n, wrap(math.pi/2-.1-jump))
+    n.send_position((1., 2., -1.5))
+    expected = wrap(math.pi/2-target_enu-jump)
+    assert wrap(n.initial_heading-expected) == pytest.approx(0.)
+    assert wrap(n.px4_adapter.position.call_args.args[1]-expected) == pytest.approx(0.)
+    ready_trajectory(n)
+    n.cmd.header.stamp.nanosec = n.ego_odom.header.stamp.nanosec = 50000000
+    n.cmd_at = n.ego_odom_at = n.now()
+    assert n.send_ego_command()
+    assert wrap(n.px4_adapter.velocity_body.call_args.kwargs['yaw_ned']-expected) == pytest.approx(0.)
+    # A second sample in the same frame must not compensate the reset twice.
+    attitude(n, wrap(.1+jump), 100.10)
+    assert wrap(n.initial_heading-expected) == pytest.approx(0.)
+
+
+def test_real_rotation_does_not_move_fixed_yaw_reference(bridge):
+    n = bridge
+    attitude(n, .1, 100.)
+    pose(n, math.pi/2-.1)
+    reference = n.initial_heading
+    # A physical turn larger than the reset threshold is explained by gyro.
+    attitude(n, .5, 100.05, yaw_rate=8.)
+    assert n.initial_heading == pytest.approx(reference)
+    # Crossing +/-pi is also an ordinary physical turn.
+    attitude(n, math.pi-.05, 100.60)
+    attitude(n, -math.pi+.05, 100.65, yaw_rate=2.)
+    assert n.initial_heading == pytest.approx(reference)
+
+
+def test_pose_before_reset_imu_does_not_double_shift_takeoff_reference(bridge):
+    n = bridge
+    attitude(n, 0., 100.)
+    pose(n, math.pi/2)
+    n.now = lambda: 100.05
+    pose(n, -math.pi/2)  # Pose receives the reset ahead of the IMU callback.
+    n.on_status(State(connected=True, mode='POSCTL'))
+    assert n.takeoff(Trigger.Request(), Trigger.Response()).success
+    attitude(n, math.pi, 100.05)
+    assert wrap(n.initial_heading+math.pi/2) == pytest.approx(0.)
+
+
+def test_stale_or_replayed_attitude_cannot_reapply_yaw_reset(bridge):
+    n = bridge
+    attitude(n, 0., 100.)
+    pose(n, math.pi/2)
+    attitude(n, math.pi, 100.)
+    attitude(n, math.pi, 99.95)
+    assert n.attitude_stamp == 100.
+    attitude(n, 0., 100.05)
+    assert n.initial_heading == pytest.approx(math.pi/2)
+
+
+def test_manual_offboard_entry_and_reentry_use_current_direction(bridge):
+    n = bridge
+    n.set_parameters([Parameter('yaw_control', value=False)])
+    pose(n, .2)
+    pose(n, 1.)
+    n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
+    n.tick()
+    assert n.initial_heading == pytest.approx(1.)
+    n.on_status(State(connected=True, armed=True, mode='POSCTL'))
+    n.tick()
+    pose(n, 2.)  # Pilot turns in manual mode before returning to OFFBOARD.
+    n.standby_setpoint()
+    assert n.px4_adapter.position.call_args.args[1] == pytest.approx(2.)
+    n.on_status(State(connected=True, armed=True, mode='OFFBOARD'))
+    n.tick()
+    assert n.initial_heading == pytest.approx(2.)

@@ -5,7 +5,7 @@
 startup:
   sim: true # false 使用下面 hardware 真机配置；true 使用 simulation 仿真配置
   rviz: true # 是否打开 RViz
-  yaw_control: false # true 使用现有平移/yaw 解耦策略；false 固定首次有效 PX4 航向，不随路径转头
+  yaw_control: false # true 使用平移/yaw 解耦策略；false 保持起飞/手动接入 OFFBOARD 时的机头方向，自动补偿飞控航向重置
   flight_control: true # true 启动飞控控制与起降服务；无桨定位检查设为 false
   map_file: '' # 留空读取 global_config.yaml 的 map；也可填地图 YAML 文件名或绝对路径
   depth_scale: 0.001 # 16UC1 深度单位转换到 m 的比例；32FC1 深度已是 m

@@ -4,7 +4,7 @@ flight_bridge:
     mavros_ns: /mavros # MAVROS 名称空间；状态、位置、设定值及服务共用同一个连接
     localization_source: openvins # 由 launch.yaml 覆盖；microvio 接管前同时等待模块坐标原点初始化
     yaw_control: true # 总启动由 launch.yaml 覆盖；false 保持起飞/手动接入 OFFBOARD 时的机头方向，true 使用解耦 yaw
-    takeoff_altitude: 1.5 # 相对起飞高度（m）
+    takeoff_altitude: 1.0 # 相对起飞高度（m）
     bootstrap_takeoff: false # 总入口按 launch.yaml 的仿真/真机配置覆盖；true 启用无水平 odom 起飞
     bootstrap_height: 0.7 # 离地初始化高度 m；未定位时在此高度等待，不继续盲目爬升
     bootstrap_height_source: local # launch.yaml 覆盖：barometer 飞控独立气压高度；local 融合高度；range 模组 ToF。真机默认 barometer，不等待模组数据离地

@@ -371,7 +371,7 @@ hardware:
 1. MAVROS 已连接且未解锁时接受起飞请求；等待飞控自身的姿态、气压高度、垂直速度与垂直估计状态，**不等待模组的 VIO/ToF，不要求水平 odom、地图或深度相机**。
 2. `BOOTSTRAP_PRESTREAM`：连续发送姿态设定值，确认 PX4 已进入 OFFBOARD 后请求解锁；未确认解锁不增加推力。
 3. `BOOTSTRAP_TAKEOFF`：保持起飞航向和水平姿态，用 PX4 `ALTITUDE.monotonic` 独立气压高度与垂直速度闭环升到 `bootstrap_height`（默认 0.7 m），等待下视定位建立。这个气压高度不随 VIO 的坐标原点重置而跳变。
-4. 水平定位与 odom 有效后，切换位置控制，继续升到相对地面的 `takeoff_altitude`（默认 1.5 m）。不会在初始化高度上再额外升 1.5 m。
+4. 水平定位与 odom 有效后，切换位置控制，继续升到相对地面的 `takeoff_altitude`（默认 1.0 m）。不会在初始化高度上再额外升 1.0 m。
 5. 到高稳定后 `/flight_navigation_ready` 变为 true，decision 自动选择 `decision_1` 并开始发航点。
 
 PX4 在第 2 步已进入**姿态控制 OFFBOARD**，第 4 步才是**位置/速度导航接管**，两者属于同一个飞行模式。姿态起飞阶段没有水平定点能力，只用于短距离离地初始化。超时、超高、垂直反馈丢失或倾斜过大时终止该流程并请求 PX4 降落；退出 OFFBOARD 不自动重新切入或解锁。
